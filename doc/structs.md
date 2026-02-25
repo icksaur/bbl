@@ -1,109 +1,160 @@
-# structs
+# Structs
 
-Three separate things that need to work together:
-1. **Type descriptor** — field layout, method table.  Lives on `BblState`, global lifetime.
-2. **Struct instance** — the binary data (C++ layout).  Value type: copied on assignment.
-3. **Member functions** — stored in the type descriptor, NOT in instances.
+## overview
 
-## syntax — decided
+Structs are **value types** with C++-compatible binary layout.  They are defined exclusively from C++ via `StructBuilder` — there is no script-level keyword for defining structs.
 
-Use `[= Name [struct ...]]` so that `Name` is a normal symbol binding.  `Name` is a
-**type value** that can be called as a constructor and used as a composition type.
+Three things work together:
 
-```bbl
-[= Foo [struct [i32 i]]]          // defines type Foo
-[= foo [Foo 42]]                   // constructs instance, i = 42
-[= Bar [struct [Foo a i32 b]]]     // composing
+1. **Struct descriptor** — field layout (name → offset + type).  Registered on `BblState`, global lifetime.
+2. **Struct instance** — the binary data (matches the C++ struct layout exactly).  Value type: copied on assignment.
+3. **Constructor** — after registration, the struct type name is available in scripts as a callable constructor.
+
+## POD only
+
+Struct fields must be value types: numeric types (`int`, `float`, and narrow C types like `float32`, `int32`, etc.), `bool`, and other registered structs.
+
+No strings, containers, functions, binaries, or userdata in struct fields.  This guarantees:
+
+- `memcpy` copy semantics — no GC references to trace inside structs.
+- Zero-copy `getVector<T>()` from C++ — the data pointer can be handed directly to a GPU or serializer.
+- C++-identical binary layout — `sizeof`, `offsetof`, and alignment match exactly.
+
+## C++ registration
+
+```cpp
+struct vertex {
+    float x, y, z;
+};
+
+void addVertex(BblState& bbl) {
+    BBL::StructBuilder builder("vertex", sizeof(vertex));
+    builder.field<float>("x", offsetof(vertex, x));
+    builder.field<float>("y", offsetof(vertex, y));
+    builder.field<float>("z", offsetof(vertex, z));
+    bbl.registerStruct(builder);
+}
 ```
 
-`[Foo 42]` is syntactic sugar for `[construct Foo 42]` — the type value is callable as a constructor.
+### StructBuilder API
 
-## member functions — decided
+| method | description |
+|--------|-------------|
+| `StructBuilder(name, totalSize)` | begin defining a struct with known `sizeof` |
+| `field<T>(name, offset)` | add a field at a byte offset — `T` must be a numeric or bool C type |
+| `structField(name, offset, typeName)` | add a nested struct field referencing a previously registered struct |
 
-Member functions are defined inline in the struct definition.  They are stored in the
-type descriptor.  `this` is an **implicit first argument** of type `Foo`.
+Validation at registration time:
 
-```bbl
-[= Foo [struct [i32 i]
-    [= print-self [fn [this]
-        [print this.i]
-    ]]
-]]
+- All field offsets + sizes fit within `totalSize`.
+- No two fields overlap.
+- Field types are POD only.
+- `structField` references must name a previously registered struct type.
 
-[= foo [Foo 42]]
-[foo.print-self]   // calls print-self with foo as this
+### composed structs
+
+```cpp
+struct triangle {
+    vertex a, b, c;
+};
+
+void addTriangle(BblState& bbl) {
+    BBL::StructBuilder builder("triangle", sizeof(triangle));
+    builder.structField("a", offsetof(triangle, a), "vertex");
+    builder.structField("b", offsetof(triangle, b), "vertex");
+    builder.structField("c", offsetof(triangle, c), "vertex");
+    bbl.registerStruct(builder);
+}
 ```
 
-`sizeof foo` = 4 bytes.  Functions are not in the instance.
+The inner struct's fields are accessible via dot chaining: `tri.a.x`.
 
-Member functions can capture variables from the enclosing scope like any other `fn`.
-Standard closure rules apply (see memory-model.md).
+## script usage
 
-## the mutation problem
+### construction
 
-Because struct instances are value types, `this` inside a member function is a **copy**.
-Mutations to `this` do not affect the original.
-
-Two patterns to work around this:
-
-**Pattern 1: return the modified struct**
-```bbl
-[= Foo [struct [i32 n]
-    [= inc [fn [this]
-        [= this.n [+ this.n 1]]
-        this    // return modified copy
-    ]]
-]]
-
-[= foo [Foo 0]]
-[= foo [foo.inc]]   // replace foo with the returned copy
-[print foo.n]       // 1
-```
-
-**Pattern 2: store the struct in a map or list (holds a reference to the slot)**
-
-Deferred.  For v1, use Pattern 1 (return-and-rebind).  `box` (heap-wrapping for pass-by-reference mutation) is in the backlog.
-
-## returning structs from functions — resolved
-
-Refcounting handles this.  When `fn` returns a struct, its value-type fields are copied
-and its reference-type fields (strings, containers) have their refcounts incremented
-before the frame is destroyed.  The caller receives a live value.
+After registration, the type name is a callable constructor in scripts:
 
 ```bbl
-[= make-foo [fn []
-    [= Foo [struct [string s]]]
-    [= foo [Foo "hello"]]       // "hello" is interned, refcount incremented
-    foo                          // returned: struct copied out, string refcount stays alive
-]]
-
-[= result [make-foo]]
-[print result.s]                 // "hello" is still alive — refcount held by result.s
+(def v (vertex 1.0 2.0 3.0))
 ```
 
-What survives:
-- **Type `Foo`**: written to the caller's local scope when `struct` was defined inside the
-  function.  This is a problem — see open question below.
-- **Instance `foo`**: the struct value is copied into the return slot.
-- **String `"hello"`**: interned, lives as long as `BblState`.
+Arguments are positional, matching the order fields were registered.  The runtime validates argument count and types.
 
-## type descriptor lifetime when defined inside a function
+### field access
 
-If `[= Foo [struct ...]]` is inside a `fn`, where does the type descriptor live?
+Read via `.`:
 
-**Decided: Option A.** Type descriptors are always global.  Defining a struct
-inside a function is just a dynamic registration of a new type.  Small memory cost, zero
-lifetime complexity.
+```bbl
+(print v.x)          // 1.0
+```
 
-**Redefinition**: re-registering a struct with an identical layout is a silent no-op.
-A different layout is a runtime error.  This means calling a function that defines a struct
-multiple times is fine as long as the definition doesn't change.
+Write via `set` (single-level place expression):
 
-## struct as refcounted vs value type
+```bbl
+(set v.x 5.0)
+```
 
-Currently structs are value types (copied).  Mutation requires return-and-rebind: `[= foo [foo.inc]]`.
+### composition
 
-**Decided for v1**: return-and-rebind.  `box` (heap-wrapping for mutable reference semantics) deferred to backlog.
+```bbl
+(def tri (triangle (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
+(print tri.a.x)      // read through nested struct — allowed
+```
 
-For the serialization use case, value semantics are preferred — vectors of structs work
-because elements are inline.  For the scripting use case, `box` may be added later.
+Chained reads work.  Chained writes do not — use an intermediate variable:
+
+```bbl
+(def v tri.a)
+(set v.x 5.0)
+(set tri.a v)
+```
+
+### vectors of structs
+
+```bbl
+(def verts (vector vertex
+    (vertex 0 1 0)
+    (vertex 1 0 0)
+    (vertex -1 0 0)
+))
+(print (verts.at 0).x)
+```
+
+Because structs are POD, the vector's backing buffer is a contiguous `T*` that C++ can read directly via `getVector<T>()`.
+
+## copy semantics
+
+Structs are value types.  Assignment copies the bytes:
+
+```bbl
+(def a (vertex 1.0 2.0 3.0))
+(def b a)             // b is an independent copy
+(set b.x 99.0)
+(print a.x)           // 1.0 — a is unchanged
+```
+
+Passing a struct to a function copies it.  Returning a struct from a function copies it.  No GC involvement — structs are inline values like `int` and `float`.
+
+## no member functions
+
+Structs have no methods.  The `.` operator on a struct always resolves to field access.  If you need operations on struct data, define standalone functions:
+
+```bbl
+(def vertex-length (fn (v)
+    (sqrt (+ (* v.x v.x) (* v.y v.y) (* v.z v.z)))
+))
+(print (vertex-length (vertex 3.0 4.0 0.0)))   // 5.0
+```
+
+This keeps structs simple and POD — no method table, no dispatch overhead.
+
+## type descriptor lifetime
+
+Struct descriptors are registered on the `BblState` and live for its entire lifetime.  They are never freed during script execution.  `~BblState` frees all descriptors.
+
+Re-registering a struct with an identical layout is a silent no-op.  A different layout is a runtime error.
+
+## open questions
+
+None.

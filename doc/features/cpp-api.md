@@ -2,7 +2,7 @@
 
 ## goal
 
-Lua-style embedding API.  A C++ program creates a `BblState`, registers functions, executes scripts, and reads results.  The environment persists across multiple `exec()` calls.  `~BblState` deallocates everything.
+Lua-style embedding API.  A C++ program creates a `BblState`, registers functions and types, executes scripts, and reads results.  The environment persists across multiple `exec()` calls.  `~BblState` runs the GC to completion and frees all memory.
 
 ## BblState lifecycle
 
@@ -13,29 +13,24 @@ BblState bbl;
 BBL::addStdLib(bbl);
 bbl.defn("my-func", my_func);
 
-// 2. execute scripts — environment accumulates
-bbl.exec("setup.bbl");       // defines types and data
+// 2. register C++ struct types
+addVertex(bbl);
+addTriangle(bbl);
+
+// 3. execute scripts — environment accumulates
+bbl.exec("setup.bbl");       // defines data using registered types
 bbl.exec("scene.bbl");       // can use types from setup.bbl
-```
 
-`exec()` returns `void`.  On success, the root scope contains everything the script defined.  On error, it throws `BBL::Error` — the `BblState` remains valid for cleanup and introspection (read variables defined before the error), but the failed script cannot be resumed.
-
-// 3. introspect the environment
+// 4. introspect the environment
 auto* verts = bbl.getVector<vertex>("player-verts");
 auto* tex = bbl.getBinary("player-texture");
 
-// 4. ~BblState deallocates all script data, closes file handles
+// 5. ~BblState frees all script data, runs GC
 ```
 
-**Key property**: `exec()` does not reset the environment.  Each script runs in the same root scope.  The second script sees everything the first script defined.  This allows multi-file workflows:
+`exec()` returns `void`.  On success, the root scope contains everything the script defined.  On error, it throws `BBL::Error` — the `BblState` remains valid for cleanup and introspection, but the failed script cannot be resumed.
 
-```cpp
-BblState bbl;
-BBL::addStdLib(bbl);
-bbl.exec("types.bbl");       // [= vertex [struct [f32 x f32 y f32 z]]]
-bbl.exec("scene.bbl");       // uses vertex — it's already defined
-auto* v = bbl.getVector<vertex>("player-verts");
-```
+**Key property**: `exec()` does not reset the environment.  Each script runs in the same root scope.  The second script sees everything the first script defined.
 
 ## registering C functions — `bbl.defn()`
 
@@ -43,7 +38,7 @@ auto* v = bbl.getVector<vertex>("player-verts");
 bbl.defn("name", function_pointer);
 ```
 
-Binds a C++ function to a name in the BBL environment.  The function is callable from scripts as `[name args...]`.
+Binds a C++ function to a name in the BBL environment.  The function is callable from scripts as `(name args...)`.
 
 ### C function signature
 
@@ -63,33 +58,27 @@ A C function receives a pointer to the `BblState`.  It reads arguments by index,
 | `bbl->argCount()` | `int` | number of arguments passed |
 | `bbl->hasArg(i)` | `bool` | whether argument `i` exists |
 | `bbl->getArgType(i)` | `BBL::Type` | type tag of argument `i` |
-| `bbl->getInt32Arg(i)` | `int32_t` | read int32 argument |
-| `bbl->getInt64Arg(i)` | `int64_t` | read int64 argument |
-| `bbl->getUint32Arg(i)` | `uint32_t` | read uint32 argument |
-| `bbl->getUint64Arg(i)` | `uint64_t` | read uint64 argument |
-| `bbl->getF32Arg(i)` | `float` | read f32 argument |
-| `bbl->getF64Arg(i)` | `double` | read f64 argument |
+| `bbl->getIntArg(i)` | `int64_t` | read int argument |
+| `bbl->getFloatArg(i)` | `double` | read float argument |
 | `bbl->getBoolArg(i)` | `bool` | read bool argument |
 | `bbl->getStringArg(i)` | `const char*` | read string argument (interned, valid for BblState lifetime) |
-| `bbl->getBinaryArg(i)` | `BblBinary*` | read binary argument (lazy-loads on `data()` access) |
+| `bbl->getBinaryArg(i)` | `BblBinary*` | read binary argument |
 | `bbl->getArg(i)` | `BblValue` | read argument as tagged value |
 | `bbl->getUserDataArg(i)` | `void*` | read userdata argument (opaque pointer) |
 
-Reading an argument with the wrong type accessor is a `BBL::Error` (e.g. calling `getStringArg()` on an int).
+Reading an argument with the wrong type accessor is a `BBL::Error`.
 
 ### return values
 
 | method | description |
 |--------|-------------|
-| `bbl->pushInt32(val)` | push int32 return value |
-| `bbl->pushInt64(val)` | push int64 return value |
-| `bbl->pushF32(val)` | push f32 return value |
-| `bbl->pushF64(val)` | push f64 return value |
+| `bbl->pushInt(val)` | push int return value |
+| `bbl->pushFloat(val)` | push float return value |
 | `bbl->pushBool(val)` | push bool return value |
 | `bbl->pushString(str)` | push string (interned automatically) |
 | `bbl->pushNull()` | push null return value |
 | `bbl->pushBinary(ptr, size)` | push binary from C++ memory (copies into managed buffer) |
-| `bbl->pushUserData(ptr)` | push userdata (opaque `void*`, no ownership) |
+| `bbl->pushUserData("TypeName", ptr)` | push typed userdata |
 
 ### example: print function
 
@@ -101,11 +90,11 @@ int my_print(BblState* bbl) {
             case BBL::Type::String:
                 printf("%s", bbl->getStringArg(arg));
                 break;
-            case BBL::Type::Int32:
-                printf("%d", bbl->getInt32Arg(arg));
+            case BBL::Type::Int:
+                printf("%lld", bbl->getIntArg(arg));
                 break;
-            case BBL::Type::F64:
-                printf("%f", bbl->getF64Arg(arg));
+            case BBL::Type::Float:
+                printf("%g", bbl->getFloatArg(arg));
                 break;
             case BBL::Type::Bool:
                 printf("%s", bbl->getBoolArg(arg) ? "true" : "false");
@@ -124,9 +113,9 @@ int my_print(BblState* bbl) {
 
 ```cpp
 int my_add(BblState* bbl) {
-    double a = bbl->getF64Arg(0);
-    double b = bbl->getF64Arg(1);
-    bbl->pushF64(a + b);
+    double a = bbl->getFloatArg(0);
+    double b = bbl->getFloatArg(1);
+    bbl->pushFloat(a + b);
     return 1;  // one return value
 }
 ```
@@ -142,7 +131,7 @@ int my_fopen(BblState* bbl) {
     if (!f) {
         throw BBL::Error{"fopen failed: " + std::string(path)};
     }
-    // ... wrap f in a BBL-managed object, push it
+    bbl->pushUserData("File", wrap_file(f));
     return 1;
 }
 ```
@@ -157,16 +146,13 @@ After `exec()`, the root scope is alive.  The C++ caller can read any variable d
 
 | method | returns | description |
 |--------|---------|-------------|
-| `bbl.getInt32(name)` | `int32_t` | read int32 variable |
-| `bbl.getInt64(name)` | `int64_t` | read int64 variable |
-| `bbl.getF32(name)` | `float` | read f32 variable |
-| `bbl.getF64(name)` | `double` | read f64 variable |
+| `bbl.getInt(name)` | `int64_t` | read int variable |
+| `bbl.getFloat(name)` | `double` | read float variable |
 | `bbl.getBool(name)` | `bool` | read bool variable |
 | `bbl.getString(name)` | `const char*` | read string variable |
-| `bbl.getBinary(name)` | `BblBinary*` | read binary variable (lazy-loads on `data()`) |
+| `bbl.getBinary(name)` | `BblBinary*` | read binary variable |
 | `bbl.getVector<T>(name)` | `BblVector<T>*` | read typed vector (contiguous `T*` buffer) |
-| `bbl.getMap(name)` | `BblMap*` | read map variable |
-| `bbl.getList(name)` | `BblList*` | read list variable |
+| `bbl.getTable(name)` | `BblTable*` | read table variable |
 | `bbl.get(name)` | `BblValue` | read variable as tagged value |
 
 ### existence and type checking
@@ -180,20 +166,20 @@ After `exec()`, the root scope is alive.  The C++ caller can read any variable d
 
 | method | description |
 |--------|-------------|
-| `bbl.setInt32(name, val)` | define/overwrite an int32 variable |
+| `bbl.setInt(name, val)` | define/overwrite an int variable |
+| `bbl.setFloat(name, val)` | define/overwrite a float variable |
 | `bbl.setString(name, str)` | define/overwrite a string variable (interned) |
 | `bbl.setBinary(name, ptr, size)` | define/overwrite a binary variable (copies into managed buffer) |
 | `bbl.set(name, BblValue)` | define/overwrite with a tagged value |
-| `bbl.setUserData(name, ptr)` | define/overwrite a userdata variable (opaque `void*`) |
 
 This allows C++ to inject data into the environment before or between `exec()` calls:
 
 ```cpp
 BblState bbl;
 BBL::addStdLib(bbl);
-bbl.setInt32("screen-width", 1920);
-bbl.setInt32("screen-height", 1080);
-bbl.exec("ui-layout.bbl");  // script can read screen-width, screen-height
+bbl.setInt("screen-width", 1920);
+bbl.setInt("screen-height", 1080);
+bbl.exec("ui-layout.bbl");
 ```
 
 ### iterating the environment
@@ -204,103 +190,65 @@ bbl.forEach([](const char* name, const BblValue& val) {
 });
 ```
 
-Iterates all variables in the root scope.  Useful for debugging or serialization round-tripping.
+Iterates all variables in the root scope.
 
 ## userdata — opaque C++ pointers
 
-Like Lua's `lightuserdata` and `userdata` combined into one type.  A `void*` value that scripts can store and pass around but cannot dereference.  C++ owns the lifetime.
+An opaque `void*` with a registered type descriptor (methods and optional destructor).  All userdata is typed — register a type via `TypeBuilder`, then push instances from C functions.
 
-Two flavors, same BBL type:
-
-1. **Plain userdata** — bare pointer, no methods, no destructor.  Value type (copied on assignment like an integer).  C++ is fully responsible for the pointed-to object's lifetime.
-
-2. **Typed userdata** — pointer with a registered type descriptor (methods and optional destructor).  Reference type (refcounted).  When the refcount hits zero, the destructor runs.  This is how `File`, `Socket`, etc. are implemented.
-
-Both are `BBL::Type::UserData` at the type-tag level.  The difference is whether a type descriptor is attached.
-
-### plain userdata
-
-```cpp
-// inject a pointer into the BBL environment
-bbl.setUserData("engine", my_engine_ptr);
-bbl.exec("script.bbl");
-```
-
-```bbl
-// script can pass it to C functions but can't inspect it
-[render engine player-verts]   // engine is a userdata — opaque to scripts
-```
-
-Plain userdata is a **value type** — copied on assignment (it's just a pointer-width integer).  No refcounting, no destructor.
-
-C function access:
-
-```cpp
-int my_render(BblState* bbl) {
-    void* engine = bbl->getUserDataArg(0);
-    auto* verts = bbl->getArg(1);  // BblValue
-    // ...
-    return 0;
-}
-```
-
-### typed userdata (methods + destructor)
-
-C++ can register a named type with a method table and optional destructor.  Instances are refcounted — when the last reference drops, the destructor runs.
-
-#### destructor signature
+### destructor signature
 
 ```cpp
 typedef void (*BblDestructor)(void* ptr);
 ```
 
-The destructor receives the raw `void*` pointer that was stored in the userdata.  It is responsible for freeing the underlying resource.  It is called **exactly once**, deterministically, when the refcount reaches zero.
+The destructor receives the raw `void*` pointer.  It is responsible for freeing the underlying resource.  Called by the GC when the object is collected.
 
 ```cpp
-void socket_destroy(void* ptr) {
-    auto* sock = static_cast<MySocket*>(ptr);
-    sock->shutdown();
-    delete sock;
+void file_destroy(void* ptr) {
+    auto* f = static_cast<FileWrapper*>(ptr);
+    if (f->handle) fclose(f->handle);
+    delete f;
 }
 ```
 
 Rules:
-- The destructor **must not** call back into the `BblState` (the object may be mid-teardown).
+- The destructor **must not** call back into the `BblState`.
 - The destructor **must not** throw.  If it does, `std::terminate` is called.
-- If no destructor is registered, the pointer is abandoned — C++ is responsible for cleanup elsewhere (same as plain userdata).
+- If no destructor is registered, the pointer is abandoned — C++ is responsible for cleanup.
 
-#### registration
+### registration
 
 ```cpp
-void addMyType(BblState& bbl) {
-    BBL::TypeBuilder builder("Socket");
-    builder.method("send", socket_send);
-    builder.method("recv", socket_recv);
-    builder.method("close", socket_close);
-    builder.destructor(socket_destroy);   // called when refcount → 0
+void addFileType(BblState& bbl) {
+    BBL::TypeBuilder builder("File");
+    builder.method("read", file_read);
+    builder.method("write", file_write);
+    builder.method("close", file_close);
+    builder.destructor(file_destroy);
     bbl.registerType(builder);
 
-    bbl.defn("connect", socket_connect);  // returns a Socket
+    bbl.defn("fopen", bbl_fopen);
 }
 ```
 
-The type descriptor is registered globally on `BblState`.  Instances carry a type tag that maps to this descriptor for method dispatch.  The destructor runs deterministically at refcount zero.
+The type descriptor is registered globally on `BblState`.  Instances carry a type tag that maps to this descriptor for method dispatch.
 
-#### creating typed userdata from C functions
-
-C functions create typed userdata by pushing with a type name:
+### creating userdata from C functions
 
 ```cpp
-int socket_connect(BblState* bbl) {
-    auto* sock = new MySocket(...);
-    bbl->pushTypedUserData("Socket", sock);
+int bbl_fopen(BblState* bbl) {
+    const char* path = bbl->getStringArg(0);
+    FILE* f = fopen(path, "r");
+    if (!f) throw BBL::Error{"fopen failed: " + std::string(path)};
+    bbl->pushUserData("File", new FileWrapper{f});
     return 1;
 }
 ```
 
 ## struct registration from C++
 
-C++ can define struct types so scripts can construct and use them without re-defining in BBL.  Since C++ has no struct reflection (P2996 targets C++26 but no compiler ships it yet), registration uses a builder pattern with manual field declarations.  `sizeof` and `static_assert` provide safety.
+Structs are defined exclusively from C++ via `StructBuilder`.  Scripts use them as constructors and access fields via `.`, but cannot define new struct types.
 
 ```cpp
 struct vertex {
@@ -312,21 +260,16 @@ void addVertex(BblState& bbl) {
     builder.field<float>("x", offsetof(vertex, x));
     builder.field<float>("y", offsetof(vertex, y));
     builder.field<float>("z", offsetof(vertex, z));
-
-    // static_assert inside field<T>() verifies:
-    // - offsetof + sizeof(T) <= sizeof(vertex)
-    // - T maps to a known BBL type
-
     bbl.registerStruct(builder);
 }
 ```
 
-After registration, scripts can use the type as if it were defined in BBL:
+After registration, scripts can use the type:
 
 ```bbl
-[= v [vertex 1.0 2.0 3.0]]
-[print v.x]                    // field access works
-[= verts [vector vertex [0 1 0] [1 0 0]]]
+(def v (vertex 1.0 2.0 3.0))
+(print v.x)
+(def verts (vector vertex (vertex 0 1 0) (vertex 1 0 0)))
 ```
 
 The registered struct has exactly the same binary layout as the C++ struct — `getVector<vertex>()` returns a pointer to data that C++ can use directly.
@@ -336,13 +279,13 @@ The registered struct has exactly the same binary layout as the C++ struct — `
 | method | description |
 |--------|-------------|
 | `StructBuilder(name, totalSize)` | begin defining a struct with known `sizeof` |
-| `field<T>(name, offset)` | add a field at a byte offset — `T` must map to a BBL value type |
-| `method(name, fn)` | add a member function (same as TypeBuilder) |
+| `field<T>(name, offset)` | add a field at a byte offset — `T` must be a numeric or bool C type |
+| `structField(name, offset, typeName)` | add a nested struct field referencing a previously registered struct |
 
 The builder validates at registration time:
 - All field offsets + sizes fit within `totalSize`.
 - No two fields overlap.
-- The last field's `offset + sizeof(field)` does not exceed `totalSize`.  If declared fields don't account for all bytes (due to padding or missed fields), a warning is emitted — helps catch mistakes without requiring the builder to understand C++ alignment rules.
+- Field types must be POD (numeric types, bool, other registered structs).  No strings, containers, or functions.
 
 For composed structs:
 
@@ -360,7 +303,7 @@ void addTriangle(BblState& bbl) {
 }
 ```
 
-`structField()` references a previously registered struct type by name.  The inner struct's fields are accessible via nested dot: `tri.a.x`.
+`structField()` references a previously registered struct type by name.  The inner struct's fields are accessible via dot: `tri.a.x`.
 
 ## BblVector<T>
 
@@ -375,30 +318,27 @@ size_t n = verts->length();        // number of elements
 glBufferData(GL_ARRAY_BUFFER, n * sizeof(vertex), data, GL_STATIC_DRAW);
 ```
 
-The pointer is valid as long as the `BblState` is alive and the vector is not reallocated (no push from script side while C++ holds the pointer).
+The pointer is valid as long as the `BblState` is alive and the vector is not reallocated.
 
 ## BblBinary
 
-Returned by `getBinary()` or `getBinaryArg()`.  Lazy-loads on access.
+Returned by `getBinary()` or `getBinaryArg()`.  Data is always in memory (no lazy loading).
 
 ```cpp
 auto* tex = bbl.getBinary("player-texture");
-size_t len = tex->length();            // always available (no load)
-const uint8_t* data = tex->data();     // triggers lazy load if needed
+size_t len = tex->length();
+const uint8_t* data = tex->data();
 ```
 
-## BblMap / BblList
+## BblTable
 
-Returned by `getMap()` / `getList()`.  Provide iteration and lookup from C++.
+Returned by `getTable()`.  Provides iteration and lookup from C++.
 
 ```cpp
-auto* m = bbl.getMap("player");
-BblValue name = m->get("name");      // get by string key
-bool has_hp = m->has("hp");
-
-auto* l = bbl.getList("items");
-size_t len = l->length();
-BblValue first = l->at(0);
+auto* t = bbl.getTable("player");
+BblValue name = t->get("name");      // get by string key
+bool has_hp = t->has("hp");
+size_t len = t->length();
 ```
 
 ## standard library — `BBL::addStdLib()`
@@ -407,7 +347,7 @@ One call registers the common built-in functions.  Equivalent to Lua's `luaL_ope
 
 ```cpp
 BblState bbl;
-BBL::addStdLib(bbl);    // registers print, file I/O, math, etc.
+BBL::addStdLib(bbl);
 bbl.exec("script.bbl");
 ```
 
@@ -416,9 +356,8 @@ bbl.exec("script.bbl");
 | function | what it registers |
 |----------|-------------------|
 | `BBL::addPrint(bbl)` | `print` — variadic, prints all args to stdout |
-| `BBL::addFileIo(bbl)` | `fopen` → `File` type with `read`, `read-bytes`, `write`, `write-bytes`, `close`, `flush` methods and RAII destructor; `filebytes` → lazy `BblBinary` from an external file |
+| `BBL::addFileIo(bbl)` | `fopen` → `File` type with `read`, `read-bytes`, `write`, `write-bytes`, `close`, `flush` methods; `filebytes` → read a file into a `BblBinary` |
 | `BBL::addMath(bbl)` | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sqrt`, `abs`, `floor`, `ceil`, `min`, `max`, `pow`, `log`, `log2`, `log10`, `exp`; constants `pi`, `e` |
-| `BBL::addSocket(bbl)` | `connect` → `Socket` type, `listen` → `ServerSocket` type — TCP client/server with RAII |
 | `BBL::addString(bbl)` | string methods — deferred, placeholder for v1 |
 
 See [features/stdlib.md](features/stdlib.md) for full script-side documentation of each module.
@@ -433,21 +372,16 @@ bbl.exec("script.bbl");
 
 ### File type (from addFileIo)
 
-The `File` type is a typed userdata with methods and a destructor:
+The `File` type is a userdata with methods and a destructor:
 
 ```bbl
-[= f [fopen "out.txt"]]
-[f.write "hello"]
-[= contents [f.read]]
-[f.close]
-// or: f destroyed at end of scope — ~File flushes and closes automatically
+(def f (fopen "out.txt"))
+(f.write "hello")
+(def contents (f.read))
+(f.close)
+// f collected by GC eventually — destructor closes if still open
+// prefer explicit close for deterministic resource management
 ```
-
-`File` is registered via `TypeBuilder` (typed userdata).  When the file's refcount hits zero, the destructor flushes and closes the handle.  This is the RAII pattern — no explicit `close` needed if the scope handles it.
-
-### registering custom typed userdata
-
-See the "typed userdata" section above for the `TypeBuilder` pattern.  `File` and `Socket` are both examples of this pattern.
 
 ## BBL::Type enum
 
@@ -456,17 +390,15 @@ namespace BBL {
     enum class Type {
         Null,
         Bool,
-        Int8, Int16, Int32, Int64,
-        Uint8, Uint16, Uint32, Uint64,
-        F32, F64,
+        Int,       // int64_t
+        Float,     // double
         String,
         Binary,
         Fn,
         Vector,
-        Map,
-        List,
-        Struct,    // BBL-defined or C++-registered struct types
-        UserData,  // void* — plain (value type) or typed (refcounted, with methods/destructor)
+        Table,
+        Struct,
+        UserData,
     };
 }
 ```
@@ -481,10 +413,8 @@ try {
 } catch (const BBL::Error& e) {
     fprintf(stderr, "bbl failed: %s\n", e.what.c_str());
 }
-// ~BblState is safe regardless — cleans up all resources
+// ~BblState is safe regardless — GC cleans up all resources
 ```
-
-After a `BBL::Error`, the `BblState` is still valid for cleanup and introspection, but you cannot resume execution of the failed script.  You can call `exec()` again with a different script if desired.
 
 ## thread safety
 

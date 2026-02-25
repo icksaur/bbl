@@ -1,200 +1,194 @@
-# method resolution
-
-## goal
-
-Specify exactly how the `.` operator resolves field access and method calls at runtime.  This is the single reference for implementers — all other docs defer here for dispatch details.
+# Method Resolution
 
 ## the `.` operator
 
-`v.name` is syntactic sugar for `[. v name]`.  `name` is always a compile-time symbol (not a runtime string).  The interpreter evaluates `v`, inspects its type tag, and resolves `name` against that type.
+The `.` operator provides field access and method dispatch.  `v.x` is syntactic sugar for `(. v x)`.  The right-hand side is always an identifier — it is never evaluated as an expression.
 
-The resolution algorithm depends on the **category** of the left-hand value:
+Resolution depends on the type of the left-hand value.
 
-| category | types | what `.` can resolve |
-|----------|-------|---------------------|
-| struct | BBL-defined structs, C++-registered structs | fields, member functions |
-| typed userdata | `File`, `Socket`, etc. | methods only (no fields) |
-| built-in container | `vector`, `map`, `list` | built-in methods |
-| string | `string` | built-in methods |
-| map (special) | `map` | built-in methods **and** key lookup |
-| other | integers, floats, bool, null, binary, fn, plain userdata | `.` is a runtime error |
+## resolution by type
 
-## resolution by type category
+### struct — field access only
 
-### structs
-
-A struct's type descriptor holds two tables:
-
-1. **Field table** — field name → byte offset (from `StructBuilder` or inline `struct` definition).
-2. **Method table** — method name → `fn` value (from inline function definitions or `StructBuilder.method()`).
-
-Resolution order:
-
-1. Look up `name` in the **field table**.  If found → field access (read or write).
-2. Look up `name` in the **method table**.  If found → method call.
-3. Neither → runtime error: `"no field or method 'name' on type TypeName"`.
-
-**Fields win over methods.**  A struct cannot have a field and a method with the same name — this is a registration error caught at struct definition time:
+Structs have no methods.  The `.` operator on a struct always resolves to a field lookup.
 
 ```bbl
-// error at definition time: 'x' is already a field
-[= Bad [struct [i32 x]
-    [= x [fn [this] this.x]]    // error: duplicate name 'x'
-]]
+(def v (vertex 1.0 2.0 3.0))
+(print v.x)          // read field
+(set v.x 5.0)        // write field (single-level place expression)
 ```
 
-### typed userdata
+The runtime looks up the field name in the struct's `StructBuilder` descriptor.  If the field exists, it reads or writes at the stored byte offset.  If not, runtime error.
 
-Typed userdata has a type descriptor with a **method table** only (no field table — the underlying `void*` is opaque).
-
-Resolution:
-
-1. Look up `name` in the **method table**.  If found → method call.
-2. Not found → runtime error: `"no method 'name' on type TypeName"`.
+For composed structs, chained access reads through nested descriptors:
 
 ```bbl
-[= f [fopen "data.txt"]]
-[f.read]       // method table lookup → read
-[f.x]          // error: no method 'x' on type File
+(def tri (triangle (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
+(print tri.a.x)      // read: triangle descriptor → field "a" → vertex descriptor → field "x"
 ```
 
-### built-in containers (vector, list)
-
-`vector` and `list` have a fixed built-in method table registered at `BblState` creation.  No user-defined methods.
-
-| type | methods |
-|------|---------|
-| `vector` | `push`, `pop`, `clear`, `length`, `at` |
-| `list` | `push`, `pop`, `clear`, `length`, `at` |
-
-Resolution:
-
-1. Look up `name` in the built-in method table.  If found → method call.
-2. Not found → runtime error: `"no method 'name' on vector"` (or `list`).
-
-### map
-
-Map is special — `.` serves double duty as both method dispatch and key lookup.
-
-Resolution order:
-
-1. Look up `name` in the **built-in method table** (`get`, `set`, `delete`, `has`, `keys`, `length`).  If found → method call.
-2. Look up `name` as a **string key** in the map's data.  If found → return the value.
-3. Key not found → return `null` (same as `[m.get "missing"]`).
-
-**Methods win over keys.**  If a map has a key `"length"`, `m.length` still calls the `length` method.  Use `[m.get "length"]` to access the key:
+Chained reads are allowed.  Chained writes are not — use an intermediate variable:
 
 ```bbl
-[= m [map "length" 42]]
-[print m.length]           // → 1 (method)
-[print [m.get "length"]]   // → 42 (key)
+(def v tri.a)
+(set v.x 5.0)
+(set tri.a v)
 ```
 
-This is necessary because otherwise inserting a key named `"get"` would make the map's data inaccessible.
+### table — methods first, then key access
 
-### string
+Tables have registered methods and also support string-key access via `.`.  The runtime checks methods first:
 
-String has a built-in method table.  Currently minimal:
-
-| method |
-|--------|
-| `length` |
-
-(More methods via `addString` — deferred, see backlog.)
-
-Resolution:
-
-1. Look up `name` in the built-in method table.  If found → method call.
-2. Not found → runtime error: `"no method 'name' on string"`.
-
-### types where `.` is an error
-
-Using `.` on any of the following is a runtime error:
-
-- integers (`int8`–`int64`, `uint8`–`uint64`)
-- floats (`f32`, `f64`)
-- `bool`
-- `null`
-- `binary`
-- `fn`
-- plain userdata (no type descriptor)
-
-Error message: `"cannot access member 'name' on type TypeName"`.
-
-## implicit `this`
-
-When `.` resolves to a method, the left-hand value is passed as an implicit first argument (`this`).  The caller does not write `this` in the argument list.
+1. Look up the identifier in the table's method table (`get`, `set`, `delete`, `has`, `keys`, `length`, `push`, `pop`, `at`).
+2. If found → method dispatch.  The table is passed as the implicit first argument.
+3. If not found → string-key access.  Equivalent to `(t.get "name")`.
 
 ```bbl
-[file.write "hello"]
-// equivalent to: call write(file, "hello")
-// but the user writes 1 arg, not 2
+(def player (table "name" "hero" "hp" 100))
+
+// method dispatch — "keys" matches a table method
+(def ks (player.keys))
+
+// string-key access — "name" is not a method, so read
+(print player.name)           // "hero"
+(set player.hp 80)            // write via place expression
 ```
 
-Arity checking counts **user-visible arguments only** — `this` is excluded.  A method declared as `[fn [this] ...]` has arity 0 from the caller's perspective.
-
-## field access vs method call — how the interpreter tells them apart
-
-After resolving `name`:
-
-- If resolution found a **field** (struct field table hit) and the expression is a bare dot access `v.name` → read the field value from the struct's binary data.
-- If resolution found a **field** and the expression is on the left of `=` → write to the field.
-- If resolution found a **method** and additional arguments follow → call the method with `v` as `this` plus the provided arguments.
-- If resolution found a **method** and no arguments follow → call the method with `v` as `this` and zero user arguments.
-
-A method cannot be read as a value (no first-class method references off an instance).  `v.inc` where `inc` is a method always means "call `inc` on `v`".
-
-## nested dot chains
-
-Dot chains evaluate left-to-right.  Each `.` resolves on the result of the previous `.`:
+This means table keys that collide with method names are only accessible via the `get`/`set` methods:
 
 ```bbl
-player.pos.x
+(def t (table "length" 42))
+(print t.length)              // table method — returns number of entries, not 42
+(print (t.get "length"))      // string-key access — returns 42
 ```
 
-1. Evaluate `player` → map value.
-2. `.pos` → map key lookup → returns a vertex struct.
-3. `.x` → struct field access → returns an f32.
+### vector — method dispatch only
 
-Each step uses the resolution rules for whatever type the previous step produced.  No special casing — the same algorithm runs at each `.`.
+Vectors support method calls.  The `.` operator looks up the identifier in the vector method table:
 
-## write through dot chains (place expressions)
-
-`=` treats a dot chain as a place expression:
+| method | description |
+|--------|-------------|
+| `push` | append element |
+| `pop` | remove and return last element |
+| `clear` | remove all elements |
+| `length` | number of elements |
+| `at` | access element by index |
 
 ```bbl
-[= player.pos.x 5.0]
+(def verts (vector vertex (vertex 0 1 0)))
+(verts.push (vertex 1 0 0))
+(print (verts.length))       // 2
+(print (verts.at 0).x)       // 0
 ```
 
-1. Evaluate `player` → map value.
-2. `.pos` → map key lookup → resolves to a location (not a copy).
-3. `.x` → struct field → resolves to a writable byte offset.
-4. Write `5.0` to that offset.
+Using `.` with an identifier that is not a registered method is a runtime error.
 
-Each link in the chain resolves to a **pointer into the parent** — the final link performs the write.  See spec.md "place expressions" section.
+### string — method dispatch only
 
-## type descriptor storage
+Strings support method calls via the `.` operator.
 
-All type descriptors live in a global `HashMap<String, TypeDescriptor>` on `BblState`.  They are:
+| method | description |
+|--------|-------------|
+| `length` | number of bytes |
 
-- **Never freed** during script execution.
-- Keyed by type name (the string passed to `struct`, `TypeBuilder`, or `StructBuilder`).
-- Shared across all scopes — defining a struct inside a function registers it globally.
+Additional string methods are deferred (see stdlib).
 
-The `BblValue` type tag identifies which descriptor to look up.  For built-in types (`vector`, `map`, `list`, `string`), the descriptors are pre-registered at `BblState` creation.
+```bbl
+(def s "hello")
+(print (s.length))           // 5
+```
 
-## error summary
+Using `.` with an unknown identifier on a string is a runtime error.
 
-| condition | error message |
-|-----------|---------------|
-| `.` on a type with no dispatch | `cannot access member 'name' on type TypeName` |
-| struct: name not in fields or methods | `no field or method 'name' on type TypeName` |
-| typed userdata: name not in methods | `no method 'name' on type TypeName` |
-| vector/list/string: name not in methods | `no method 'name' on TypeName` |
-| struct: field and method share a name | definition-time error: `duplicate name 'name' in struct TypeName` |
-| method called with wrong arity | `arity mismatch: TypeName.name expects N arguments, got M` |
-| write to a method name | `cannot assign to method 'name' on type TypeName` |
+### userdata — method dispatch only
 
-## open questions
+Userdata types have methods registered via `TypeBuilder` in C++.  The `.` operator looks up the identifier in the type descriptor's method table.
 
-None.
+```bbl
+(def f (fopen "out.txt"))
+(f.write "hello")
+(f.close)
+```
+
+Resolution: type tag → type descriptor (registered on `BblState`) → method table → lookup identifier.  If found, call with the userdata as implicit first argument.  If not found, runtime error.
+
+### binary — method dispatch only
+
+Binaries support a single method via the `.` operator.
+
+| method | description |
+|--------|-------------|
+| `length` | byte count |
+
+```bbl
+(def blob (filebytes "texture.png"))
+(print (blob.length))
+```
+
+Using `.` with an unknown identifier on a binary is a runtime error.
+
+### other types — error
+
+Using `.` on `int`, `float`, `bool`, `null`, or `fn` is a runtime error.
+
+## dispatch mechanism
+
+Every `BblValue` carries a type tag.  For types with methods (vector, table, string, binary, userdata), the type tag maps to a **type descriptor** stored in a global table on the `BblState`.  The descriptor holds the method table (name → C function pointer).
+
+```
+value.type_tag  →  BblState.type_descriptors[tag]  →  descriptor.methods["write"]  →  call
+```
+
+For structs, the type tag maps to a **struct descriptor** that holds field layout (name → offset + type), not methods.
+
+Type descriptors are registered at startup and never modified during script execution.
+
+## implicit first argument
+
+When `.` dispatches a method call, the left-hand value is passed as an implicit first argument.  The C function receives it at argument index 0.
+
+```bbl
+(f.write "hello")
+// equivalent to: call "write" with args [f, "hello"]
+```
+
+The C function reads the receiver:
+
+```cpp
+int file_write(BblState* bbl) {
+    auto* f = static_cast<FileWrapper*>(bbl->getUserDataArg(0));
+    const char* text = bbl->getStringArg(1);
+    // ...
+}
+```
+
+## place expression writes via `.`
+
+`set` accepts single-level `.` place expressions:
+
+| pattern | meaning |
+|---------|---------|
+| `(set v.x 5.0)` | struct field write |
+| `(set player.hp 80)` | table string-key write |
+
+For struct fields, the runtime writes directly at the field offset.  For tables, it writes the string key.
+
+Only single-level writes are allowed.  `(set tri.a.x 5.0)` is a compile error.  Use an intermediate variable instead.
+
+## error cases
+
+| condition | error |
+|-----------|-------|
+| `.` on int, float, bool, null, fn | type error: type has no fields or methods |
+| unknown method on binary | runtime error: binary has no method "name" |
+| unknown field on struct | runtime error: struct "T" has no field "name" |
+| unknown method on vector, string | runtime error: type has no method "name" |
+| unknown method on userdata | runtime error: userdata "T" has no method "name" |
+| chained write `(set a.b.c val)` | error: only single-level place writes allowed |
+
+## design rationale
+
+- **No vtable pointers in values.**  Type tags are small (fits in a byte) and map to descriptors via a flat array.  No pointer chasing for dispatch.
+- **Structs have no methods.**  Keeping structs POD-only guarantees `memcpy` copy semantics and zero-copy `getVector<T>()` from C++.
+- **Table method-first resolution.**  Methods are a small fixed set.  Checking methods first avoids the need for a separate method-call syntax.  Key collisions are rare and resolvable via `get`/`set`.
+- **Single-level place writes.**  Simpler implementation — no need to track nested lvalue chains.  The intermediate-variable pattern is explicit about mutation.

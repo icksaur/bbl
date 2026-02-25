@@ -9,143 +9,118 @@ The two rules are about when a scope is **fresh** vs **shared**:
 | construct | scope |
 |-----------|-------|
 | `fn` call | **fresh** — new scope for args and locals.  Also holds captured variables. |
-| `[exec "file.bbl"]` from script | **fresh** — isolated, sees nothing from the caller.  Returns last expression. |
+| `(exec "file.bbl")` from script | **fresh** — isolated, sees nothing from the caller.  Returns last expression. |
 | C++ `bbl.exec()` | **shared** — accumulates into the existing root scope |
-| `loop`, `for`, `cond` | **shared** — no new scope, runs inside the current frame |
+| `loop`, `if` | **shared** — no new scope, runs inside the current frame |
 
 "Global" is not a special concept.  It just means the **root scope of the current script** — the outermost fresh scope.  It's the same data structure as a function's local scope.
+
+## garbage collection
+
+BBL uses a simple **mark-and-sweep** garbage collector.
+
+**Managed objects**: strings, binaries, closures (`fn`), vectors, tables, userdata.
+
+**Roots**: the scope chain (all live bindings from root scope through current call stack), the intern table, and the type descriptor table.
+
+### collection cycle
+
+1. **Mark**: starting from roots, traverse all reachable objects and set a mark bit.
+2. **Sweep**: walk the allocation list.  Unmarked objects are freed (destructors run for userdata).  Marked objects have their mark bit cleared.
+
+### when it runs
+
+The GC runs periodically — triggered by allocation pressure (e.g. after N bytes allocated since last collection).  It also runs during `~BblState` to free all remaining objects.
+
+### implications
+
+- **No deterministic destruction.**  Objects are freed at GC time, not when they go out of scope.  Resources like file handles must be closed explicitly: `(f.close)`.  Userdata destructors run eventually but not at a predictable time.
+- **No cycle problems.**  Circular references (A→B→A) are handled naturally — the GC only frees unreachable objects.
+- **Assignment is cheap.**  Assigning a GC-managed value is a pointer copy.  No reference counting overhead.
 
 ## closures
 
 `fn` produces a **function value** that captures free variables from the enclosing scope at the time it is evaluated.
 
 **Capture rules:**
-- **Value types** (int, float, bool, userdata): copied.  The closure gets its own snapshot.
-- **Reference types** (string, binary, fn) and **containers** (vector, map, list): refcount incremented.  The closure shares the same object.  Mutations through the closure are visible to all holders.
+- **Value types** (int, float, bool, null, struct): copied.  The closure gets its own snapshot.
+- **GC-managed types** (string, binary, fn, vector, table, userdata): the closure holds a reference to the same object.  Mutations through the closure are visible to all holders.
 - **Rebinding** the outer variable after capture does not affect the closure — it holds the value that existed at capture time.
 
 ```
 bbl.exec("script.bbl")
   └─ root scope of script.bbl
-       ├─ [= x 10]                     ← root-scope binding
-       ├─ [= make-adder [fn [n]        ← defines outer fn
-       │     [fn [x] [+ x n]]          ← inner fn captures `n` from make-adder's frame
-       │  ]]
-       └─ [= add5 [make-adder 5]]      ← add5 is a fn with n=5 in its capture env
+       ├─ (def x 10)                     ← root-scope binding
+       ├─ (def make-adder (fn (n)        ← defines outer fn
+       │     (fn (x) (+ x n))            ← inner fn captures n from make-adder's frame
+       │  ))
+       └─ (def add5 (make-adder 5))      ← add5 is a fn with n=5 in its capture env
 ```
 
-The captured environment is stored as a `{name, BblValue}[]` on the `fn` object.  Freed when the `fn`'s refcount reaches zero.
+The captured environment is stored as a `{name, BblValue}[]` on the `fn` object.  The GC traces through it during mark phase.
 
-### `=` semantics with captures
+### `def` / `set` semantics with captures
 
-`=` uses **lookup-then-assign**: it checks the scope chain (local → captured → root) for an existing name.  If found, it rebinds that slot.  If not found, it creates a new binding in the current scope.
+`set` uses **scope-chain lookup**: it checks local → captured → root for an existing name.  If found, it rebinds that slot.  If not found, runtime error.
 
-This means `[= x 10]` inside a closure that captured `x` modifies the captured value, not creates a new local.  For captured value types, this only affects the closure's snapshot.  For captured reference types, the modification is visible through all references.
-
-## refcounting rules
-
-All heap objects (strings, binaries, containers, `fn` values) are refcounted.
-
-| event | effect |
-|-------|--------|
-| assign to symbol | increment new value's refcount |
-| symbol goes out of scope (frame destroyed) | decrement |
-| struct field assigned | increment new, decrement old |
-| struct copied | increment all reference-type fields |
-| closure captures reference type | increment refcount |
-| return value from `fn` | increment before frame is destroyed, caller receives |
-| unused return value | decremented immediately after expression |
-| zero refcount | object destroyed immediately |
-| string zero refcount | removed from intern table and freed |
-
-## cycle detection
-
-Self-referential insertion (e.g. `[m.set "self" m]`) is detected and errors at runtime.  Indirect cycles (A→B→A) are solved by **weak references** — `[weak x]` returns a non-owning handle that does not increment the refcount.  When the strong refcount reaches zero the object is freed and outstanding weak refs become `null`.  The programmer breaks a cycle by marking one link as weak (e.g. A→B→weak A).  See [backlog.md](backlog.md) for the full `weak`/`deref` design.
-
-## return values: the chain problem
+`def` always creates a new binding in the current scope, regardless of what exists in outer scopes.  This allows intentional shadowing.
 
 ```bbl
-[= make-str [fn [] "hello"]]
-[= bar [fn [] [make-str]]]
-[print [bar]]
+(def x 10)
+(def f (fn ()
+    (set x 20)     // modifies captured x
+))
+(f)
+// x is still 10 here — the closure modified its own snapshot (x is a value type)
 ```
 
-Trace:
-1. `[bar]` called → new frame
-2. `[make-str]` called → returns `"hello"` with refcount incremented for the return
-3. `make-str` frame destroyed.  Refcount on `"hello"` still > 0 (held by return temporary)
-4. `bar` receives it, returns it (increments refcount for its own return)
-5. `bar` frame destroyed.  Refcount still > 0
-6. `[print ...]` receives `"hello"` as argument (refcount incremented for arg passing)
-7. `print` returns.  Argument refcount decremented.
-8. The unused return temporary from `[bar]` is decremented.
-9. If no other references, `"hello"` is freed.
-
-With string interning, `"hello"` lives in the intern table for the script lifetime anyway.  This matters for non-interned strings (longer strings, binary data, containers).
-
-The evaluator handles this with a simple rule: **every evaluated subexpression is a refcounted temporary**.  After the parent expression consumes it (assign, pass as arg, return), the temporary is released.
+For GC-managed types, `set` in a closure makes the new object visible anywhere the binding is active — but rebinding a captured name does not affect the original scope.
 
 ## functions return their last expression
 
 Both `fn` bodies and `exec`'d files return the value of their last evaluated expression.  There is no explicit `return` keyword.
 
 ```bbl
-[= double [fn [x] [* x 2]]]   // returns [* x 2]
-[= classify [fn [x]
-    [cond
-        [[< x 0] "negative"]
-        [[== x 0] "zero"]
-        [else "positive"]
-    ]                                    // cond is an expression — its value is the fn's return
-]]
+(def double (fn (x) (* x 2)))
+
+(def classify (fn (x)
+    (def label "other")
+    (if (< x 0) (set label "negative"))
+    (if (== x 0) (set label "zero"))
+    label
+))
 ```
 
-## structs: value shell, refcounted innards
+## structs: pure value types
 
-Struct instances are **value types** — their data layout is C++ compatible (no hidden pointers in the struct binary data).  But fields that hold reference types (strings, containers) hold **refcounted handles**.
+Struct instances are **value types** — their data layout is C++ compatible.  Structs are POD: fields are numeric types, bool, or other structs.  No strings, containers, or functions in struct fields.
+
+Copying a struct is `memcpy`.  No GC involvement in struct operations.
 
 ```bbl
-[= mesh [struct [uint32 id string name]]]
-[= a [mesh 1 "hero"]]
-[= b a]   // copy: id is copied (int32), name's refcount incremented
-[= b.name "villain"]  // name's old refcount decremented (may free), new string refcount incremented
-[print a.name]  // still "hero" — a.name was a separate handle
+(def a (vertex 1.0 2.0 3.0))
+(def b a)         // b is a copy — memcpy
+(set b.x 9.0)    // does not affect a
 ```
-
-Deep copy is not automatic.  For containers inside structs, assignment copies the handle (same shared container).  If you want a fresh container, create one explicitly.
 
 ## type descriptors: global lifetime
 
 Type descriptors live in a global table on `BblState` and are **never freed during script execution**.  They hold:
-- Field name → byte offset table
-- Method name → `fn` value table (member functions)
+- Field name → byte offset table (structs)
+- Method name → C function table (userdata)
 
-Member functions are stored **on the type, not on instances**.  `[foo.f]` resolves: type tag of `foo` → type descriptor → method `f` → call with `foo` as implicit `this` arg.
-
-**Redefinition**: re-registering a struct with an identical layout is a silent no-op.  A different layout is a runtime error.  This allows multiple `exec` of a shared types file without conflicts.
-
-Because type descriptors are global, `this` is just an ordinary function argument — the standard closure/capture rules apply.
+Type descriptors are registered from C++ via `StructBuilder` or `TypeBuilder`.  There is no script-level type definition.
 
 ## scope for exec'd files
 
-**From script** — `[exec "other.bbl"]` creates a new **root scope** (not inheriting from the caller).  The exec'd file runs like a fresh script and returns the value of its last expression.  Its root scope is destroyed when it returns.
+**From script** — `(exec "other.bbl")` creates a new **root scope** (not inheriting from the caller).  The exec'd file runs like a fresh script and returns the value of its last expression.  Its root scope is destroyed when it returns.
 
 **From C++** — `bbl.exec("other.bbl")` accumulates into the existing root scope.  The second call sees everything the first call defined.
 
-## the struct mutation trade-off
+## string interning
 
-Structs are value types.  `this` inside a member function is a copy.  Mutation requires return-and-rebind:
+All strings are interned in a global table on `BblState`.  Creating a string hashes it and returns the existing instance if found.  String comparison is O(1) (pointer equality).
 
-```bbl
-[= Counter [struct [i32 n]
-    [= inc [fn [this]
-        [= this.n [+ this.n 1]]
-        this    // return modified copy
-    ]]
-]]
-[= c [Counter 0]]
-[= c [c.inc]]   // replace c with the returned copy
-[print c.n]      // 1
-```
+Interned strings live for the **lifetime of `BblState`** — they are never evicted from the intern table.  `~BblState` frees the entire table.  This avoids coupling the intern table to the GC and keeps the implementation simple.
 
-The alternative — making structs heap-allocated and refcounted — is deferred as `box` in the backlog.
+For a serialization DSL that runs, loads data, and exits, the memory cost is negligible.

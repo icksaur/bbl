@@ -1,10 +1,10 @@
-# Bracket Binary Lisp
+# Basic Binary Lisp
 
 ## Agent Guide
 - Read `plan.md` for current work
 - Read `doc/spec.md` for language specification and architecture
 - Read `doc/memory-model.md` for scope and lifetime design
-- Read `doc/structs.md` for struct and member function design
+- Read `doc/structs.md` for struct design (C++-only, POD)
 - Read `code-quality.md` before making changes
 - Feature designs go in `doc/features/`
 - Deferred work and bugs go in `doc/backlog.md`
@@ -28,80 +28,88 @@ Interactive mode:
 bbl
 ```
 
-The REPL reads bracket expressions and evaluates them.  Multi-line input is automatic — an open `[` without a matching `]` continues to the next line.
+The REPL reads s-expressions and evaluates them.  Multi-line input is automatic — an open `(` without a matching `)` continues to the next line.
 
 ---
 
-Bracket Binary Lisp is a bracket-syntax scripting language designed for serializing C++ data structures and binary blobs.  Prefix math, no infix operators.  Embeddable via a Lua-style C++ API.
+Basic Binary Lisp is a scripting language designed for serializing C++ data structures and binary blobs.  Prefix math, no infix operators.  Embeddable via a Lua-style C++ API.  Simple tracing GC.
 
-## data
+## data types
 
-Value types are copied on assignment:
-- `uint8` `uint16` `uint32` `uint64` `int8` `int16` `int32` `int64`
-- `f32` `f64`
+Value types (copied on assignment):
+- `int` (64-bit signed integer)
+- `float` (64-bit IEEE double)
 - `bool`
 - `null`
-- `userdata` (opaque `void*` pointer)
+- `struct` (C++-compatible binary layout, POD only)
 
-Reference types are refcounted, shared on assignment:
-- `string` (interned)
-- `binary` (lazy-loaded byte buffer)
+GC-managed types (shared on assignment):
+- `string` (interned, immutable)
+- `binary` (raw byte buffer)
 - `fn` (function / closure)
-
-Containers (refcounted):
-- `vector` — contiguous typed storage (like C++ `std::vector`)
-- `map` — key-value (string/integer keys)
-- `list` — heterogeneous ordered collection
+- `vector` (contiguous typed storage)
+- `table` (heterogeneous key-value container)
+- `userdata` (opaque `void*` with type descriptor)
 
 ## examples
 
 ```bbl
-[= world "world"]
-[= hello [fn []
-    [print "Hello, " world "!\n"]
-]]
-[hello]
+(def world "world")
+(def hello (fn ()
+    (print "Hello, " world "!\n")
+))
+(hello)
 ```
 
 ```bbl
-[= vertex [struct [f32 x f32 y f32 z]]]
-[= tri [vector vertex [0 1 0]]]
-[tri.push [1 0 0]]
-[tri.push [-1 0 0]]
+// vertex registered from C++ via StructBuilder
+(def tri (vector vertex (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
+(print (tri.at 0).x)
 ```
 
 ```bbl
-[= texture 0b65536:<65536 bytes of png data>]
+(def texture 0b65536:<65536 bytes of png data>)
 ```
 
 ## control flow
 
-### Loops (prefix math):
+### loops
 
 ```bbl
-[= i 0]
-[loop [< i 10]
-    [print i "\n"]
-    [= i [+ i 1]]
-]
+(def i 0)
+(loop (< i 10)
+    (print i "\n")
+    (set i (+ i 1))
+)
 ```
 
-### Conditions (cond is an expression):
+### conditionals
 
 ```bbl
-[= label [cond
-    [[== choice 0] "nothing"]
-    [[== choice 1] "something"]
-    [else          "other"]
-]]
+(def label "other")
+(if (== choice 0) (set label "zero"))
+(if (== choice 1) (set label "one"))
+```
+
+## tables
+
+Heterogeneous key-value container.  String and integer keys.
+
+```bbl
+(def player (table "name" "hero" "hp" 100 "alive" true))
+(print player.name)
+(set player.hp 80)
+
+(def items (table 1 "sword" 2 "shield" 3 "potion"))
+(print (items.at 1))
 ```
 
 ## closures
 
 ```bbl
-[= make-adder [fn [n] [fn [x] [+ x n]]]]
-[= add5 [make-adder 5]]
-[add5 3]   // → 8
+(def make-adder (fn (n) (fn (x) (+ x n))))
+(def add5 (make-adder 5))
+(add5 3)   // 8
 ```
 
 ## C++ API
@@ -116,7 +124,7 @@ bbl.exec("scene.bbl");
 
 auto* verts = bbl.getVector<vertex>("player-verts");
 auto* tex = bbl.getBinary("player-texture");
-// ~BblState deallocates everything
+// ~BblState frees all script data, runs GC
 ```
 
 C functions:
@@ -129,8 +137,11 @@ int my_print(BblState* bbl) {
             case BBL::Type::String:
                 printf("%s", bbl->getStringArg(arg));
                 break;
-            case BBL::Type::Int32:
-                printf("%d", bbl->getInt32Arg(arg));
+            case BBL::Type::Int:
+                printf("%lld", bbl->getIntArg(arg));
+                break;
+            case BBL::Type::Float:
+                printf("%g", bbl->getFloatArg(arg));
                 break;
         }
         arg++;
@@ -145,18 +156,24 @@ bbl.exec("script.bbl");
 
 ## binary data
 
-Large binary data is lazy-loaded: the lexer skips past raw bytes and only reads them into memory when accessed.
+Binary blob literal: `0b<size>:<raw bytes>`.  The lexer reads all bytes immediately into memory.
 
 ```bbl
-[= png-texture 0b4096:<4096 bytes of png>]
-[load-texture "character-skin" png-texture]
+(def png-texture 0b4096:<4096 bytes of png>)
+(load-texture "character-skin" png-texture)
+```
+
+Read from file:
+
+```bbl
+(def texture (filebytes "texture.png"))
 ```
 
 Generate from shell:
 
 ```bash
 SIZE=$(stat -c%s texture.png)
-printf '[= texture 0b%d:' "$SIZE" > scene.bbl
+printf '(def texture 0b%d:' "$SIZE" > scene.bbl
 cat texture.png >> scene.bbl
-printf ']\n' >> scene.bbl
+printf ')\n' >> scene.bbl
 ```
