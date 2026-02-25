@@ -75,6 +75,7 @@ bool BblValue::operator==(const BblValue& o) const {
                    (structVal->desc == o.structVal->desc && structVal->data == o.structVal->data);
         case BBL::Type::Vector: return vectorVal == o.vectorVal;
         case BBL::Type::Table:  return tableVal == o.tableVal;
+        case BBL::Type::UserData: return userdataVal == o.userdataVal;
         default:                return false;
     }
 }
@@ -457,6 +458,12 @@ BblState::~BblState() {
     for (auto* t : allocatedTables) {
         delete t;
     }
+    for (auto* u : allocatedUserDatas) {
+        if (u->desc && u->desc->destructor && u->data) {
+            u->desc->destructor(u->data);
+        }
+        delete u;
+    }
 }
 
 BblString* BblState::intern(const std::string& s) {
@@ -473,31 +480,183 @@ BblString* BblState::intern(const std::string& s) {
 BblBinary* BblState::allocBinary(std::vector<uint8_t> data) {
     auto* b = new BblBinary{std::move(data)};
     allocatedBinaries.push_back(b);
+    allocCount++;
+    if (allocCount >= gcThreshold) gc();
     return b;
 }
 
 BblFn* BblState::allocFn() {
     auto* f = new BblFn{};
     allocatedFns.push_back(f);
+    allocCount++;
+    if (allocCount >= gcThreshold) gc();
     return f;
 }
 
 BblStruct* BblState::allocStruct(StructDesc* desc) {
     auto* s = new BblStruct{desc, std::vector<uint8_t>(desc->totalSize, 0)};
     allocatedStructs.push_back(s);
+    allocCount++;
+    if (allocCount >= gcThreshold) gc();
     return s;
 }
 
 BblVec* BblState::allocVector(const std::string& elemType, BBL::Type elemTypeTag, size_t elemSize) {
     auto* v = new BblVec{elemType, elemTypeTag, elemSize, {}};
     allocatedVectors.push_back(v);
+    allocCount++;
+    if (allocCount >= gcThreshold) gc();
     return v;
 }
 
 BblTable* BblState::allocTable() {
     auto* t = new BblTable{};
     allocatedTables.push_back(t);
+    allocCount++;
+    if (allocCount >= gcThreshold) gc();
     return t;
+}
+
+BblUserData* BblState::allocUserData(const std::string& typeName, void* data) {
+    auto it = userDataDescs.find(typeName);
+    if (it == userDataDescs.end()) {
+        throw BBL::Error{"unknown userdata type: " + typeName};
+    }
+    auto* u = new BblUserData{&it->second, data, false};
+    allocatedUserDatas.push_back(u);
+    allocCount++;
+    if (allocCount >= gcThreshold) gc();
+    return u;
+}
+
+// ---------- GC ----------
+
+static void gcMark(BblValue& val);
+
+static void gcMarkScope(BblScope& scope) {
+    for (auto& [name, val] : scope.bindings) {
+        gcMark(val);
+    }
+}
+
+static void gcMark(BblValue& val) {
+    switch (val.type) {
+        case BBL::Type::Binary:
+            if (val.binaryVal && !val.binaryVal->marked) {
+                val.binaryVal->marked = true;
+            }
+            break;
+        case BBL::Type::Fn:
+            if (!val.isCFn && val.fnVal && !val.fnVal->marked) {
+                val.fnVal->marked = true;
+                for (auto& [name, cap] : val.fnVal->captures) {
+                    gcMark(cap);
+                }
+            }
+            break;
+        case BBL::Type::Struct:
+            if (val.structVal && !val.structVal->marked) {
+                val.structVal->marked = true;
+            }
+            break;
+        case BBL::Type::Vector:
+            if (val.vectorVal && !val.vectorVal->marked) {
+                val.vectorVal->marked = true;
+            }
+            break;
+        case BBL::Type::Table:
+            if (val.tableVal && !val.tableVal->marked) {
+                val.tableVal->marked = true;
+                for (auto& [k, v] : val.tableVal->entries) {
+                    BblValue km = k;
+                    BblValue vm = v;
+                    gcMark(km);
+                    gcMark(vm);
+                }
+            }
+            break;
+        case BBL::Type::UserData:
+            if (val.userdataVal && !val.userdataVal->marked) {
+                val.userdataVal->marked = true;
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+void BblState::gc() {
+    // Mark phase
+    gcMarkScope(rootScope);
+    for (auto& arg : callArgs) {
+        gcMark(arg);
+    }
+    gcMark(returnValue);
+
+    // Sweep binaries
+    for (auto it = allocatedBinaries.begin(); it != allocatedBinaries.end();) {
+        if (!(*it)->marked) {
+            delete *it;
+            it = allocatedBinaries.erase(it);
+        } else {
+            (*it)->marked = false;
+            ++it;
+        }
+    }
+    // Sweep fns
+    for (auto it = allocatedFns.begin(); it != allocatedFns.end();) {
+        if (!(*it)->marked) {
+            delete *it;
+            it = allocatedFns.erase(it);
+        } else {
+            (*it)->marked = false;
+            ++it;
+        }
+    }
+    // Sweep structs
+    for (auto it = allocatedStructs.begin(); it != allocatedStructs.end();) {
+        if (!(*it)->marked) {
+            delete *it;
+            it = allocatedStructs.erase(it);
+        } else {
+            (*it)->marked = false;
+            ++it;
+        }
+    }
+    // Sweep vectors
+    for (auto it = allocatedVectors.begin(); it != allocatedVectors.end();) {
+        if (!(*it)->marked) {
+            delete *it;
+            it = allocatedVectors.erase(it);
+        } else {
+            (*it)->marked = false;
+            ++it;
+        }
+    }
+    // Sweep tables
+    for (auto it = allocatedTables.begin(); it != allocatedTables.end();) {
+        if (!(*it)->marked) {
+            delete *it;
+            it = allocatedTables.erase(it);
+        } else {
+            (*it)->marked = false;
+            ++it;
+        }
+    }
+    // Sweep userdata
+    for (auto it = allocatedUserDatas.begin(); it != allocatedUserDatas.end();) {
+        if (!(*it)->marked) {
+            if ((*it)->desc && (*it)->desc->destructor && (*it)->data) {
+                (*it)->desc->destructor((*it)->data);
+            }
+            delete *it;
+            it = allocatedUserDatas.erase(it);
+        } else {
+            (*it)->marked = false;
+            ++it;
+        }
+    }
+    allocCount = 0;
 }
 
 // ---------- Eval ----------
@@ -589,6 +748,9 @@ BblValue BblState::eval(const AstNode& node, BblScope& scope) {
                 // String-key fallback
                 BblValue key = BblValue::makeString(intern(field));
                 return left.tableVal->get(key);
+            }
+            if (left.type == BBL::Type::UserData) {
+                throw BBL::Error{"userdata methods must be called, not accessed as fields"};
             }
             throw BBL::Error{typeName(left.type) + " has no fields or methods"};
         }
@@ -1206,6 +1368,32 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             throw BBL::Error{"table has no method " + method};
         }
 
+        if (obj.type == BBL::Type::UserData) {
+            BblUserData* ud = obj.userdataVal;
+            auto mit = ud->desc->methods.find(method);
+            if (mit == ud->desc->methods.end()) {
+                throw BBL::Error{"userdata " + ud->desc->name + " has no method " + method};
+            }
+            // Build args: first arg is the userdata itself, then remaining call args
+            std::vector<BblValue> args;
+            args.push_back(obj);
+            for (size_t i = 1; i < node.children.size(); i++) {
+                args.push_back(eval(node.children[i], scope));
+            }
+            callArgs = std::move(args);
+            hasReturn = false;
+            returnValue = BblValue::makeNull();
+            callStack.push_back(Frame{currentFile, node.line, ud->desc->name + "." + method});
+            int rc = mit->second(this);
+            callStack.pop_back();
+            BblValue ret = hasReturn ? returnValue : BblValue::makeNull();
+            callArgs.clear();
+            hasReturn = false;
+            returnValue = BblValue::makeNull();
+            (void)rc;
+            return ret;
+        }
+
         throw BBL::Error{typeName(obj.type) + " has no methods"};
     }
 
@@ -1364,6 +1552,14 @@ BblTable* BblState::getTable(const std::string& name) const {
     return v.tableVal;
 }
 
+BblBinary* BblState::getBinary(const std::string& name) const {
+    BblValue v = get(name);
+    if (v.type != BBL::Type::Binary) {
+        throw BBL::Error{"type mismatch: expected binary, got " + typeName(v.type)};
+    }
+    return v.binaryVal;
+}
+
 // ---------- Setters ----------
 
 void BblState::setInt(const std::string& name, int64_t val) {
@@ -1380,6 +1576,16 @@ void BblState::setString(const std::string& name, const char* str) {
 
 void BblState::set(const std::string& name, BblValue val) {
     rootScope.def(name, val);
+}
+
+void BblState::setBinary(const std::string& name, const uint8_t* ptr, size_t size) {
+    std::vector<uint8_t> data(ptr, ptr + size);
+    rootScope.def(name, BblValue::makeBinary(allocBinary(std::move(data))));
+}
+
+void BblState::pushUserData(const std::string& typeName, void* ptr) {
+    returnValue = BblValue::makeUserData(allocUserData(typeName, ptr));
+    hasReturn = true;
 }
 
 // ---------- C function registration ----------
@@ -1540,6 +1746,18 @@ void BblState::registerStruct(const BBL::StructBuilder& builder) {
         desc.fields.push_back(fd);
     }
     structDescs[desc.name] = std::move(desc);
+}
+
+void BblState::registerType(const BBL::TypeBuilder& builder) {
+    auto it = userDataDescs.find(builder.name());
+    if (it != userDataDescs.end()) {
+        return;
+    }
+    UserDataDesc desc;
+    desc.name = builder.name();
+    desc.methods = builder.methods();
+    desc.destructor = builder.getDestructor();
+    userDataDescs[desc.name] = std::move(desc);
 }
 
 // ---------- Struct field read/write ----------
@@ -1819,27 +2037,46 @@ static int bblPrint(BblState* bbl) {
                     fputs("<fn>", stdout);
                 }
                 break;
-            case BBL::Type::Table:
+            case BBL::Type::Table: {
+                auto* tbl = bbl->getArg(i).tableVal;
+                std::string s = "<table length=" + std::to_string(tbl->length()) + ">";
                 if (bbl->printCapture) {
-                    *bbl->printCapture += "<table>";
+                    *bbl->printCapture += s;
                 } else {
-                    fputs("<table>", stdout);
+                    fputs(s.c_str(), stdout);
                 }
                 break;
-            case BBL::Type::Vector:
+            }
+            case BBL::Type::Vector: {
+                auto* vec = bbl->getArg(i).vectorVal;
+                std::string s = "<vector " + vec->elemType + " length=" + std::to_string(vec->length()) + ">";
                 if (bbl->printCapture) {
-                    *bbl->printCapture += "<vector>";
+                    *bbl->printCapture += s;
                 } else {
-                    fputs("<vector>", stdout);
+                    fputs(s.c_str(), stdout);
                 }
                 break;
-            case BBL::Type::Struct:
+            }
+            case BBL::Type::Struct: {
+                auto* st = bbl->getArg(i).structVal;
+                std::string s = "<struct " + st->desc->name + ">";
                 if (bbl->printCapture) {
-                    *bbl->printCapture += "<struct>";
+                    *bbl->printCapture += s;
                 } else {
-                    fputs("<struct>", stdout);
+                    fputs(s.c_str(), stdout);
                 }
                 break;
+            }
+            case BBL::Type::UserData: {
+                auto* ud = bbl->getArg(i).userdataVal;
+                std::string s = "<userdata " + ud->desc->name + ">";
+                if (bbl->printCapture) {
+                    *bbl->printCapture += s;
+                } else {
+                    fputs(s.c_str(), stdout);
+                }
+                break;
+            }
             default:
                 if (bbl->printCapture) {
                     *bbl->printCapture += "<unknown>";
@@ -1856,6 +2093,227 @@ void BBL::addPrint(BblState& bbl) {
     bbl.defn("print", bblPrint);
 }
 
+// ---------- addFileIo ----------
+
+static int bblFilebytes(BblState* bbl) {
+    if (bbl->argCount() < 1) {
+        throw BBL::Error{"filebytes requires a path argument"};
+    }
+    const char* path = bbl->getStringArg(0);
+    namespace fs = std::filesystem;
+    std::string pathStr(path);
+    if (fs::path(pathStr).is_absolute()) {
+        throw BBL::Error{"filebytes: absolute paths not allowed: " + pathStr};
+    }
+    if (pathStr.find("..") != std::string::npos) {
+        throw BBL::Error{"filebytes: parent directory traversal not allowed: " + pathStr};
+    }
+    fs::path resolved;
+    if (bbl->scriptDir.empty()) {
+        resolved = fs::path(pathStr);
+    } else {
+        resolved = fs::path(bbl->scriptDir) / pathStr;
+    }
+    std::ifstream file(resolved, std::ios::binary);
+    if (!file.is_open()) {
+        throw BBL::Error{"filebytes: file not found: " + resolved.string()};
+    }
+    std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+    BblBinary* b = bbl->allocBinary(std::move(data));
+    bbl->returnValue = BblValue::makeBinary(b);
+    bbl->hasReturn = true;
+    return 0;
+}
+
+static int bblFopen(BblState* bbl) {
+    if (bbl->argCount() < 1) {
+        throw BBL::Error{"fopen requires a path argument"};
+    }
+    const char* path = bbl->getStringArg(0);
+    const char* mode = "r";
+    if (bbl->argCount() >= 2) {
+        mode = bbl->getStringArg(1);
+    }
+    FILE* fp = fopen(path, mode);
+    if (!fp) {
+        throw BBL::Error{"fopen: cannot open file: " + std::string(path)};
+    }
+    bbl->pushUserData("File", fp);
+    return 0;
+}
+
+static int bblFileRead(BblState* bbl) {
+    BblValue self = bbl->getArg(0);
+    if (self.type != BBL::Type::UserData || self.userdataVal->desc->name != "File") {
+        throw BBL::Error{"File.read: expected File object"};
+    }
+    FILE* fp = static_cast<FILE*>(self.userdataVal->data);
+    if (!fp) throw BBL::Error{"File.read: file is closed"};
+    std::string contents;
+    char buf[4096];
+    while (size_t n = fread(buf, 1, sizeof(buf), fp)) {
+        contents.append(buf, n);
+    }
+    bbl->pushString(contents.c_str());
+    return 0;
+}
+
+static int bblFileReadBytes(BblState* bbl) {
+    BblValue self = bbl->getArg(0);
+    if (self.type != BBL::Type::UserData) throw BBL::Error{"File.read-bytes: expected File object"};
+    FILE* fp = static_cast<FILE*>(self.userdataVal->data);
+    if (!fp) throw BBL::Error{"File.read-bytes: file is closed"};
+    int64_t n = bbl->getIntArg(1);
+    std::vector<uint8_t> data(static_cast<size_t>(n));
+    size_t got = fread(data.data(), 1, static_cast<size_t>(n), fp);
+    data.resize(got);
+    bbl->pushBinary(data.data(), data.size());
+    return 0;
+}
+
+static int bblFileWrite(BblState* bbl) {
+    BblValue self = bbl->getArg(0);
+    if (self.type != BBL::Type::UserData) throw BBL::Error{"File.write: expected File object"};
+    FILE* fp = static_cast<FILE*>(self.userdataVal->data);
+    if (!fp) throw BBL::Error{"File.write: file is closed"};
+    const char* str = bbl->getStringArg(1);
+    size_t len = strlen(str);
+    size_t written = fwrite(str, 1, len, fp);
+    if (written != len) throw BBL::Error{"File.write: write failed"};
+    return 0;
+}
+
+static int bblFileWriteBytes(BblState* bbl) {
+    BblValue self = bbl->getArg(0);
+    if (self.type != BBL::Type::UserData) throw BBL::Error{"File.write-bytes: expected File object"};
+    FILE* fp = static_cast<FILE*>(self.userdataVal->data);
+    if (!fp) throw BBL::Error{"File.write-bytes: file is closed"};
+    BblBinary* b = bbl->getBinaryArg(1);
+    size_t written = fwrite(b->data.data(), 1, b->length(), fp);
+    if (written != b->length()) throw BBL::Error{"File.write-bytes: write failed"};
+    return 0;
+}
+
+static int bblFileClose(BblState* bbl) {
+    BblValue self = bbl->getArg(0);
+    if (self.type != BBL::Type::UserData) throw BBL::Error{"File.close: expected File object"};
+    FILE* fp = static_cast<FILE*>(self.userdataVal->data);
+    if (fp) {
+        fclose(fp);
+        self.userdataVal->data = nullptr;
+    }
+    return 0;
+}
+
+static int bblFileFlush(BblState* bbl) {
+    BblValue self = bbl->getArg(0);
+    if (self.type != BBL::Type::UserData) throw BBL::Error{"File.flush: expected File object"};
+    FILE* fp = static_cast<FILE*>(self.userdataVal->data);
+    if (fp) fflush(fp);
+    return 0;
+}
+
+static void fileDestructor(void* ptr) {
+    FILE* fp = static_cast<FILE*>(ptr);
+    if (fp) fclose(fp);
+}
+
+void BBL::addFileIo(BblState& bbl) {
+    if (bbl.has("filebytes")) return;
+    BBL::TypeBuilder fb("File");
+    fb.method("read", bblFileRead)
+      .method("read-bytes", bblFileReadBytes)
+      .method("write", bblFileWrite)
+      .method("write-bytes", bblFileWriteBytes)
+      .method("close", bblFileClose)
+      .method("flush", bblFileFlush)
+      .destructor(fileDestructor);
+    bbl.registerType(fb);
+    bbl.defn("filebytes", bblFilebytes);
+    bbl.defn("fopen", bblFopen);
+}
+
+// ---------- addMath ----------
+
+static double getNumericArg(BblState* bbl, int i) {
+    BBL::Type t = bbl->getArgType(i);
+    if (t == BBL::Type::Float) return bbl->getFloatArg(i);
+    if (t == BBL::Type::Int) return static_cast<double>(bbl->getIntArg(i));
+    throw BBL::Error{"math: expected numeric argument, got " + typeName(t)};
+}
+
+#define MATH_UNARY(NAME, FN) \
+    static int bblMath_##NAME(BblState* bbl) { \
+        double x = getNumericArg(bbl, 0); \
+        bbl->pushFloat(FN(x)); \
+        return 0; \
+    }
+
+#define MATH_BINARY(NAME, FN) \
+    static int bblMath_##NAME(BblState* bbl) { \
+        double a = getNumericArg(bbl, 0); \
+        double b = getNumericArg(bbl, 1); \
+        bbl->pushFloat(FN(a, b)); \
+        return 0; \
+    }
+
+MATH_UNARY(sin, std::sin)
+MATH_UNARY(cos, std::cos)
+MATH_UNARY(tan, std::tan)
+MATH_UNARY(asin, std::asin)
+MATH_UNARY(acos, std::acos)
+MATH_UNARY(atan, std::atan)
+MATH_UNARY(floor, std::floor)
+MATH_UNARY(ceil, std::ceil)
+MATH_UNARY(exp, std::exp)
+MATH_UNARY(log, std::log)
+MATH_UNARY(log2, std::log2)
+MATH_UNARY(log10, std::log10)
+MATH_BINARY(atan2, std::atan2)
+MATH_BINARY(pow, std::pow)
+MATH_BINARY(fmin, std::fmin)
+MATH_BINARY(fmax, std::fmax)
+
+static int bblMath_sqrt(BblState* bbl) {
+    double x = getNumericArg(bbl, 0);
+    if (x < 0) throw BBL::Error{"sqrt: negative argument"};
+    bbl->pushFloat(std::sqrt(x));
+    return 0;
+}
+
+static int bblMath_abs(BblState* bbl) {
+    double x = getNumericArg(bbl, 0);
+    bbl->pushFloat(std::fabs(x));
+    return 0;
+}
+
+void BBL::addMath(BblState& bbl) {
+    if (bbl.has("sin")) return;
+    bbl.defn("sin", bblMath_sin);
+    bbl.defn("cos", bblMath_cos);
+    bbl.defn("tan", bblMath_tan);
+    bbl.defn("asin", bblMath_asin);
+    bbl.defn("acos", bblMath_acos);
+    bbl.defn("atan", bblMath_atan);
+    bbl.defn("atan2", bblMath_atan2);
+    bbl.defn("sqrt", bblMath_sqrt);
+    bbl.defn("abs", bblMath_abs);
+    bbl.defn("floor", bblMath_floor);
+    bbl.defn("ceil", bblMath_ceil);
+    bbl.defn("min", bblMath_fmin);
+    bbl.defn("max", bblMath_fmax);
+    bbl.defn("pow", bblMath_pow);
+    bbl.defn("log", bblMath_log);
+    bbl.defn("log2", bblMath_log2);
+    bbl.defn("log10", bblMath_log10);
+    bbl.defn("exp", bblMath_exp);
+    bbl.setFloat("pi", 3.14159265358979323846);
+    bbl.setFloat("e", 2.71828182845904523536);
+}
+
 void BBL::addStdLib(BblState& bbl) {
     BBL::addPrint(bbl);
+    BBL::addMath(bbl);
+    BBL::addFileIo(bbl);
 }
