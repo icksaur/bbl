@@ -22,6 +22,10 @@ bool BblValue::operator==(const BblValue& o) const {
         case BBL::Type::String: return stringVal == o.stringVal;
         case BBL::Type::Binary: return binaryVal == o.binaryVal;
         case BBL::Type::Fn:     return fnVal == o.fnVal;
+        case BBL::Type::Struct:
+            return structVal == o.structVal ||
+                   (structVal->desc == o.structVal->desc && structVal->data == o.structVal->data);
+        case BBL::Type::Vector: return vectorVal == o.vectorVal;
         default:                return false;
     }
 }
@@ -395,6 +399,12 @@ BblState::~BblState() {
     for (auto* f : allocatedFns) {
         delete f;
     }
+    for (auto* s : allocatedStructs) {
+        delete s;
+    }
+    for (auto* v : allocatedVectors) {
+        delete v;
+    }
 }
 
 BblString* BblState::intern(const std::string& s) {
@@ -420,9 +430,21 @@ BblFn* BblState::allocFn() {
     return f;
 }
 
+BblStruct* BblState::allocStruct(StructDesc* desc) {
+    auto* s = new BblStruct{desc, std::vector<uint8_t>(desc->totalSize, 0)};
+    allocatedStructs.push_back(s);
+    return s;
+}
+
+BblVec* BblState::allocVector(const std::string& elemType, BBL::Type elemTypeTag, size_t elemSize) {
+    auto* v = new BblVec{elemType, elemTypeTag, elemSize, {}};
+    allocatedVectors.push_back(v);
+    return v;
+}
+
 // ---------- Eval ----------
 
-static std::string typeName(BBL::Type t) {
+std::string typeName(BBL::Type t) {
     switch (t) {
         case BBL::Type::Null:     return "null";
         case BBL::Type::Bool:     return "bool";
@@ -462,8 +484,40 @@ BblValue BblState::eval(const AstNode& node, BblScope& scope) {
         }
         case NodeType::List:
             return evalList(node, scope);
-        case NodeType::DotAccess:
-            throw BBL::Error{"dot access not yet implemented"};
+        case NodeType::DotAccess: {
+            // DotAccess: children[0] = left, stringVal = field/method name
+            BblValue left = eval(node.children[0], scope);
+            auto& field = node.stringVal;
+            if (left.type == BBL::Type::Struct) {
+                FieldDesc* fd = nullptr;
+                for (auto& f : left.structVal->desc->fields) {
+                    if (f.name == field) {
+                        fd = &f;
+                        break;
+                    }
+                }
+                if (!fd) {
+                    throw BBL::Error{"struct " + left.structVal->desc->name + " has no field " + field};
+                }
+                return readField(left.structVal, *fd);
+            }
+            if (left.type == BBL::Type::String) {
+                if (field == "length") {
+                    return BblValue::makeInt(static_cast<int64_t>(left.stringVal->data.size()));
+                }
+                throw BBL::Error{"string has no method " + field};
+            }
+            if (left.type == BBL::Type::Binary) {
+                if (field == "length") {
+                    return BblValue::makeInt(static_cast<int64_t>(left.binaryVal->length()));
+                }
+                throw BBL::Error{"binary has no method " + field};
+            }
+            if (left.type == BBL::Type::Vector) {
+                throw BBL::Error{"vector methods must be called, not accessed as fields"};
+            }
+            throw BBL::Error{typeName(left.type) + " has no fields or methods"};
+        }
     }
     throw BBL::Error{"internal: unknown node type"};
 }
@@ -567,6 +621,11 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 throw BBL::Error{"def: first argument must be a symbol"};
             }
             BblValue val = eval(node.children[2], scope);
+            if (val.type == BBL::Type::Struct) {
+                BblStruct* copy = allocStruct(val.structVal->desc);
+                memcpy(copy->data.data(), val.structVal->data.data(), val.structVal->desc->totalSize);
+                val = BblValue::makeStruct(copy);
+            }
             scope.def(name.stringVal, val);
             return BblValue::makeNull();
         }
@@ -576,8 +635,29 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 throw BBL::Error{"set requires a name and value"};
             }
             auto& target = node.children[1];
+            if (target.type == NodeType::DotAccess && target.children.size() == 1) {
+                // Place expression: (set v.x val)
+                BblValue obj = eval(target.children[0], scope);
+                auto& fieldName = target.stringVal;
+                BblValue val = eval(node.children[2], scope);
+                if (obj.type == BBL::Type::Struct) {
+                    FieldDesc* fd = nullptr;
+                    for (auto& f : obj.structVal->desc->fields) {
+                        if (f.name == fieldName) {
+                            fd = &f;
+                            break;
+                        }
+                    }
+                    if (!fd) {
+                        throw BBL::Error{"struct " + obj.structVal->desc->name + " has no field " + fieldName};
+                    }
+                    writeField(obj.structVal, *fd, val);
+                    return BblValue::makeNull();
+                }
+                throw BBL::Error{"cannot set field on " + typeName(obj.type)};
+            }
             if (target.type != NodeType::Symbol) {
-                throw BBL::Error{"set: first argument must be a symbol"};
+                throw BBL::Error{"set: first argument must be a symbol or place expression"};
             }
             BblValue val = eval(node.children[2], scope);
             scope.set(target.stringVal, val);
@@ -727,6 +807,54 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             return BblValue::makeNull();
         }
 
+        if (op == "vector") {
+            if (node.children.size() < 2) {
+                throw BBL::Error{"vector requires a type argument"};
+            }
+            auto& typeNode = node.children[1];
+            if (typeNode.type != NodeType::Symbol) {
+                throw BBL::Error{"vector: first argument must be a type name"};
+            }
+            auto& elemTypeName = typeNode.stringVal;
+            BBL::Type elemTag;
+            size_t elemSize;
+            if (elemTypeName == "int") {
+                elemTag = BBL::Type::Int;
+                elemSize = sizeof(int64_t);
+            } else if (elemTypeName == "float") {
+                elemTag = BBL::Type::Float;
+                elemSize = sizeof(double);
+            } else if (elemTypeName == "bool") {
+                elemTag = BBL::Type::Bool;
+                elemSize = 1;
+            } else {
+                auto sit = structDescs.find(elemTypeName);
+                if (sit == structDescs.end()) {
+                    throw BBL::Error{"vector: unknown element type " + elemTypeName};
+                }
+                elemTag = BBL::Type::Struct;
+                elemSize = sit->second.totalSize;
+            }
+            BblVec* vec = allocVector(elemTypeName, elemTag, elemSize);
+            for (size_t i = 2; i < node.children.size(); i++) {
+                BblValue elem = eval(node.children[i], scope);
+                packValue(vec, elem);
+            }
+            return BblValue::makeVector(vec);
+        }
+
+        // Check if this is a struct constructor call
+        {
+            auto sit = structDescs.find(op);
+            if (sit != structDescs.end()) {
+                std::vector<BblValue> args;
+                for (size_t i = 1; i < node.children.size(); i++) {
+                    args.push_back(eval(node.children[i], scope));
+                }
+                return constructStruct(&sit->second, args, node.line);
+            }
+        }
+
         // Not a special form - check for built-in operators and functions
 
         if (op == "not") {
@@ -826,6 +954,66 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
         }
 
         // Fall through to function call
+    }
+
+    // DotAccess call: (obj.method args...)
+    if (head.type == NodeType::DotAccess && head.children.size() >= 1) {
+        BblValue obj = eval(head.children[0], scope);
+        auto& method = head.stringVal;
+
+        if (obj.type == BBL::Type::Vector) {
+            BblVec* vec = obj.vectorVal;
+            if (method == "length") {
+                return BblValue::makeInt(static_cast<int64_t>(vec->length()));
+            }
+            if (method == "push") {
+                if (node.children.size() < 2) {
+                    throw BBL::Error{"vector.push requires an argument"};
+                }
+                BblValue val = eval(node.children[1], scope);
+                packValue(vec, val);
+                return BblValue::makeNull();
+            }
+            if (method == "pop") {
+                if (vec->length() == 0) {
+                    throw BBL::Error{"vector.pop on empty vector"};
+                }
+                BblValue val = readVecElem(vec, vec->length() - 1);
+                vec->data.resize(vec->data.size() - vec->elemSize);
+                return val;
+            }
+            if (method == "clear") {
+                vec->data.clear();
+                return BblValue::makeNull();
+            }
+            if (method == "at") {
+                if (node.children.size() < 2) {
+                    throw BBL::Error{"vector.at requires an index"};
+                }
+                BblValue idx = eval(node.children[1], scope);
+                if (idx.type != BBL::Type::Int) {
+                    throw BBL::Error{"vector.at: index must be int"};
+                }
+                return readVecElem(vec, static_cast<size_t>(idx.intVal));
+            }
+            throw BBL::Error{"vector has no method " + method};
+        }
+
+        if (obj.type == BBL::Type::String) {
+            if (method == "length") {
+                return BblValue::makeInt(static_cast<int64_t>(obj.stringVal->data.size()));
+            }
+            throw BBL::Error{"string has no method " + method};
+        }
+
+        if (obj.type == BBL::Type::Binary) {
+            if (method == "length") {
+                return BblValue::makeInt(static_cast<int64_t>(obj.binaryVal->length()));
+            }
+            throw BBL::Error{"binary has no method " + method};
+        }
+
+        throw BBL::Error{typeName(obj.type) + " has no methods"};
     }
 
     // Function call: evaluate head and args
@@ -1104,6 +1292,258 @@ void BblState::pushBinary(const uint8_t* ptr, size_t size) {
     std::vector<uint8_t> data(ptr, ptr + size);
     returnValue = BblValue::makeBinary(allocBinary(std::move(data)));
     hasReturn = true;
+}
+
+// ---------- StructBuilder ----------
+
+BBL::StructBuilder::StructBuilder(const std::string& name, size_t totalSize)
+    : name_(name), totalSize_(totalSize) {}
+
+void BBL::StructBuilder::addField(const std::string& fname, size_t offset, size_t fsize, CType ct, const std::string& stName) {
+    if (offset + fsize > totalSize_) {
+        throw BBL::Error{"struct " + name_ + ": field " + fname + " exceeds total size"};
+    }
+    for (auto& f : fields_) {
+        size_t aStart = f.offset, aEnd = f.offset + f.size;
+        size_t bStart = offset, bEnd = offset + fsize;
+        if (aStart < bEnd && bStart < aEnd) {
+            throw BBL::Error{"struct " + name_ + ": field " + fname + " overlaps with " + f.name};
+        }
+    }
+    fields_.push_back(FieldDesc{fname, offset, fsize, ct, stName});
+}
+
+BBL::StructBuilder& BBL::StructBuilder::structField(const std::string& fname, size_t offset, const std::string& typeName) {
+    // size will be resolved at registration time
+    addField(fname, offset, 0, CType::Struct, typeName);
+    return *this;
+}
+
+void BblState::registerStruct(const BBL::StructBuilder& builder) {
+    auto it = structDescs.find(builder.name());
+    if (it != structDescs.end()) {
+        return; // silent no-op on re-registration
+    }
+    StructDesc desc;
+    desc.name = builder.name();
+    desc.totalSize = builder.totalSize();
+    for (auto& f : builder.fields()) {
+        FieldDesc fd = f;
+        if (fd.ctype == CType::Struct) {
+            auto sit = structDescs.find(fd.structType);
+            if (sit == structDescs.end()) {
+                throw BBL::Error{"struct " + desc.name + ": field " + fd.name + " references unknown struct " + fd.structType};
+            }
+            fd.size = sit->second.totalSize;
+        }
+        desc.fields.push_back(fd);
+    }
+    structDescs[desc.name] = std::move(desc);
+}
+
+// ---------- Struct field read/write ----------
+
+BblValue BblState::readField(BblStruct* s, const FieldDesc& fd) {
+    const uint8_t* p = s->data.data() + fd.offset;
+    switch (fd.ctype) {
+        case CType::Float32: {
+            float v;
+            memcpy(&v, p, sizeof(float));
+            return BblValue::makeFloat(static_cast<double>(v));
+        }
+        case CType::Float64: {
+            double v;
+            memcpy(&v, p, sizeof(double));
+            return BblValue::makeFloat(v);
+        }
+        case CType::Int32: {
+            int32_t v;
+            memcpy(&v, p, sizeof(int32_t));
+            return BblValue::makeInt(static_cast<int64_t>(v));
+        }
+        case CType::Int64: {
+            int64_t v;
+            memcpy(&v, p, sizeof(int64_t));
+            return BblValue::makeInt(v);
+        }
+        case CType::Bool: {
+            return BblValue::makeBool(*p != 0);
+        }
+        case CType::Struct: {
+            auto sit = structDescs.find(fd.structType);
+            if (sit == structDescs.end()) {
+                throw BBL::Error{"unknown struct type: " + fd.structType};
+            }
+            BblStruct* inner = allocStruct(&sit->second);
+            memcpy(inner->data.data(), p, fd.size);
+            return BblValue::makeStruct(inner);
+        }
+    }
+    throw BBL::Error{"internal: unknown CType"};
+}
+
+void BblState::writeField(BblStruct* s, const FieldDesc& fd, const BblValue& val) {
+    uint8_t* p = s->data.data() + fd.offset;
+    switch (fd.ctype) {
+        case CType::Float32: {
+            if (val.type == BBL::Type::Float) {
+                float v = static_cast<float>(val.floatVal);
+                memcpy(p, &v, sizeof(float));
+            } else if (val.type == BBL::Type::Int) {
+                float v = static_cast<float>(val.intVal);
+                memcpy(p, &v, sizeof(float));
+            } else {
+                throw BBL::Error{"type mismatch: expected numeric, got " + typeName(val.type)};
+            }
+            return;
+        }
+        case CType::Float64: {
+            if (val.type == BBL::Type::Float) {
+                memcpy(p, &val.floatVal, sizeof(double));
+            } else if (val.type == BBL::Type::Int) {
+                double v = static_cast<double>(val.intVal);
+                memcpy(p, &v, sizeof(double));
+            } else {
+                throw BBL::Error{"type mismatch: expected numeric, got " + typeName(val.type)};
+            }
+            return;
+        }
+        case CType::Int32: {
+            if (val.type != BBL::Type::Int) {
+                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type)};
+            }
+            int32_t v = static_cast<int32_t>(val.intVal);
+            memcpy(p, &v, sizeof(int32_t));
+            return;
+        }
+        case CType::Int64: {
+            if (val.type != BBL::Type::Int) {
+                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type)};
+            }
+            memcpy(p, &val.intVal, sizeof(int64_t));
+            return;
+        }
+        case CType::Bool: {
+            if (val.type != BBL::Type::Bool) {
+                throw BBL::Error{"type mismatch: expected bool, got " + typeName(val.type)};
+            }
+            uint8_t v = val.boolVal ? 1 : 0;
+            *p = v;
+            return;
+        }
+        case CType::Struct: {
+            if (val.type != BBL::Type::Struct || val.structVal->desc->name != fd.structType) {
+                throw BBL::Error{"type mismatch: expected struct " + fd.structType};
+            }
+            memcpy(p, val.structVal->data.data(), fd.size);
+            return;
+        }
+    }
+}
+
+BblValue BblState::constructStruct(StructDesc* desc, const std::vector<BblValue>& args, int callLine) {
+    if (args.size() != desc->fields.size()) {
+        throw BBL::Error{"struct " + desc->name + ": expected " + std::to_string(desc->fields.size())
+                         + " argument(s), got " + std::to_string(args.size())};
+    }
+    BblStruct* s = allocStruct(desc);
+    for (size_t i = 0; i < desc->fields.size(); i++) {
+        writeField(s, desc->fields[i], args[i]);
+    }
+    return BblValue::makeStruct(s);
+}
+
+// ---------- Vector helpers ----------
+
+BblValue BblState::readVecElem(BblVec* vec, size_t i) {
+    if (i >= vec->length()) {
+        throw BBL::Error{"vector index " + std::to_string(i) + " out of bounds (length " + std::to_string(vec->length()) + ")"};
+    }
+    const uint8_t* p = vec->at(i);
+    switch (vec->elemTypeTag) {
+        case BBL::Type::Int: {
+            int64_t v;
+            memcpy(&v, p, sizeof(int64_t));
+            return BblValue::makeInt(v);
+        }
+        case BBL::Type::Float: {
+            double v;
+            memcpy(&v, p, sizeof(double));
+            return BblValue::makeFloat(v);
+        }
+        case BBL::Type::Bool: {
+            return BblValue::makeBool(*p != 0);
+        }
+        case BBL::Type::Struct: {
+            auto sit = structDescs.find(vec->elemType);
+            if (sit == structDescs.end()) {
+                throw BBL::Error{"unknown struct type: " + vec->elemType};
+            }
+            BblStruct* s = allocStruct(&sit->second);
+            memcpy(s->data.data(), p, vec->elemSize);
+            return BblValue::makeStruct(s);
+        }
+        default:
+            throw BBL::Error{"internal: unsupported vector element type"};
+    }
+}
+
+void BblState::writeVecElem(BblVec* vec, size_t i, const BblValue& val) {
+    if (i >= vec->length()) {
+        throw BBL::Error{"vector index " + std::to_string(i) + " out of bounds"};
+    }
+    uint8_t* p = vec->at(i);
+    packValue(vec, val);
+    memcpy(p, vec->data.data() + vec->data.size() - vec->elemSize, vec->elemSize);
+    vec->data.resize(vec->data.size() - vec->elemSize);
+}
+
+void BblState::packValue(BblVec* vec, const BblValue& val) {
+    size_t oldSize = vec->data.size();
+    vec->data.resize(oldSize + vec->elemSize, 0);
+    uint8_t* p = vec->data.data() + oldSize;
+    switch (vec->elemTypeTag) {
+        case BBL::Type::Int: {
+            if (val.type != BBL::Type::Int) {
+                vec->data.resize(oldSize);
+                throw BBL::Error{"vector type mismatch: expected int, got " + typeName(val.type)};
+            }
+            memcpy(p, &val.intVal, sizeof(int64_t));
+            return;
+        }
+        case BBL::Type::Float: {
+            double v;
+            if (val.type == BBL::Type::Float) {
+                v = val.floatVal;
+            } else if (val.type == BBL::Type::Int) {
+                v = static_cast<double>(val.intVal);
+            } else {
+                vec->data.resize(oldSize);
+                throw BBL::Error{"vector type mismatch: expected float, got " + typeName(val.type)};
+            }
+            memcpy(p, &v, sizeof(double));
+            return;
+        }
+        case BBL::Type::Bool: {
+            if (val.type != BBL::Type::Bool) {
+                vec->data.resize(oldSize);
+                throw BBL::Error{"vector type mismatch: expected bool, got " + typeName(val.type)};
+            }
+            *p = val.boolVal ? 1 : 0;
+            return;
+        }
+        case BBL::Type::Struct: {
+            if (val.type != BBL::Type::Struct || val.structVal->desc->name != vec->elemType) {
+                vec->data.resize(oldSize);
+                throw BBL::Error{"vector type mismatch: expected struct " + vec->elemType};
+            }
+            memcpy(p, val.structVal->data.data(), vec->elemSize);
+            return;
+        }
+        default:
+            vec->data.resize(oldSize);
+            throw BBL::Error{"internal: unsupported vector element type"};
+    }
 }
 
 // ---------- Backtrace ----------

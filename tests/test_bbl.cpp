@@ -885,6 +885,186 @@ TEST(test_execfile_reject_parent) {
     ASSERT_THROW(bbl.execfile("../secret.bbl"));
 }
 
+// ========== Phase 3: Structs ==========
+
+struct Vertex {
+    float x, y, z;
+};
+
+static void addVertex(BblState& bbl) {
+    BBL::StructBuilder builder("vertex", sizeof(Vertex));
+    builder.field<float>("x", offsetof(Vertex, x));
+    builder.field<float>("y", offsetof(Vertex, y));
+    builder.field<float>("z", offsetof(Vertex, z));
+    bbl.registerStruct(builder);
+}
+
+TEST(test_struct_construct) {
+    BblState bbl;
+    addVertex(bbl);
+    bbl.exec("(def v (vertex 1.0 2.0 3.0))");
+    ASSERT_TRUE(bbl.has("v"));
+    ASSERT_EQ(bbl.getType("v"), BBL::Type::Struct);
+}
+
+TEST(test_struct_field_read) {
+    BblState bbl;
+    addVertex(bbl);
+    bbl.exec("(def v (vertex 1.0 2.0 3.0)) (def rx v.x) (def ry v.y) (def rz v.z)");
+    ASSERT_NEAR(bbl.getFloat("rx"), 1.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("ry"), 2.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("rz"), 3.0, 0.001);
+}
+
+TEST(test_struct_field_write) {
+    BblState bbl;
+    addVertex(bbl);
+    bbl.exec("(def v (vertex 1.0 2.0 3.0)) (set v.x 5.0) (def rx v.x)");
+    ASSERT_NEAR(bbl.getFloat("rx"), 5.0, 0.001);
+}
+
+TEST(test_struct_copy_semantics) {
+    BblState bbl;
+    addVertex(bbl);
+    bbl.exec("(def a (vertex 1.0 2.0 3.0)) (def b a) (set b.x 99.0) (def ax a.x) (def bx b.x)");
+    ASSERT_NEAR(bbl.getFloat("ax"), 1.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("bx"), 99.0, 0.001);
+}
+
+struct Triangle {
+    Vertex a, b, c;
+};
+
+static void addTriangle(BblState& bbl) {
+    BBL::StructBuilder builder("triangle", sizeof(Triangle));
+    builder.structField("a", offsetof(Triangle, a), "vertex");
+    builder.structField("b", offsetof(Triangle, b), "vertex");
+    builder.structField("c", offsetof(Triangle, c), "vertex");
+    bbl.registerStruct(builder);
+}
+
+TEST(test_struct_composed) {
+    BblState bbl;
+    addVertex(bbl);
+    addTriangle(bbl);
+    bbl.exec("(def tri (triangle (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))");
+    bbl.exec("(def ax tri.a.x)");
+    ASSERT_NEAR(bbl.getFloat("ax"), 0.0, 0.001);
+    bbl.exec("(def by tri.b.y)");
+    ASSERT_NEAR(bbl.getFloat("by"), 0.0, 0.001);
+}
+
+TEST(test_struct_arity_error) {
+    BblState bbl;
+    addVertex(bbl);
+    ASSERT_THROW(bbl.exec("(vertex 1.0 2.0)"));
+}
+
+TEST(test_struct_type_error) {
+    BblState bbl;
+    addVertex(bbl);
+    ASSERT_THROW(bbl.exec("(vertex 1.0 2.0 \"three\")"));
+}
+
+TEST(test_struct_unknown_field) {
+    BblState bbl;
+    addVertex(bbl);
+    ASSERT_THROW(bbl.exec("(def v (vertex 1.0 2.0 3.0)) (def w v.w)"));
+}
+
+// ========== Phase 3: Vectors ==========
+
+TEST(test_vector_int) {
+    BblState bbl;
+    bbl.exec("(def v (vector int 1 2 3))");
+    ASSERT_EQ(bbl.getType("v"), BBL::Type::Vector);
+}
+
+TEST(test_vector_length) {
+    BblState bbl;
+    bbl.exec("(def v (vector int 1 2 3)) (def n (v.length))");
+    ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
+}
+
+TEST(test_vector_at) {
+    BblState bbl;
+    bbl.exec("(def v (vector int 10 20 30)) (def x (v.at 1))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)20);
+}
+
+TEST(test_vector_push) {
+    BblState bbl;
+    bbl.exec("(def v (vector int 1 2)) (v.push 3) (def n (v.length))");
+    ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
+}
+
+TEST(test_vector_pop) {
+    BblState bbl;
+    bbl.exec("(def v (vector int 10 20 30)) (def last (v.pop)) (def n (v.length))");
+    ASSERT_EQ(bbl.getInt("last"), (int64_t)30);
+    ASSERT_EQ(bbl.getInt("n"), (int64_t)2);
+}
+
+TEST(test_vector_clear) {
+    BblState bbl;
+    bbl.exec("(def v (vector int 1 2 3)) (v.clear) (def n (v.length))");
+    ASSERT_EQ(bbl.getInt("n"), (int64_t)0);
+}
+
+TEST(test_vector_struct) {
+    BblState bbl;
+    addVertex(bbl);
+    bbl.exec("(def verts (vector vertex (vertex 0 1 0) (vertex 1 0 0)))");
+    bbl.exec("(def x (verts.at 0).x)");
+    ASSERT_NEAR(bbl.getFloat("x"), 0.0, 0.001);
+}
+
+TEST(test_vector_push_struct) {
+    BblState bbl;
+    addVertex(bbl);
+    bbl.exec("(def verts (vector vertex)) (verts.push (vertex 3 4 5)) (def n (verts.length))");
+    ASSERT_EQ(bbl.getInt("n"), (int64_t)1);
+}
+
+TEST(test_vector_type_mismatch) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(def v (vector int 1 2)) (v.push \"bad\")"));
+}
+
+TEST(test_vector_out_of_bounds) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(def v (vector int 1)) (v.at 5)"));
+}
+
+TEST(test_vector_pop_empty) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(def v (vector int)) (v.pop)"));
+}
+
+TEST(test_vector_get_data_cpp) {
+    BblState bbl;
+    addVertex(bbl);
+    bbl.exec("(def verts (vector vertex (vertex 1 2 3) (vertex 4 5 6)))");
+    Vertex* data = bbl.getVectorData<Vertex>("verts");
+    size_t len = bbl.getVectorLength<Vertex>("verts");
+    ASSERT_EQ(len, (size_t)2);
+    ASSERT_NEAR(data[0].x, 1.0f, 0.001f);
+    ASSERT_NEAR(data[0].y, 2.0f, 0.001f);
+    ASSERT_NEAR(data[0].z, 3.0f, 0.001f);
+    ASSERT_NEAR(data[1].x, 4.0f, 0.001f);
+}
+
+TEST(test_dot_on_int_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(def x 5) (def y x.foo)"));
+}
+
+TEST(test_string_length_method) {
+    BblState bbl;
+    bbl.exec("(def s \"hello\") (def n (s.length))");
+    ASSERT_EQ(bbl.getInt("n"), (int64_t)5);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -1056,6 +1236,34 @@ int main() {
     std::cout << "--- Execfile Sandbox ---" << std::endl;
     RUN(test_execfile_reject_absolute);
     RUN(test_execfile_reject_parent);
+
+    // Phase 3: Structs
+    std::cout << "--- Structs ---" << std::endl;
+    RUN(test_struct_construct);
+    RUN(test_struct_field_read);
+    RUN(test_struct_field_write);
+    RUN(test_struct_copy_semantics);
+    RUN(test_struct_composed);
+    RUN(test_struct_arity_error);
+    RUN(test_struct_type_error);
+    RUN(test_struct_unknown_field);
+
+    // Phase 3: Vectors
+    std::cout << "--- Vectors ---" << std::endl;
+    RUN(test_vector_int);
+    RUN(test_vector_length);
+    RUN(test_vector_at);
+    RUN(test_vector_push);
+    RUN(test_vector_pop);
+    RUN(test_vector_clear);
+    RUN(test_vector_struct);
+    RUN(test_vector_push_struct);
+    RUN(test_vector_type_mismatch);
+    RUN(test_vector_out_of_bounds);
+    RUN(test_vector_pop_empty);
+    RUN(test_vector_get_data_cpp);
+    RUN(test_dot_on_int_error);
+    RUN(test_string_length_method);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;
