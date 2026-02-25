@@ -12,6 +12,7 @@ Serialize complex C++ data structures including binary blobs.  Embeddable script
 - call from C, call to C
 - strong performance
 - deterministic object lifetimes (RAII, no GC)
+- usable by LLM agents with minimum context engineering
 
 ## non-goals
 
