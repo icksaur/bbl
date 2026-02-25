@@ -108,6 +108,8 @@ Runtime error if the file cannot be opened.
 
 Reads an entire file into memory and returns a `binary`.  Opens the file, reads all bytes, closes the file, returns the result.  See [binary-data.md](binary-data.md) for the `BblBinary` type.
 
+**Sandboxing**: from script, `filebytes` can only access files in the calling script's directory or child directories.  Absolute paths and paths containing `..` are a runtime error.  See [security.md](security.md).
+
 Runtime error if the file cannot be opened or read.
 
 ---

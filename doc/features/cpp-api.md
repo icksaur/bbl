@@ -2,7 +2,7 @@
 
 ## goal
 
-Lua-style embedding API.  A C++ program creates a `BblState`, registers functions and types, executes scripts, and reads results.  The environment persists across multiple `exec()` calls.  `~BblState` runs the GC to completion and frees all memory.
+Lua-style embedding API.  A C++ program creates a `BblState`, registers functions and types, executes scripts, and reads results.  The environment persists across multiple `execfile()` and `exec()` calls.  `~BblState` runs the GC to completion and frees all memory.
 
 ## BblState lifecycle
 
@@ -18,8 +18,8 @@ addVertex(bbl);
 addTriangle(bbl);
 
 // 3. execute scripts — environment accumulates
-bbl.exec("setup.bbl");       // defines data using registered types
-bbl.exec("scene.bbl");       // can use types from setup.bbl
+bbl.execfile("setup.bbl");       // defines data using registered types
+bbl.execfile("scene.bbl");       // can use types from setup.bbl
 
 // 4. introspect the environment
 auto* verts = bbl.getVector<vertex>("player-verts");
@@ -28,9 +28,24 @@ auto* tex = bbl.getBinary("player-texture");
 // 5. ~BblState frees all script data, runs GC
 ```
 
-`exec()` returns `void`.  On success, the root scope contains everything the script defined.  On error, it throws `BBL::Error` — the `BblState` remains valid for cleanup and introspection, but the failed script cannot be resumed.
+`execfile()` and `exec()` return `void`.  On success, the root scope contains everything the script defined.  On error, they throw `BBL::Error` — the `BblState` remains valid for cleanup and introspection, but the failed script cannot be resumed.
 
-**Key property**: `exec()` does not reset the environment.  Each script runs in the same root scope.  The second script sees everything the first script defined.
+**Key property**: `execfile()` does not reset the environment.  Each script runs in the same root scope.  The second script sees everything the first script defined.
+
+## execfile vs exec
+
+| method | input | description |
+|--------|-------|-------------|
+| `bbl.execfile(filename)` | file path | parse and execute a `.bbl` file |
+| `bbl.exec(source)` | code string | parse and execute a string of BBL source code |
+
+Both accumulate into the same root scope from C++.  The distinction is only the source of the code.
+
+```cpp
+bbl.execfile("types.bbl");           // load type definitions from file
+bbl.exec("(def scale 2.0)");          // inject a definition from a string
+bbl.execfile("scene.bbl");            // scene.bbl can use 'scale'
+```
 
 ## registering C functions — `bbl.defn()`
 
@@ -140,7 +155,7 @@ The backtrace includes the BBL call site where the C function was invoked.
 
 ## environment introspection
 
-After `exec()`, the root scope is alive.  The C++ caller can read any variable defined by the script.
+After `execfile()` or `exec()`, the root scope is alive.  The C++ caller can read any variable defined by the script.
 
 ### type-safe getters
 
@@ -172,14 +187,14 @@ After `exec()`, the root scope is alive.  The C++ caller can read any variable d
 | `bbl.setBinary(name, ptr, size)` | define/overwrite a binary variable (copies into managed buffer) |
 | `bbl.set(name, BblValue)` | define/overwrite with a tagged value |
 
-This allows C++ to inject data into the environment before or between `exec()` calls:
+This allows C++ to inject data into the environment before or between `execfile()` / `exec()` calls:
 
 ```cpp
 BblState bbl;
 BBL::addStdLib(bbl);
 bbl.setInt("screen-width", 1920);
 bbl.setInt("screen-height", 1080);
-bbl.exec("ui-layout.bbl");
+bbl.execfile("ui-layout.bbl");
 ```
 
 ### iterating the environment
@@ -348,7 +363,7 @@ One call registers the common built-in functions.  Equivalent to Lua's `luaL_ope
 ```cpp
 BblState bbl;
 BBL::addStdLib(bbl);
-bbl.exec("script.bbl");
+bbl.execfile("script.bbl");
 ```
 
 `addStdLib` is a convenience that calls individual library loaders:
@@ -367,7 +382,7 @@ Each can be called individually for a minimal runtime:
 ```cpp
 BblState bbl;
 BBL::addPrint(bbl);     // only print, nothing else
-bbl.exec("script.bbl");
+bbl.execfile("script.bbl");
 ```
 
 ### File type (from addFileIo)
@@ -409,7 +424,7 @@ All errors throw `BBL::Error`.  See [errors.md](errors.md) for details.
 
 ```cpp
 try {
-    bbl.exec("script.bbl");
+    bbl.execfile("script.bbl");
 } catch (const BBL::Error& e) {
     fprintf(stderr, "bbl failed: %s\n", e.what.c_str());
 }

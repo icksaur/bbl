@@ -119,8 +119,8 @@ Lua-style embedding.
 ```cpp
 BblState bbl;
 BBL::addStdLib(bbl);
-bbl.exec("types.bbl");
-bbl.exec("scene.bbl");
+bbl.execfile("types.bbl");
+bbl.execfile("scene.bbl");
 
 auto* verts = bbl.getVector<vertex>("player-verts");
 auto* tex = bbl.getBinary("player-texture");
@@ -151,7 +151,7 @@ int my_print(BblState* bbl) {
 
 BblState bbl;
 bbl.defn("print", my_print);
-bbl.exec("script.bbl");
+bbl.execfile("script.bbl");
 ```
 
 ## binary data

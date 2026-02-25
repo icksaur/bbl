@@ -230,7 +230,8 @@ Conditions in `if`, `loop`, and `and`/`or` must evaluate to `bool`.  Non-bool va
 | `and` | short-circuit logical AND |
 | `or` | short-circuit logical OR |
 | `fn` | function definition (creates new scope, captures free variables) |
-| `exec` | run another file |
+| `execfile` | run another `.bbl` file |
+| `exec` | evaluate a string as BBL code |
 
 ### control flow
 
@@ -361,20 +362,37 @@ Built-in container methods:
 | `string` | `length` (more in string library — deferred) |
 | `binary` | `length` |
 
-### import/exec
+### execfile / exec
 
-Exec runs another `.bbl` file.  Two distinct behaviors depending on context:
+Two special forms for loading code:
 
-**From script** — `(exec "file.bbl")`: creates a fresh isolated scope.  The exec'd file cannot see the caller's variables.  Returns the value of the last evaluated expression in the file.
+**`execfile`** — runs another `.bbl` file.  **`exec`** — evaluates a string as BBL code.
+
+#### execfile
+
+**From script** — `(execfile "file.bbl")`: creates a fresh isolated scope.  The exec'd file cannot see the caller's variables.  Returns the value of the last evaluated expression in the file.
 
 ```bbl
-(def scene (exec "scene.bbl"))
+(def scene (execfile "scene.bbl"))
 (print scene.name)
 ```
 
-**From C++** — `bbl.exec("file.bbl")`: accumulates into the existing root scope.  Each call sees everything previous calls defined.  This is how multi-file workflows share definitions.
+**From C++** — `bbl.execfile("file.bbl")`: accumulates into the existing root scope.  Each call sees everything previous calls defined.  This is how multi-file workflows share definitions.
 
-**Path resolution**: `exec` paths are resolved relative to the calling script's directory.  C++ `bbl.exec()` resolves relative to the process's CWD (or a configurable base path on `BblState`).
+**Path resolution**: `execfile` paths are resolved relative to the calling script's directory.  C++ `bbl.execfile()` resolves relative to the process's CWD (or a configurable base path on `BblState`).
+
+**Sandboxing**: from script, `execfile` can only access files in the calling script's directory or child directories.  No absolute paths, no `..`.  The sandbox chains down — an exec'd file's sandbox root is its own directory.  See [features/security.md](features/security.md).
+
+#### exec
+
+**From script** — `(exec "(print 42)")`: evaluates the string as BBL code.  Runs in a fresh isolated scope.  Returns the value of the last evaluated expression.
+
+```bbl
+(def result (exec "(+ 1 2)"))
+(print result)   // 3
+```
+
+**From C++** — `bbl.exec("(def x 10)")`: evaluates the string in the existing root scope.  Accumulates like `bbl.execfile()` but takes source code instead of a filename.
 
 ## runtime typing
 
@@ -397,8 +415,9 @@ Simple mark-and-sweep garbage collector.  See [memory-model.md](memory-model.md)
 
 **One scope type**: a symbol → value table.  Fresh vs shared is the only distinction:
 - `fn` call → fresh scope.  Sees: own frame + captured variables from the defining scope.
-- `(exec "file.bbl")` from script → fresh root scope.  Isolated.  Returns the last evaluated expression.
-- C++ `bbl.exec()` → **accumulates** into the existing root scope.
+- `(execfile "file.bbl")` from script → fresh root scope.  Isolated.  Returns the last evaluated expression.
+- `(exec "code")` from script → fresh scope.  Returns the last evaluated expression.
+- C++ `bbl.execfile()` / `bbl.exec()` → **accumulates** into the existing root scope.
 - `loop` / `if` → shared.  Runs inside the current frame.
 
 **GC**: all heap objects (strings, binaries, closures, containers, userdata) are managed by a mark-and-sweep collector.  Assignment is a pointer copy.  The GC runs periodically.  `~BblState` frees everything.
@@ -442,6 +461,8 @@ hi world
 
 The prompt switches from `>` to `.` while inside an incomplete expression.
 
+See [features/cli.md](features/cli.md) for the full CLI specification (options, script arguments, exit codes, environment variables).
+
 ## C++ API
 
 See [features/cpp-api.md](features/cpp-api.md) for the full API specification.
@@ -452,8 +473,8 @@ Lua-style embedding.  A `BblState` owns the entire runtime — scope, types, int
 BblState bbl;
 BBL::addStdLib(bbl);              // register print, file I/O, math
 bbl.defn("my-func", my_func);    // register custom C function
-bbl.exec("setup.bbl");           // execute script — env persists
-bbl.exec("scene.bbl");           // second script sees setup.bbl's definitions
+bbl.execfile("setup.bbl");       // execute script — env persists
+bbl.execfile("scene.bbl");       // second script sees setup.bbl's definitions
 
 auto* verts = bbl.getVector<vertex>("player-verts");  // introspect env
 auto* tex = bbl.getBinary("player-texture");
@@ -461,10 +482,11 @@ auto* tex = bbl.getBinary("player-texture");
 ```
 
 Key properties:
-- `exec()` does not reset the environment.  Scripts accumulate into the same root scope.
+- `execfile()` does not reset the environment.  Scripts accumulate into the same root scope.
+- `exec()` evaluates a code string — also accumulates into the root scope from C++.
 - C functions follow `int fn(BblState* bbl)` — read args by index, push return value, return 0 or 1.
 - All errors throw `BBL::Error` (see [features/errors.md](features/errors.md)).
-- After `exec()`, C++ can read any variable via typed getters (`getInt`, `getFloat`, `getString`, `getVector<T>`, etc.).
+- After `execfile()` / `exec()`, C++ can read any variable via typed getters (`getInt`, `getFloat`, `getString`, `getVector<T>`, etc.).
 
 ## serialization workflow
 
@@ -505,3 +527,5 @@ Design documents linked from this spec:
 | [features/string.md](features/string.md) | string type, interning, operations |
 | [features/stdlib.md](features/stdlib.md) | standard library (print, file I/O, math) |
 | [features/method-resolution.md](features/method-resolution.md) | `.` operator dispatch algorithm, per-type rules, error cases |
+| [features/cli.md](features/cli.md) | `bbl` command-line tool, REPL, options, exit codes |
+| [features/security.md](features/security.md) | sandboxing, path restrictions, capability model |

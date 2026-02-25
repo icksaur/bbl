@@ -9,8 +9,9 @@ The two rules are about when a scope is **fresh** vs **shared**:
 | construct | scope |
 |-----------|-------|
 | `fn` call | **fresh** — new scope for args and locals.  Also holds captured variables. |
-| `(exec "file.bbl")` from script | **fresh** — isolated, sees nothing from the caller.  Returns last expression. |
-| C++ `bbl.exec()` | **shared** — accumulates into the existing root scope |
+| `(execfile "file.bbl")` from script | **fresh** — isolated, sees nothing from the caller.  Returns last expression. |
+| `(exec "code")` from script | **fresh** — isolated scope.  Returns last expression. |
+| C++ `bbl.execfile()` / `bbl.exec()` | **shared** — accumulates into the existing root scope |
 | `loop`, `if` | **shared** — no new scope, runs inside the current frame |
 
 "Global" is not a special concept.  It just means the **root scope of the current script** — the outermost fresh scope.  It's the same data structure as a function's local scope.
@@ -48,7 +49,7 @@ The GC runs periodically — triggered by allocation pressure (e.g. after N byte
 - **Rebinding** the outer variable after capture does not affect the closure — it holds the value that existed at capture time.
 
 ```
-bbl.exec("script.bbl")
+bbl.execfile("script.bbl")
   └─ root scope of script.bbl
        ├─ (def x 10)                     ← root-scope binding
        ├─ (def make-adder (fn (n)        ← defines outer fn
@@ -78,7 +79,7 @@ For GC-managed types, `set` in a closure makes the new object visible anywhere t
 
 ## functions return their last expression
 
-Both `fn` bodies and `exec`'d files return the value of their last evaluated expression.  There is no explicit `return` keyword.
+Both `fn` bodies and `execfile`'d / `exec`'d code return the value of their last evaluated expression.  There is no explicit `return` keyword.
 
 ```bbl
 (def double (fn (x) (* x 2)))
@@ -111,11 +112,13 @@ Type descriptors live in a global table on `BblState` and are **never freed duri
 
 Type descriptors are registered from C++ via `StructBuilder` or `TypeBuilder`.  There is no script-level type definition.
 
-## scope for exec'd files
+## scope for execfile'd / exec'd code
 
-**From script** — `(exec "other.bbl")` creates a new **root scope** (not inheriting from the caller).  The exec'd file runs like a fresh script and returns the value of its last expression.  Its root scope is destroyed when it returns.
+**From script** — `(execfile "other.bbl")` creates a new **root scope** (not inheriting from the caller).  The exec'd file runs like a fresh script and returns the value of its last expression.  Its root scope is destroyed when it returns.
 
-**From C++** — `bbl.exec("other.bbl")` accumulates into the existing root scope.  The second call sees everything the first call defined.
+`(exec "code")` from script also creates a fresh scope.  The string is parsed and evaluated in isolation.  Returns the last expression.
+
+**From C++** — `bbl.execfile("other.bbl")` and `bbl.exec("code")` both accumulate into the existing root scope.  The second call sees everything the first call defined.
 
 ## string interning
 

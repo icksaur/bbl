@@ -7,7 +7,7 @@ BBL terminology and how it relates to (or differs from) traditional Lisp concept
 | term | meaning |
 |------|---------|
 | **s-expression** | `(op args...)` — the fundamental syntax unit. |
-| **special form** | An s-expression handled directly by the interpreter rather than as a function call.  `def`, `set`, `if`, `loop`, `fn`, `exec`, `and`, `or`. |
+| **special form** | An s-expression handled directly by the interpreter rather than as a function call.  `def`, `set`, `if`, `loop`, `fn`, `execfile`, `exec`, `and`, `or`. |
 | **place expression** | The target of `(set place val)` — an expression that identifies a writable location.  A symbol (`x`), a dot access (`v.x`), or an indexed access (`(verts.at 0)`).  Single-level only — no chaining like `(set a.b.c val)`. |
 | **binding** | An entry in a scope table: a name associated with a value.  `(def x 5)` creates a binding; `(set x 10)` rebinds it. |
 | **scope** | A symbol → value table.  There is one scope type.  It is either **fresh** (new table, e.g. `fn` call) or **shared** (runs in the enclosing table, e.g. `loop`, `if`). |
@@ -22,7 +22,8 @@ BBL terminology and how it relates to (or differs from) traditional Lisp concept
 | **interning** | All strings are stored in a global table on `BblState` keyed by content hash.  Duplicate strings share one allocation.  Pool-lifetime — freed when `~BblState` runs. |
 | **`userdata`** | An opaque `void*` with a registered type descriptor (methods and optional destructor via `TypeBuilder`).  All userdata is typed.  `File` etc. are userdata. |
 | **`BblState`** | The C++ object that owns the entire BBL runtime: scopes, GC heap, type descriptors, intern table.  One state per interpreter instance. |
-| **`exec`** | Runs another `.bbl` file.  From script: isolated scope, returns last expression.  From C++: accumulates into existing root scope. |
+| **`execfile`** | Runs another `.bbl` file.  From script: isolated scope, returns last expression.  From C++: accumulates into existing root scope.  Subject to path sandboxing (see [features/security.md](features/security.md)). |
+| **`exec`** | Evaluates a string as BBL code.  From script: fresh isolated scope, returns last expression.  From C++: accumulates into existing root scope. |
 
 ## Lisp concepts NOT used in BBL
 
@@ -42,4 +43,4 @@ BBL terminology and how it relates to (or differs from) traditional Lisp concept
 | **garbage collection** | Mark-and-sweep tracing GC — standard approach. |
 | **multiple return values** | Not in v1 (deferred to backlog).  Functions return one value (last expression). |
 | **apply / funcall** | Functions are called by position in an s-expression: `(f args...)`.  No separate `apply`. |
-| **eval** | No runtime eval of strings as code.  `exec` runs files, not strings. |
+| **eval** | `exec` evaluates a string as code (like Lua's `load()`).  `execfile` runs a file.  Neither is a macro system — no code-as-data. |

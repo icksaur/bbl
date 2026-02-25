@@ -80,7 +80,9 @@ A binary blob's buffer is **mutable in memory**.  Script code and C++ can write 
 
 ### path resolution
 
-Follows the same rules as `exec`: relative to the calling script's directory.  From C++ `bbl.exec()`, relative to CWD or the configured base path.
+Follows the same rules as `execfile`: relative to the calling script's directory.  From C++ `bbl.execfile()`, relative to CWD or the configured base path.
+
+**Sandboxing**: from script, `filebytes` can only access files in the calling script's directory or child directories.  Absolute paths and paths containing `..` are a runtime error.  See [security.md](security.md).
 
 ### C++ equivalent
 
@@ -91,7 +93,7 @@ bbl.setBinary("tex", data_ptr, data_size);  // copies into managed buffer
 ## C++ API
 
 ```cpp
-bbl.exec("scene.bbl");
+bbl.execfile("scene.bbl");
 
 auto* tex = bbl.getBinary("player-texture");
 size_t len = tex->length();

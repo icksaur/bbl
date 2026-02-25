@@ -31,7 +31,7 @@ One type for all errors.  `what` contains the error message.  The backtrace is p
 BblState bbl;
 BBL::addPrint(bbl);
 try {
-    bbl.exec("script.bbl");
+    bbl.execfile("script.bbl");
 } catch (const BBL::Error& e) {
     fprintf(stderr, "bbl failed: %s\n", e.what.c_str());
 }
@@ -44,14 +44,14 @@ try {
 error: type mismatch: expected vertex, got int
   at (verts.push 42)        script.bbl:14
   at (load-mesh)            script.bbl:22
-  at (exec "script.bbl")    main.bbl:3
+  at (execfile "script.bbl")    main.bbl:3
 ```
 
 Each line shows:
 - The expression that failed (abbreviated to the form)
 - The source file and line number
 
-Frames are listed innermost-first.  `exec` boundaries show as frames in the trace since they represent real call boundaries.
+Frames are listed innermost-first.  `execfile` and `exec` boundaries show as frames in the trace since they represent real call boundaries.
 
 ## error conditions
 
@@ -103,7 +103,7 @@ The backtrace will include the C function's call site in BBL script.
 
 ## implementation notes
 
-The backtrace requires the interpreter to maintain a call stack of `{file, line, expression}` frames.  This is a `std::vector<Frame>` on `BblState`, pushed on function/exec entry and popped on return.  The cost is one push/pop per call — negligible.
+The backtrace requires the interpreter to maintain a call stack of `{file, line, expression}` frames.  This is a `std::vector<Frame>` on `BblState`, pushed on function/execfile/exec entry and popped on return.  The cost is one push/pop per call — negligible.
 
 Parse errors throw immediately during parsing (before execution begins).  The backtrace for parse errors is just the file and line — there's no runtime call stack yet.
 
