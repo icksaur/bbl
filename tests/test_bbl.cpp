@@ -1248,6 +1248,261 @@ TEST(test_string_concat_multi) {
     ASSERT_EQ(std::string(bbl.getString("s")), std::string("abc"));
 }
 
+// ========== Phase 5: Binary C++ API ==========
+
+TEST(test_get_binary) {
+    BblState bbl;
+    bbl.exec("(def b 0b3:abc)");
+    auto* b = bbl.getBinary("b");
+    ASSERT_EQ(b->length(), (size_t)3);
+    ASSERT_EQ(b->data[0], (uint8_t)'a');
+}
+
+TEST(test_set_binary) {
+    BblState bbl;
+    uint8_t data[] = {1, 2, 3, 4};
+    bbl.setBinary("b", data, 4);
+    auto* b = bbl.getBinary("b");
+    ASSERT_EQ(b->length(), (size_t)4);
+    ASSERT_EQ(b->data[0], (uint8_t)1);
+    ASSERT_EQ(b->data[3], (uint8_t)4);
+}
+
+// ========== Phase 5: GC ==========
+
+TEST(test_gc_no_crash) {
+    BblState bbl;
+    bbl.exec(R"(
+        (def t (table "a" 1))
+        (def t null)
+    )");
+    bbl.gc();
+    ASSERT_TRUE(true);
+}
+
+TEST(test_gc_closure_survives) {
+    BblState bbl;
+    bbl.exec(R"(
+        (def f (fn (x) (+ x 1)))
+        (def r (f 5))
+    )");
+    bbl.gc();
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)6);
+}
+
+TEST(test_gc_stress) {
+    BblState bbl;
+    bbl.gcThreshold = 16;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (def i 0)
+        (loop (< i 200)
+            (def t (table "x" i))
+            (set i (+ i 1))
+        )
+    )");
+    ASSERT_EQ(bbl.getInt("i"), (int64_t)200);
+}
+
+// ========== Phase 5: TypeBuilder & Userdata ==========
+
+static int counterValue = 0;
+static bool counterDestructed = false;
+
+static int udGetVal(BblState* bbl) {
+    BblValue self = bbl->getArg(0);
+    int* ptr = static_cast<int*>(self.userdataVal->data);
+    bbl->pushInt(*ptr);
+    return 0;
+}
+
+static int udIncrement(BblState* bbl) {
+    BblValue self = bbl->getArg(0);
+    int* ptr = static_cast<int*>(self.userdataVal->data);
+    (*ptr)++;
+    return 0;
+}
+
+static void udDestructor(void* ptr) {
+    counterDestructed = true;
+    (void)ptr;
+}
+
+TEST(test_typebuilder_register) {
+    BblState bbl;
+    BBL::TypeBuilder tb("Counter");
+    tb.method("value", udGetVal)
+      .method("increment", udIncrement)
+      .destructor(udDestructor);
+    bbl.registerType(tb);
+    counterValue = 42;
+    counterDestructed = false;
+    auto* ud = bbl.allocUserData("Counter", &counterValue);
+    bbl.set("c", BblValue::makeUserData(ud));
+    bbl.exec(R"((def v (c.value)))");
+    ASSERT_EQ(bbl.getInt("v"), (int64_t)42);
+}
+
+TEST(test_typebuilder_method_call) {
+    BblState bbl;
+    BBL::TypeBuilder tb("Counter");
+    tb.method("value", udGetVal)
+      .method("increment", udIncrement);
+    bbl.registerType(tb);
+    counterValue = 10;
+    auto* ud = bbl.allocUserData("Counter", &counterValue);
+    bbl.set("c", BblValue::makeUserData(ud));
+    bbl.exec(R"((c.increment) (def v (c.value)))");
+    ASSERT_EQ(bbl.getInt("v"), (int64_t)11);
+}
+
+TEST(test_typebuilder_destructor_on_gc) {
+    BblState bbl;
+    BBL::TypeBuilder tb("Counter");
+    tb.method("value", udGetVal)
+      .destructor(udDestructor);
+    bbl.registerType(tb);
+    counterDestructed = false;
+    int val = 99;
+    auto* ud = bbl.allocUserData("Counter", &val);
+    bbl.set("c", BblValue::makeUserData(ud));
+    bbl.exec("(def c null)");
+    bbl.gc();
+    ASSERT_TRUE(counterDestructed);
+}
+
+TEST(test_userdata_wrong_method) {
+    BblState bbl;
+    BBL::TypeBuilder tb("Counter");
+    tb.method("value", udGetVal);
+    bbl.registerType(tb);
+    int val = 0;
+    auto* ud = bbl.allocUserData("Counter", &val);
+    bbl.set("c", BblValue::makeUserData(ud));
+    ASSERT_THROW(bbl.exec(R"((c.nonexistent))"));
+}
+
+// ========== Phase 5: Math ==========
+
+TEST(test_math_sqrt) {
+    BblState bbl;
+    BBL::addMath(bbl);
+    bbl.exec("(def r (sqrt 4.0))");
+    ASSERT_NEAR(bbl.getFloat("r"), 2.0, 0.001);
+}
+
+TEST(test_math_sin) {
+    BblState bbl;
+    BBL::addMath(bbl);
+    bbl.exec("(def r (sin 0.0))");
+    ASSERT_NEAR(bbl.getFloat("r"), 0.0, 0.001);
+}
+
+TEST(test_math_abs_int_promoted) {
+    BblState bbl;
+    BBL::addMath(bbl);
+    bbl.exec("(def r (abs -5))");
+    ASSERT_NEAR(bbl.getFloat("r"), 5.0, 0.001);
+}
+
+TEST(test_math_sqrt_negative) {
+    BblState bbl;
+    BBL::addMath(bbl);
+    ASSERT_THROW(bbl.exec("(sqrt -1.0)"));
+}
+
+TEST(test_math_pi_e) {
+    BblState bbl;
+    BBL::addMath(bbl);
+    ASSERT_NEAR(bbl.getFloat("pi"), 3.14159, 0.001);
+    ASSERT_NEAR(bbl.getFloat("e"), 2.71828, 0.001);
+}
+
+TEST(test_math_pow) {
+    BblState bbl;
+    BBL::addMath(bbl);
+    bbl.exec("(def r (pow 2.0 10.0))");
+    ASSERT_NEAR(bbl.getFloat("r"), 1024.0, 0.001);
+}
+
+// ========== Phase 5: File I/O ==========
+
+TEST(test_file_write_read) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (def f (fopen "/tmp/bbl_test_io.txt" "w"))
+        (f.write "hello bbl")
+        (f.close)
+        (def f2 (fopen "/tmp/bbl_test_io.txt" "r"))
+        (def contents (f2.read))
+        (f2.close)
+    )");
+    ASSERT_EQ(std::string(bbl.getString("contents")), std::string("hello bbl"));
+}
+
+TEST(test_file_read_bytes) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (def f (fopen "/tmp/bbl_test_io2.txt" "w"))
+        (f.write "abcde")
+        (f.close)
+        (def f2 (fopen "/tmp/bbl_test_io2.txt" "rb"))
+        (def b (f2.read-bytes 3))
+        (f2.close)
+        (def n (b.length))
+    )");
+    ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
+}
+
+TEST(test_filebytes_sandbox_absolute) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec(R"((filebytes "/etc/passwd"))"));
+}
+
+TEST(test_filebytes_sandbox_parent) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec(R"((filebytes "../etc/passwd"))"));
+}
+
+// ========== Phase 5: addStdLib idempotent ==========
+
+TEST(test_addstdlib_idempotent) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    BBL::addStdLib(bbl);
+    ASSERT_TRUE(bbl.has("print"));
+    ASSERT_TRUE(bbl.has("sin"));
+    ASSERT_TRUE(bbl.has("fopen"));
+}
+
+// ========== Phase 5: Print formatting ==========
+
+TEST(test_print_table_format) {
+    BblState bbl;
+    BBL::addPrint(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec(R"((def t (table "a" 1 "b" 2)) (print t))");
+    ASSERT_EQ(out, std::string("<table length=2>"));
+}
+
+TEST(test_print_struct_format) {
+    BblState bbl;
+    BBL::addPrint(bbl);
+    struct TestS { float x; };
+    BBL::StructBuilder sb("TestS", sizeof(TestS));
+    sb.field<float>("x", offsetof(TestS, x));
+    bbl.registerStruct(sb);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec(R"((def s (TestS 1.0)) (print s))");
+    ASSERT_EQ(out, std::string("<struct TestS>"));
+}
+
 // ========== Main ==========
 
 int main() {
@@ -1475,6 +1730,40 @@ int main() {
     RUN(test_string_lt_type_error);
     RUN(test_string_gt_type_error);
     RUN(test_string_concat_multi);
+
+    // Phase 5: Binary C++ API
+    RUN(test_get_binary);
+    RUN(test_set_binary);
+
+    // Phase 5: GC
+    RUN(test_gc_no_crash);
+    RUN(test_gc_closure_survives);
+    RUN(test_gc_stress);
+
+    // Phase 5: TypeBuilder & Userdata
+    RUN(test_typebuilder_register);
+    RUN(test_typebuilder_method_call);
+    RUN(test_typebuilder_destructor_on_gc);
+    RUN(test_userdata_wrong_method);
+
+    // Phase 5: Math
+    RUN(test_math_sqrt);
+    RUN(test_math_sin);
+    RUN(test_math_abs_int_promoted);
+    RUN(test_math_sqrt_negative);
+    RUN(test_math_pi_e);
+    RUN(test_math_pow);
+
+    // Phase 5: File I/O
+    RUN(test_file_write_read);
+    RUN(test_file_read_bytes);
+    RUN(test_filebytes_sandbox_absolute);
+    RUN(test_filebytes_sandbox_parent);
+
+    // Phase 5: Misc
+    RUN(test_addstdlib_idempotent);
+    RUN(test_print_table_format);
+    RUN(test_print_struct_format);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

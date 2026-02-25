@@ -13,18 +13,22 @@ Always follow [style.md](style.md).
 
 ---
 
-## phase 4 — tables and strings
+## phase 5 — binary data, GC, userdata, and stdlib
 
-Deliverable: tables work as heterogeneous key-value containers. String interning comparison works. `<`/`>` on strings is a type error.
+Deliverable: GC runs correctly. TypeBuilder enables userdata. File I/O and math stdlib complete.
 
-[ ] 1. **BblTable type** — Add BblTable struct (ordered entries: vector of pair<BblValue,BblValue> for string/int keys, any-type values, plus nextIntKey counter). Add BblTable* to BblValue union + makeTable factory. Add allocTable to BblState, update destructor. Add allocatedTables pool. Add getTable() C++ API method.
+[ ] 1. **Binary C++ API** — Add `getBinary(name)` and `setBinary(name, ptr, size)` to BblState. Add `filebytes` C function (reads file into BblBinary, sandboxed same as execfile). Register via `addFileIo`.
 
-[ ] 2. **Table construction & eval** — `table` special form in evalList: alternating key-value pairs. String or int keys only (error otherwise). DotAccess on table: method-first resolution (get/set/delete/has/keys/length/push/pop/at), then string-key fallback. Place expression `(set t.field val)` writes string key on table.
+[ ] 2. **GC mark-and-sweep** — Add `bool marked` to BblBinary, BblFn, BblVec, BblStruct, BblTable. Strings are interned and never collected (per string.md). Add `gc()` method to BblState. Mark phase: trace from rootScope, callArgs, returnValue. Sweep phase: delete unmarked, remove from pools. Trigger: call gc() after every N allocations (configurable). ~BblState does final cleanup (existing behavior).
 
-[ ] 3. **Table methods** — In DotAccess call dispatch: get(key), set(key,val), delete(key), has(key), keys(), length(), push(val), pop(), at(i). `keys` returns a new integer-indexed table. `push` auto-increments integer key. `pop` removes highest integer key (error if none). `at` 0-based position among integer keys.
+[ ] 3. **TypeBuilder & userdata** — Add BblUserData struct (typeName, void* data, destructor fn ptr, methods map). Add UserDataDesc (methods map, destructor). Add TypeBuilder class (name, method, destructor, register). Method dispatch via DotAccess. pushUserData C++ API. GC calls destructor on sweep.
 
-[ ] 4. **String comparison** — `<`/`>`/`<=`/`>=` on strings throws type error. `==`/`!=` already uses pointer equality via interning (verify).
+[ ] 4. **File I/O — fopen & File type** — Register File as userdata via TypeBuilder. fopen(path) / fopen(path,mode). File methods: read, read-bytes, write, write-bytes, close, flush. Destructor closes handle. fopen is NOT sandboxed. Register via `addFileIo`.
 
-[ ] 5. **Unit tests** — Construct string-keyed table, read via `.`. Integer-indexed table, read via `at`. get/set/delete/has/keys/length. push/pop for integer keys. Method-first resolution (key "length" vs method). getTable C++. Empty table. get missing key → null. delete missing → no error. pop with no int keys → error. Closure shared table capture. String == interned. String < type error.
+[ ] 5. **addMath** — sin, cos, tan, asin, acos, atan, atan2, sqrt, abs, floor, ceil, min, max, pow, log, log2, log10, exp. Constants pi, e. Int args promoted to float. sqrt of negative → error.
 
-[ ] 6. **Functional tests** — tables.bbl, strings.bbl. Validate: build, all tests pass.
+[ ] 6. **Print formatting** — Update bblPrint for richer type display: `<struct TypeName>`, `<vector T length=N>`, `<table length=N>`.
+
+[ ] 7. **Unit tests** — Binary getBinary/setBinary. GC: create objects, drop refs, gc(), no crash; closures survive; stress test. TypeBuilder: register type, call method, destructor on gc. File I/O: write/read/read-bytes/write-bytes. Math: sqrt, sin, abs, pi, e. filebytes sandboxed. addStdLib idempotent.
+
+[ ] 8. **Functional tests** — binary_literal.bbl, math.bbl, file_io.bbl. Validate: build, all tests pass.

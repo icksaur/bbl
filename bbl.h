@@ -58,6 +58,7 @@ struct BblString {
 
 struct BblBinary {
     std::vector<uint8_t> data;
+    bool marked = false;
     size_t length() const { return data.size(); }
 };
 
@@ -84,6 +85,7 @@ struct StructDesc {
 struct BblStruct {
     StructDesc* desc;
     std::vector<uint8_t> data;
+    bool marked = false;
 };
 
 struct BblVec {
@@ -91,6 +93,7 @@ struct BblVec {
     BBL::Type elemTypeTag;
     size_t elemSize;
     std::vector<uint8_t> data;
+    bool marked = false;
 
     size_t length() const { return elemSize > 0 ? data.size() / elemSize : 0; }
     uint8_t* at(size_t i) { return data.data() + i * elemSize; }
@@ -98,6 +101,20 @@ struct BblVec {
 };
 
 struct BblTable;
+
+typedef void (*BblUserDataDestructor)(void*);
+
+struct UserDataDesc {
+    std::string name;
+    std::unordered_map<std::string, BblCFunction> methods;
+    BblUserDataDestructor destructor = nullptr;
+};
+
+struct BblUserData {
+    UserDataDesc* desc;
+    void* data;
+    bool marked = false;
+};
 
 namespace BBL {
 
@@ -134,6 +151,21 @@ template<> inline StructBuilder& StructBuilder::field<bool>(const std::string& f
     addField(fname, offset, 1, CType::Bool); return *this;
 }
 
+class TypeBuilder {
+    std::string name_;
+    std::unordered_map<std::string, BblCFunction> methods_;
+    BblUserDataDestructor destructor_ = nullptr;
+
+public:
+    explicit TypeBuilder(const std::string& name) : name_(name) {}
+    TypeBuilder& method(const std::string& name, BblCFunction fn) { methods_[name] = fn; return *this; }
+    TypeBuilder& destructor(BblUserDataDestructor fn) { destructor_ = fn; return *this; }
+
+    const std::string& name() const { return name_; }
+    const std::unordered_map<std::string, BblCFunction>& methods() const { return methods_; }
+    BblUserDataDestructor getDestructor() const { return destructor_; }
+};
+
 } // namespace BBL
 
 struct BblValue {
@@ -150,6 +182,7 @@ struct BblValue {
         BblStruct* structVal;
         BblVec* vectorVal;
         BblTable* tableVal;
+        BblUserData* userdataVal;
     };
 
     BblValue() : type(BBL::Type::Null), intVal(0) {}
@@ -164,6 +197,7 @@ struct BblValue {
     static BblValue makeStruct(BblStruct* s) { BblValue r; r.type = BBL::Type::Struct; r.structVal = s; return r; }
     static BblValue makeVector(BblVec* v) { BblValue r; r.type = BBL::Type::Vector; r.vectorVal = v; return r; }
     static BblValue makeTable(BblTable* t) { BblValue r; r.type = BBL::Type::Table; r.tableVal = t; return r; }
+    static BblValue makeUserData(BblUserData* u) { BblValue r; r.type = BBL::Type::UserData; r.userdataVal = u; return r; }
 
     bool operator==(const BblValue& o) const;
     bool operator!=(const BblValue& o) const { return !(*this == o); }
@@ -172,6 +206,7 @@ struct BblValue {
 struct BblTable {
     std::vector<std::pair<BblValue, BblValue>> entries;
     int64_t nextIntKey = 1;
+    bool marked = false;
 
     size_t length() const { return entries.size(); }
     BblValue get(const BblValue& key) const;
@@ -196,6 +231,7 @@ struct BblFn {
     std::vector<std::string> params;
     std::vector<struct AstNode> body;
     std::vector<std::pair<std::string, BblValue>> captures;
+    bool marked = false;
 };
 
 // ---------- Lexer ----------
@@ -316,9 +352,15 @@ struct BblState {
     std::vector<BblStruct*> allocatedStructs;
     std::vector<BblVec*> allocatedVectors;
     std::vector<BblTable*> allocatedTables;
+    std::vector<BblUserData*> allocatedUserDatas;
 
     // Type descriptors
     std::unordered_map<std::string, StructDesc> structDescs;
+    std::unordered_map<std::string, UserDataDesc> userDataDescs;
+
+    // GC
+    size_t allocCount = 0;
+    size_t gcThreshold = 256;
 
     // C function call interface
     std::vector<BblValue> callArgs;
@@ -345,11 +387,15 @@ struct BblState {
     BblStruct* allocStruct(StructDesc* desc);
     BblVec* allocVector(const std::string& elemType, BBL::Type elemTypeTag, size_t elemSize);
     BblTable* allocTable();
+    BblUserData* allocUserData(const std::string& typeName, void* data);
+
+    void gc();
 
     void exec(const std::string& source);
     void execfile(const std::string& path);
     void defn(const std::string& name, BblCFunction fn);
     void registerStruct(const BBL::StructBuilder& builder);
+    void registerType(const BBL::TypeBuilder& builder);
 
     // Struct/vector helpers
     BblValue readField(BblStruct* s, const FieldDesc& fd);
@@ -405,12 +451,15 @@ struct BblState {
     bool getBool(const std::string& name) const;
     const char* getString(const std::string& name) const;
     BblTable* getTable(const std::string& name) const;
+    BblBinary* getBinary(const std::string& name) const;
 
     // Setters
     void setInt(const std::string& name, int64_t val);
     void setFloat(const std::string& name, double val);
     void setString(const std::string& name, const char* str);
     void set(const std::string& name, BblValue val);
+    void setBinary(const std::string& name, const uint8_t* ptr, size_t size);
+    void pushUserData(const std::string& typeName, void* ptr);
 
     // Eval
     BblValue eval(const AstNode& node, BblScope& scope);
@@ -422,5 +471,7 @@ struct BblState {
 
 namespace BBL {
     void addPrint(BblState& bbl);
+    void addMath(BblState& bbl);
+    void addFileIo(BblState& bbl);
     void addStdLib(BblState& bbl);
 }
