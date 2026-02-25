@@ -18,7 +18,7 @@ branch phase_N, spec phase, plan phase, background agent review, implement plan.
 
 [x] 1. phase 1
 [x] 2. phase 2
-[ ] 3. phase 3
+[x] 3. phase 3
 [ ] 4. phase 4
 [ ] 5. phase 5
 [ ] 6. phase 6
