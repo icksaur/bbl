@@ -709,6 +709,182 @@ TEST(test_get_wrong_type) {
     ASSERT_THROW(bbl.getString("x"));
 }
 
+// ========== Phase 2: C Function Registration ==========
+
+static int testAdd(BblState* bbl) {
+    int64_t a = bbl->getIntArg(0);
+    int64_t b = bbl->getIntArg(1);
+    bbl->pushInt(a + b);
+    return 1;
+}
+
+static int testNoReturn(BblState*) {
+    return 0;
+}
+
+static int testGetArgCount(BblState* bbl) {
+    bbl->pushInt(bbl->argCount());
+    return 1;
+}
+
+TEST(test_defn_basic) {
+    BblState bbl;
+    bbl.defn("myadd", testAdd);
+    bbl.exec("(def r (myadd 10 20))");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)30);
+}
+
+TEST(test_defn_args) {
+    BblState bbl;
+    bbl.defn("count", testGetArgCount);
+    bbl.exec("(def c (count 1 2 3))");
+    ASSERT_EQ(bbl.getInt("c"), (int64_t)3);
+}
+
+TEST(test_defn_return_int) {
+    BblState bbl;
+    bbl.defn("myadd", testAdd);
+    bbl.exec("(def x (myadd 3 4))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)7);
+}
+
+static int testReturnString(BblState* bbl) {
+    bbl->pushString("hello");
+    return 1;
+}
+
+TEST(test_defn_return_string) {
+    BblState bbl;
+    bbl.defn("greet", testReturnString);
+    bbl.exec("(def s (greet))");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("hello"));
+}
+
+TEST(test_defn_arg_type_check) {
+    BblState bbl;
+    bbl.defn("myadd", testAdd);
+    bbl.exec("(def x 42)");
+    // Call with wrong type
+    ASSERT_THROW(bbl.exec("(myadd \"a\" \"b\")"));
+}
+
+TEST(test_defn_arg_out_of_bounds) {
+    BblState bbl;
+    bbl.defn("myadd", testAdd);
+    // Only pass 1 arg; getIntArg(1) should throw
+    ASSERT_THROW(bbl.exec("(myadd 1)"));
+}
+
+TEST(test_defn_no_return) {
+    BblState bbl;
+    bbl.defn("noop", testNoReturn);
+    bbl.exec("(def r (noop))");
+    ASSERT_EQ(bbl.getType("r"), BBL::Type::Null);
+}
+
+// ========== Phase 2: Setters ==========
+
+TEST(test_setInt) {
+    BblState bbl;
+    bbl.setInt("x", 99);
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)99);
+}
+
+TEST(test_setFloat) {
+    BblState bbl;
+    bbl.setFloat("f", 2.5);
+    ASSERT_NEAR(bbl.getFloat("f"), 2.5, 0.001);
+}
+
+TEST(test_setString) {
+    BblState bbl;
+    bbl.setString("s", "hello");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("hello"));
+}
+
+TEST(test_set_value) {
+    BblState bbl;
+    bbl.set("v", BblValue::makeBool(true));
+    ASSERT_TRUE(bbl.getBool("v"));
+}
+
+// ========== Phase 2: Print ==========
+
+TEST(test_print_string) {
+    BblState bbl;
+    BBL::addPrint(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec("(print \"hello\")");
+    ASSERT_EQ(out, std::string("hello"));
+}
+
+TEST(test_print_int) {
+    BblState bbl;
+    BBL::addPrint(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec("(print 42)");
+    ASSERT_EQ(out, std::string("42"));
+}
+
+TEST(test_print_float) {
+    BblState bbl;
+    BBL::addPrint(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec("(print 3.14)");
+    ASSERT_EQ(out, std::string("3.14"));
+}
+
+TEST(test_print_bool) {
+    BblState bbl;
+    BBL::addPrint(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec("(print true)");
+    ASSERT_EQ(out, std::string("true"));
+}
+
+TEST(test_print_null) {
+    BblState bbl;
+    BBL::addPrint(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec("(print null)");
+    ASSERT_EQ(out, std::string("null"));
+}
+
+TEST(test_print_multi) {
+    BblState bbl;
+    BBL::addPrint(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec("(print \"x=\" 42 \" ok\")");
+    ASSERT_EQ(out, std::string("x=42 ok"));
+}
+
+// ========== Phase 2: Backtrace ==========
+
+TEST(test_backtrace_printed) {
+    BblState bbl;
+    bbl.printBacktrace("test error");
+    // Doesn't crash, just prints to stderr
+    ASSERT_TRUE(true);
+}
+
+// ========== Phase 2: Execfile Sandbox ==========
+
+TEST(test_execfile_reject_absolute) {
+    BblState bbl;
+    ASSERT_THROW(bbl.execfile("/etc/passwd"));
+}
+
+TEST(test_execfile_reject_parent) {
+    BblState bbl;
+    ASSERT_THROW(bbl.execfile("../secret.bbl"));
+}
+
 // ========== Main ==========
 
 int main() {
@@ -845,6 +1021,41 @@ int main() {
     RUN(test_has);
     RUN(test_get_type);
     RUN(test_get_wrong_type);
+
+    // Phase 2: C function registration
+    std::cout << "--- C Function Registration ---" << std::endl;
+    RUN(test_defn_basic);
+    RUN(test_defn_args);
+    RUN(test_defn_return_int);
+    RUN(test_defn_return_string);
+    RUN(test_defn_arg_type_check);
+    RUN(test_defn_arg_out_of_bounds);
+    RUN(test_defn_no_return);
+
+    // Phase 2: Setters
+    std::cout << "--- Setters ---" << std::endl;
+    RUN(test_setInt);
+    RUN(test_setFloat);
+    RUN(test_setString);
+    RUN(test_set_value);
+
+    // Phase 2: Print capture
+    std::cout << "--- Print ---" << std::endl;
+    RUN(test_print_string);
+    RUN(test_print_int);
+    RUN(test_print_float);
+    RUN(test_print_bool);
+    RUN(test_print_null);
+    RUN(test_print_multi);
+
+    // Phase 2: Backtrace
+    std::cout << "--- Backtrace ---" << std::endl;
+    RUN(test_backtrace_printed);
+
+    // Phase 2: Execfile sandbox
+    std::cout << "--- Execfile Sandbox ---" << std::endl;
+    RUN(test_execfile_reject_absolute);
+    RUN(test_execfile_reject_parent);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

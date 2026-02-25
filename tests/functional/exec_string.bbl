@@ -1,0 +1,2 @@
+(def result (exec "(+ 10 20)"))
+(print result)
