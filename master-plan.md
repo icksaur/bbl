@@ -17,7 +17,7 @@ FOR EACH PHASE:
 branch phase_N, spec phase, plan phase, background agent review, implement plan.md, build, test, get background agent review, fix and merge to master, clean plan.md.
 
 [x] 1. phase 1
-[ ] 2. phase 2
+[x] 2. phase 2
 [ ] 3. phase 3
 [ ] 4. phase 4
 [ ] 5. phase 5
