@@ -1461,6 +1461,17 @@ void BblState::exec(const std::string& source) {
     }
 }
 
+BblValue BblState::execExpr(const std::string& source) {
+    BblLexer lexer(source.c_str());
+    auto nodes = parse(lexer);
+    BblValue result;
+    result.type = BBL::Type::Null;
+    for (auto& node : nodes) {
+        result = eval(node, rootScope);
+    }
+    return result;
+}
+
 void BblState::execfile(const std::string& path) {
     namespace fs = std::filesystem;
     fs::path resolved;
@@ -1474,6 +1485,27 @@ void BblState::execfile(const std::string& path) {
         resolved = fs::path(path);
     } else {
         resolved = fs::path(scriptDir) / path;
+    }
+    if (!fs::exists(resolved)) {
+        // Try BBL_PATH directories
+        const char* bblPath = std::getenv("BBL_PATH");
+        if (bblPath) {
+            std::string pathStr(bblPath);
+            size_t pos = 0;
+            while (pos < pathStr.size()) {
+                size_t sep = pathStr.find(':', pos);
+                if (sep == std::string::npos) sep = pathStr.size();
+                std::string dir = pathStr.substr(pos, sep - pos);
+                if (!dir.empty()) {
+                    fs::path candidate = fs::path(dir) / path;
+                    if (fs::exists(candidate)) {
+                        resolved = candidate;
+                        break;
+                    }
+                }
+                pos = sep + 1;
+            }
+        }
     }
     std::ifstream file(resolved);
     if (!file.is_open()) {

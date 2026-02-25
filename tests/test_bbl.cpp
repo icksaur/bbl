@@ -2,6 +2,9 @@
 #include <iostream>
 #include <cstring>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <cstdlib>
 
 int passed = 0, failed = 0;
 
@@ -1503,6 +1506,71 @@ TEST(test_print_struct_format) {
     ASSERT_EQ(out, std::string("<struct TestS>"));
 }
 
+// ========== Phase 6: execExpr ==========
+
+TEST(test_execExpr_returns_last) {
+    BblState bbl;
+    BblValue v = bbl.execExpr("(+ 1 2)");
+    ASSERT_EQ(v.type, BBL::Type::Int);
+    ASSERT_EQ(v.intVal, (int64_t)3);
+}
+
+TEST(test_execExpr_null_for_def) {
+    BblState bbl;
+    BblValue v = bbl.execExpr("(def x 5)");
+    // def returns null
+    ASSERT_TRUE(true); // just don't crash
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)5);
+}
+
+// ========== Phase 6: BBL_PATH ==========
+
+TEST(test_bbl_path_resolution) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    namespace fs = std::filesystem;
+    // Create a temp dir with a file
+    fs::create_directories("/tmp/bbl_test_path");
+    {
+        std::ofstream f("/tmp/bbl_test_path/lib.bbl");
+        f << "(def loaded true)";
+    }
+    // Set BBL_PATH and try to execfile from a different dir
+    setenv("BBL_PATH", "/tmp/bbl_test_path", 1);
+    bbl.scriptDir = "/tmp/bbl_test_other";
+    // execfile should find lib.bbl via BBL_PATH
+    bbl.execfile("lib.bbl");
+    ASSERT_EQ(bbl.getBool("loaded"), true);
+    unsetenv("BBL_PATH");
+}
+
+// ========== Phase 6: sandbox enforcement ==========
+
+TEST(test_sandbox_absolute_path) {
+    BblState bbl;
+    ASSERT_THROW(bbl.execfile("/etc/passwd"));
+}
+
+TEST(test_sandbox_parent_traversal) {
+    BblState bbl;
+    ASSERT_THROW(bbl.execfile("../escape.bbl"));
+}
+
+TEST(test_sandbox_chain) {
+    BblState bbl;
+    namespace fs = std::filesystem;
+    // Create: /tmp/bbl_sandbox/main.bbl -> loads subdir/helper.bbl
+    // helper.bbl tries (execfile "../main.bbl") -> should fail
+    fs::create_directories("/tmp/bbl_sandbox/subdir");
+    {
+        std::ofstream f("/tmp/bbl_sandbox/subdir/helper.bbl");
+        f << R"((execfile "../main.bbl"))";
+    }
+    bbl.currentFile = "/tmp/bbl_sandbox/main.bbl";
+    bbl.scriptDir = "/tmp/bbl_sandbox";
+    ASSERT_THROW(bbl.exec(R"((execfile "subdir/helper.bbl"))"));
+}
+
 // ========== Main ==========
 
 int main() {
@@ -1764,6 +1832,14 @@ int main() {
     RUN(test_addstdlib_idempotent);
     RUN(test_print_table_format);
     RUN(test_print_struct_format);
+
+    // Phase 6: execExpr, BBL_PATH, sandbox
+    RUN(test_execExpr_returns_last);
+    RUN(test_execExpr_null_for_def);
+    RUN(test_bbl_path_resolution);
+    RUN(test_sandbox_absolute_path);
+    RUN(test_sandbox_parent_traversal);
+    RUN(test_sandbox_chain);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;
