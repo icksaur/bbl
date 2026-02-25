@@ -392,6 +392,7 @@ struct BblState {
     void gc();
 
     void exec(const std::string& source);
+    BblValue execExpr(const std::string& source);
     void execfile(const std::string& path);
     void defn(const std::string& name, BblCFunction fn);
     void registerStruct(const BBL::StructBuilder& builder);

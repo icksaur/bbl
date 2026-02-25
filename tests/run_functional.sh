@@ -36,6 +36,71 @@ check math        "2 7 256"
 check file_io     "hello from bbl"
 check binary_data "5"
 
+# Phase 6: args test (needs extra arguments)
+check_args() {
+    local actual
+    actual=$("$BBL" "$DIR/args.bbl" hello 2>/dev/null)
+    if [ "$actual" = "1 hello" ]; then
+        echo "  PASS  args"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL  args"
+        echo "    expected: '1 hello'"
+        echo "    got:      '$actual'"
+        FAIL=$((FAIL + 1))
+    fi
+}
+check_args
+
+# Phase 6: REPL test (pipe input)
+check_repl() {
+    local actual
+    actual=$(echo '(+ 1 2)' | "$BBL" 2>/dev/null)
+    # REPL output includes prompts: "> 3\n> "
+    if echo "$actual" | grep -q "3"; then
+        echo "  PASS  repl"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL  repl"
+        echo "    expected output to contain '3'"
+        echo "    got:      '$actual'"
+        FAIL=$((FAIL + 1))
+    fi
+}
+check_repl
+
+# Phase 6: multiple -e flags
+check_multi_e() {
+    local actual
+    actual=$("$BBL" -e '(def x 10)' -e '(print (* x x))' 2>/dev/null)
+    if [ "$actual" = "100" ]; then
+        echo "  PASS  multi_e"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL  multi_e"
+        echo "    expected: '100'"
+        echo "    got:      '$actual'"
+        FAIL=$((FAIL + 1))
+    fi
+}
+check_multi_e
+
+# Phase 6: BBL_PATH test
+check_bbl_path() {
+    local actual
+    actual=$(BBL_PATH="$DIR" "$BBL" -e '(execfile "hello.bbl")' 2>/dev/null)
+    if [ "$actual" = "Hello, world!" ]; then
+        echo "  PASS  bbl_path"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL  bbl_path"
+        echo "    expected: 'Hello, world!'"
+        echo "    got:      '$actual'"
+        FAIL=$((FAIL + 1))
+    fi
+}
+check_bbl_path
+
 echo ""
 echo "Passed: $PASS  Failed: $FAIL"
 [ "$FAIL" -eq 0 ]
