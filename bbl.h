@@ -63,6 +63,77 @@ struct BblBinary {
 
 struct BblFn;
 
+// ---------- Struct/Vector support ----------
+
+enum class CType { Int32, Int64, Float32, Float64, Bool, Struct };
+
+struct FieldDesc {
+    std::string name;
+    size_t offset;
+    size_t size;
+    CType ctype;
+    std::string structType;
+};
+
+struct StructDesc {
+    std::string name;
+    size_t totalSize;
+    std::vector<FieldDesc> fields;
+};
+
+struct BblStruct {
+    StructDesc* desc;
+    std::vector<uint8_t> data;
+};
+
+struct BblVec {
+    std::string elemType;
+    BBL::Type elemTypeTag;
+    size_t elemSize;
+    std::vector<uint8_t> data;
+
+    size_t length() const { return elemSize > 0 ? data.size() / elemSize : 0; }
+    uint8_t* at(size_t i) { return data.data() + i * elemSize; }
+    const uint8_t* at(size_t i) const { return data.data() + i * elemSize; }
+};
+
+namespace BBL {
+
+class StructBuilder {
+    std::string name_;
+    size_t totalSize_;
+    std::vector<FieldDesc> fields_;
+
+    void addField(const std::string& fname, size_t offset, size_t size, CType ct, const std::string& stName = "");
+
+public:
+    StructBuilder(const std::string& name, size_t totalSize);
+    template<typename T> StructBuilder& field(const std::string& fname, size_t offset);
+    StructBuilder& structField(const std::string& fname, size_t offset, const std::string& typeName);
+
+    const std::string& name() const { return name_; }
+    size_t totalSize() const { return totalSize_; }
+    const std::vector<FieldDesc>& fields() const { return fields_; }
+};
+
+template<> inline StructBuilder& StructBuilder::field<float>(const std::string& fname, size_t offset) {
+    addField(fname, offset, sizeof(float), CType::Float32); return *this;
+}
+template<> inline StructBuilder& StructBuilder::field<double>(const std::string& fname, size_t offset) {
+    addField(fname, offset, sizeof(double), CType::Float64); return *this;
+}
+template<> inline StructBuilder& StructBuilder::field<int32_t>(const std::string& fname, size_t offset) {
+    addField(fname, offset, sizeof(int32_t), CType::Int32); return *this;
+}
+template<> inline StructBuilder& StructBuilder::field<int64_t>(const std::string& fname, size_t offset) {
+    addField(fname, offset, sizeof(int64_t), CType::Int64); return *this;
+}
+template<> inline StructBuilder& StructBuilder::field<bool>(const std::string& fname, size_t offset) {
+    addField(fname, offset, 1, CType::Bool); return *this;
+}
+
+} // namespace BBL
+
 struct BblValue {
     BBL::Type type = BBL::Type::Null;
     bool isCFn = false;
@@ -74,6 +145,8 @@ struct BblValue {
         BblBinary* binaryVal;
         BblFn* fnVal;
         BblCFunction cfnVal;
+        BblStruct* structVal;
+        BblVec* vectorVal;
     };
 
     BblValue() : type(BBL::Type::Null), intVal(0) {}
@@ -85,6 +158,8 @@ struct BblValue {
     static BblValue makeBinary(BblBinary* b) { BblValue r; r.type = BBL::Type::Binary; r.binaryVal = b; return r; }
     static BblValue makeFn(BblFn* f) { BblValue r; r.type = BBL::Type::Fn; r.fnVal = f; return r; }
     static BblValue makeCFn(BblCFunction f) { BblValue r; r.type = BBL::Type::Fn; r.isCFn = true; r.cfnVal = f; return r; }
+    static BblValue makeStruct(BblStruct* s) { BblValue r; r.type = BBL::Type::Struct; r.structVal = s; return r; }
+    static BblValue makeVector(BblVec* v) { BblValue r; r.type = BBL::Type::Vector; r.vectorVal = v; return r; }
 
     bool operator==(const BblValue& o) const;
     bool operator!=(const BblValue& o) const { return !(*this == o); }
@@ -207,6 +282,8 @@ struct AstNode {
 
 std::vector<AstNode> parse(BblLexer& lexer);
 
+std::string typeName(BBL::Type t);
+
 // ---------- BblState ----------
 
 struct Frame {
@@ -221,6 +298,11 @@ struct BblState {
     std::vector<BblString*> allocatedStrings;
     std::vector<BblBinary*> allocatedBinaries;
     std::vector<BblFn*> allocatedFns;
+    std::vector<BblStruct*> allocatedStructs;
+    std::vector<BblVec*> allocatedVectors;
+
+    // Type descriptors
+    std::unordered_map<std::string, StructDesc> structDescs;
 
     // C function call interface
     std::vector<BblValue> callArgs;
@@ -244,10 +326,39 @@ struct BblState {
     BblString* intern(const std::string& s);
     BblBinary* allocBinary(std::vector<uint8_t> data);
     BblFn* allocFn();
+    BblStruct* allocStruct(StructDesc* desc);
+    BblVec* allocVector(const std::string& elemType, BBL::Type elemTypeTag, size_t elemSize);
 
     void exec(const std::string& source);
     void execfile(const std::string& path);
     void defn(const std::string& name, BblCFunction fn);
+    void registerStruct(const BBL::StructBuilder& builder);
+
+    // Struct/vector helpers
+    BblValue readField(BblStruct* s, const FieldDesc& fd);
+    void writeField(BblStruct* s, const FieldDesc& fd, const BblValue& val);
+    BblValue readVecElem(BblVec* vec, size_t i);
+    void writeVecElem(BblVec* vec, size_t i, const BblValue& val);
+    void packValue(BblVec* vec, const BblValue& val);
+    BblValue constructStruct(StructDesc* desc, const std::vector<BblValue>& args, int callLine);
+
+    template<typename T>
+    T* getVectorData(const std::string& name) {
+        BblValue v = get(name);
+        if (v.type != BBL::Type::Vector) {
+            throw BBL::Error{"type mismatch: expected vector, got " + std::string(typeName(v.type))};
+        }
+        return reinterpret_cast<T*>(v.vectorVal->data.data());
+    }
+
+    template<typename T>
+    size_t getVectorLength(const std::string& name) {
+        BblValue v = get(name);
+        if (v.type != BBL::Type::Vector) {
+            throw BBL::Error{"type mismatch: expected vector"};
+        }
+        return v.vectorVal->length();
+    }
 
     // C function arg access
     int argCount() const;

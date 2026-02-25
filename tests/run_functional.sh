@@ -28,6 +28,8 @@ check arithmetic  "5 20 7 5"
 check functions   "42"
 check if_loop     "5 yes"
 check exec_string "30"
+check structs     "structs need C++ registration - skip"
+check vectors     "3 4 10 40"
 
 echo ""
 echo "Passed: $PASS  Failed: $FAIL"
