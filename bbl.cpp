@@ -10,6 +10,54 @@
 
 // ---------- BblValue ----------
 
+static bool bblValueKeyEqual(const BblValue& a, const BblValue& b) {
+    if (a.type != b.type) return false;
+    if (a.type == BBL::Type::String) return a.stringVal == b.stringVal;
+    if (a.type == BBL::Type::Int) return a.intVal == b.intVal;
+    return false;
+}
+
+// ---------- BblTable ----------
+
+BblValue BblTable::get(const BblValue& key) const {
+    for (auto& [k, v] : entries) {
+        if (bblValueKeyEqual(k, key)) return v;
+    }
+    return BblValue::makeNull();
+}
+
+void BblTable::set(const BblValue& key, const BblValue& val) {
+    for (auto& [k, v] : entries) {
+        if (bblValueKeyEqual(k, key)) {
+            v = val;
+            return;
+        }
+    }
+    entries.emplace_back(key, val);
+    if (key.type == BBL::Type::Int && key.intVal >= nextIntKey) {
+        nextIntKey = key.intVal + 1;
+    }
+}
+
+bool BblTable::has(const BblValue& key) const {
+    for (auto& [k, v] : entries) {
+        if (bblValueKeyEqual(k, key)) return true;
+    }
+    return false;
+}
+
+bool BblTable::del(const BblValue& key) {
+    for (auto it = entries.begin(); it != entries.end(); ++it) {
+        if (bblValueKeyEqual(it->first, key)) {
+            entries.erase(it);
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---------- BblValue eq ----------
+
 bool BblValue::operator==(const BblValue& o) const {
     if (type != o.type) {
         return false;
@@ -26,6 +74,7 @@ bool BblValue::operator==(const BblValue& o) const {
             return structVal == o.structVal ||
                    (structVal->desc == o.structVal->desc && structVal->data == o.structVal->data);
         case BBL::Type::Vector: return vectorVal == o.vectorVal;
+        case BBL::Type::Table:  return tableVal == o.tableVal;
         default:                return false;
     }
 }
@@ -405,6 +454,9 @@ BblState::~BblState() {
     for (auto* v : allocatedVectors) {
         delete v;
     }
+    for (auto* t : allocatedTables) {
+        delete t;
+    }
 }
 
 BblString* BblState::intern(const std::string& s) {
@@ -440,6 +492,12 @@ BblVec* BblState::allocVector(const std::string& elemType, BBL::Type elemTypeTag
     auto* v = new BblVec{elemType, elemTypeTag, elemSize, {}};
     allocatedVectors.push_back(v);
     return v;
+}
+
+BblTable* BblState::allocTable() {
+    auto* t = new BblTable{};
+    allocatedTables.push_back(t);
+    return t;
 }
 
 // ---------- Eval ----------
@@ -515,6 +573,22 @@ BblValue BblState::eval(const AstNode& node, BblScope& scope) {
             }
             if (left.type == BBL::Type::Vector) {
                 throw BBL::Error{"vector methods must be called, not accessed as fields"};
+            }
+            if (left.type == BBL::Type::Table) {
+                // Method-first: check fixed method names
+                static const std::vector<std::string> tableMethods = {
+                    "get", "set", "delete", "has", "keys", "length", "push", "pop", "at"
+                };
+                bool isMethod = false;
+                for (auto& m : tableMethods) {
+                    if (field == m) { isMethod = true; break; }
+                }
+                if (isMethod) {
+                    throw BBL::Error{"table methods must be called, not accessed as fields"};
+                }
+                // String-key fallback
+                BblValue key = BblValue::makeString(intern(field));
+                return left.tableVal->get(key);
             }
             throw BBL::Error{typeName(left.type) + " has no fields or methods"};
         }
@@ -652,6 +726,11 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                         throw BBL::Error{"struct " + obj.structVal->desc->name + " has no field " + fieldName};
                     }
                     writeField(obj.structVal, *fd, val);
+                    return BblValue::makeNull();
+                }
+                if (obj.type == BBL::Type::Table) {
+                    BblValue key = BblValue::makeString(intern(fieldName));
+                    obj.tableVal->set(key, val);
                     return BblValue::makeNull();
                 }
                 throw BBL::Error{"cannot set field on " + typeName(obj.type)};
@@ -843,6 +922,23 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             return BblValue::makeVector(vec);
         }
 
+        if (op == "table") {
+            BblTable* tbl = allocTable();
+            size_t argCount = node.children.size() - 1;
+            if (argCount % 2 != 0) {
+                throw BBL::Error{"table requires even number of arguments (key-value pairs)"};
+            }
+            for (size_t i = 1; i < node.children.size(); i += 2) {
+                BblValue key = eval(node.children[i], scope);
+                BblValue val = eval(node.children[i + 1], scope);
+                if (key.type != BBL::Type::String && key.type != BBL::Type::Int) {
+                    throw BBL::Error{"table key must be string or int, got " + typeName(key.type)};
+                }
+                tbl->set(key, val);
+            }
+            return BblValue::makeTable(tbl);
+        }
+
         // Check if this is a struct constructor call
         {
             auto sit = structDescs.find(op);
@@ -1013,6 +1109,103 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             throw BBL::Error{"binary has no method " + method};
         }
 
+        if (obj.type == BBL::Type::Table) {
+            BblTable* tbl = obj.tableVal;
+            if (method == "length") {
+                return BblValue::makeInt(static_cast<int64_t>(tbl->length()));
+            }
+            if (method == "get") {
+                if (node.children.size() < 2) {
+                    throw BBL::Error{"table.get requires a key argument"};
+                }
+                BblValue key = eval(node.children[1], scope);
+                return tbl->get(key);
+            }
+            if (method == "set") {
+                if (node.children.size() < 3) {
+                    throw BBL::Error{"table.set requires key and value arguments"};
+                }
+                BblValue key = eval(node.children[1], scope);
+                BblValue val = eval(node.children[2], scope);
+                tbl->set(key, val);
+                return BblValue::makeNull();
+            }
+            if (method == "delete") {
+                if (node.children.size() < 2) {
+                    throw BBL::Error{"table.delete requires a key argument"};
+                }
+                BblValue key = eval(node.children[1], scope);
+                tbl->del(key);
+                return BblValue::makeNull();
+            }
+            if (method == "has") {
+                if (node.children.size() < 2) {
+                    throw BBL::Error{"table.has requires a key argument"};
+                }
+                BblValue key = eval(node.children[1], scope);
+                return BblValue::makeBool(tbl->has(key));
+            }
+            if (method == "keys") {
+                BblTable* result = allocTable();
+                int64_t idx = 1;
+                for (auto& [k, v] : tbl->entries) {
+                    result->set(BblValue::makeInt(idx), k);
+                    idx++;
+                }
+                return BblValue::makeTable(result);
+            }
+            if (method == "push") {
+                if (node.children.size() < 2) {
+                    throw BBL::Error{"table.push requires a value argument"};
+                }
+                BblValue val = eval(node.children[1], scope);
+                BblValue key = BblValue::makeInt(tbl->nextIntKey);
+                tbl->set(key, val);
+                return BblValue::makeNull();
+            }
+            if (method == "pop") {
+                // Find highest integer key
+                int64_t maxKey = -1;
+                size_t maxIdx = 0;
+                bool found = false;
+                for (size_t i = 0; i < tbl->entries.size(); i++) {
+                    if (tbl->entries[i].first.type == BBL::Type::Int) {
+                        if (!found || tbl->entries[i].first.intVal > maxKey) {
+                            maxKey = tbl->entries[i].first.intVal;
+                            maxIdx = i;
+                            found = true;
+                        }
+                    }
+                }
+                if (!found) {
+                    throw BBL::Error{"table.pop: no integer keys"};
+                }
+                BblValue val = tbl->entries[maxIdx].second;
+                tbl->entries.erase(tbl->entries.begin() + static_cast<ptrdiff_t>(maxIdx));
+                return val;
+            }
+            if (method == "at") {
+                if (node.children.size() < 2) {
+                    throw BBL::Error{"table.at requires an index argument"};
+                }
+                BblValue idx = eval(node.children[1], scope);
+                if (idx.type != BBL::Type::Int) {
+                    throw BBL::Error{"table.at: index must be int"};
+                }
+                // 0-based position among integer keys
+                int64_t pos = idx.intVal;
+                int64_t count = 0;
+                for (auto& [k, v] : tbl->entries) {
+                    if (k.type == BBL::Type::Int) {
+                        if (count == pos) return v;
+                        count++;
+                    }
+                }
+                throw BBL::Error{"table.at: index " + std::to_string(pos) + " out of bounds"};
+            }
+            throw BBL::Error{"table has no method " + method};
+        }
+
         throw BBL::Error{typeName(obj.type) + " has no methods"};
     }
 
@@ -1161,6 +1354,14 @@ const char* BblState::getString(const std::string& name) const {
         throw BBL::Error{"type mismatch: expected string, got " + typeName(v.type)};
     }
     return v.stringVal->data.c_str();
+}
+
+BblTable* BblState::getTable(const std::string& name) const {
+    BblValue v = get(name);
+    if (v.type != BBL::Type::Table) {
+        throw BBL::Error{"type mismatch: expected table, got " + typeName(v.type)};
+    }
+    return v.tableVal;
 }
 
 // ---------- Setters ----------
@@ -1616,6 +1817,27 @@ static int bblPrint(BblState* bbl) {
                     *bbl->printCapture += "<fn>";
                 } else {
                     fputs("<fn>", stdout);
+                }
+                break;
+            case BBL::Type::Table:
+                if (bbl->printCapture) {
+                    *bbl->printCapture += "<table>";
+                } else {
+                    fputs("<table>", stdout);
+                }
+                break;
+            case BBL::Type::Vector:
+                if (bbl->printCapture) {
+                    *bbl->printCapture += "<vector>";
+                } else {
+                    fputs("<vector>", stdout);
+                }
+                break;
+            case BBL::Type::Struct:
+                if (bbl->printCapture) {
+                    *bbl->printCapture += "<struct>";
+                } else {
+                    fputs("<struct>", stdout);
                 }
                 break;
             default:

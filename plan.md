@@ -13,18 +13,18 @@ Always follow [style.md](style.md).
 
 ---
 
-## phase 3 — structs and vectors
+## phase 4 — tables and strings
 
-Deliverable: StructBuilder works, struct types usable from scripts, vectors of structs are contiguous and readable from C++ via getVector<T>(). Method dispatch via `.` works for structs (field access) and vectors (push/pop/clear/length/at).
+Deliverable: tables work as heterogeneous key-value containers. String interning comparison works. `<`/`>` on strings is a type error.
 
-[ ] 1. **Type descriptors & StructBuilder** — Add CType enum, FieldDesc, StructDesc, BblStruct, BblVec types. Add StructBuilder with field<T> and structField. Add registerStruct to BblState. Add BblStruct*/BblVec* to BblValue union + factories.
+[ ] 1. **BblTable type** — Add BblTable struct (ordered entries: vector of pair<BblValue,BblValue> for string/int keys, any-type values, plus nextIntKey counter). Add BblTable* to BblValue union + makeTable factory. Add allocTable to BblState, update destructor. Add allocatedTables pool. Add getTable() C++ API method.
 
-[ ] 2. **Struct construction & field access** — In evalList, struct type name is a callable constructor. DotAccess on struct reads field. `(set v.x 5.0)` writes field. Composed structs with chained reads.
+[ ] 2. **Table construction & eval** — `table` special form in evalList: alternating key-value pairs. String or int keys only (error otherwise). DotAccess on table: method-first resolution (get/set/delete/has/keys/length/push/pop/at), then string-key fallback. Place expression `(set t.field val)` writes string key on table.
 
-[ ] 3. **Vectors** — BblVec stores contiguous typed data. Construction via `(vector type elem...)`. Methods: push, pop, clear, length, at. DotAccess on vector dispatches methods. getVector<T> returns typed pointer.
+[ ] 3. **Table methods** — In DotAccess call dispatch: get(key), set(key,val), delete(key), has(key), keys(), length(), push(val), pop(), at(i). `keys` returns a new integer-indexed table. `push` auto-increments integer key. `pop` removes highest integer key (error if none). `at` 0-based position among integer keys.
 
-[ ] 4. **Unit tests** — Register vertex struct, construct, read/write fields. Composed triangle struct. Vector creation, push, pop, at, length, clear. Type mismatch errors. getVector<T> from C++.
+[ ] 4. **String comparison** — `<`/`>`/`<=`/`>=` on strings throws type error. `==`/`!=` already uses pointer equality via interning (verify).
 
-[ ] 5. **Functional tests** — structs.bbl, vectors.bbl.
+[ ] 5. **Unit tests** — Construct string-keyed table, read via `.`. Integer-indexed table, read via `at`. get/set/delete/has/keys/length. push/pop for integer keys. Method-first resolution (key "length" vs method). getTable C++. Empty table. get missing key → null. delete missing → no error. pop with no int keys → error. Closure shared table capture. String == interned. String < type error.
 
-[ ] 6. **Validate** — Build, all tests pass.
+[ ] 6. **Functional tests** — tables.bbl, strings.bbl. Validate: build, all tests pass.

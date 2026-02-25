@@ -30,6 +30,8 @@ check if_loop     "5 yes"
 check exec_string "30"
 check structs     "structs need C++ registration - skip"
 check vectors     "3 4 10 40"
+check tables      "hero 100 80 3"
+check strings     "true abc 5"
 
 echo ""
 echo "Passed: $PASS  Failed: $FAIL"

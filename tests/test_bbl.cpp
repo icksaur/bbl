@@ -1065,6 +1065,189 @@ TEST(test_string_length_method) {
     ASSERT_EQ(bbl.getInt("n"), (int64_t)5);
 }
 
+// ========== Phase 4: Tables ==========
+
+TEST(test_table_construct_string_keys) {
+    BblState bbl;
+    bbl.exec(R"((def t (table "name" "hero" "hp" 100)))");
+    ASSERT_EQ(bbl.getType("t"), BBL::Type::Table);
+    auto* tbl = bbl.getTable("t");
+    ASSERT_EQ(tbl->length(), (size_t)2);
+}
+
+TEST(test_table_dot_read_string_key) {
+    BblState bbl;
+    bbl.exec(R"((def t (table "name" "hero" "hp" 100)) (def n t.name) (def h t.hp))");
+    ASSERT_EQ(std::string(bbl.getString("n")), std::string("hero"));
+    ASSERT_EQ(bbl.getInt("h"), (int64_t)100);
+}
+
+TEST(test_table_integer_indexed) {
+    BblState bbl;
+    bbl.exec(R"((def t (table 1 "sword" 2 "shield" 3 "potion")) (def v (t.at 0)))");
+    ASSERT_EQ(std::string(bbl.getString("v")), std::string("sword"));
+}
+
+TEST(test_table_get_set) {
+    BblState bbl;
+    bbl.exec(R"(
+        (def t (table "a" 1))
+        (t.set "b" 2)
+        (def a (t.get "a"))
+        (def b (t.get "b"))
+    )");
+    ASSERT_EQ(bbl.getInt("a"), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("b"), (int64_t)2);
+}
+
+TEST(test_table_delete) {
+    BblState bbl;
+    bbl.exec(R"(
+        (def t (table "a" 1 "b" 2))
+        (t.delete "a")
+        (def len (t.length))
+    )");
+    ASSERT_EQ(bbl.getInt("len"), (int64_t)1);
+}
+
+TEST(test_table_has) {
+    BblState bbl;
+    bbl.exec(R"(
+        (def t (table "a" 1))
+        (def yes (t.has "a"))
+        (def no (t.has "b"))
+    )");
+    ASSERT_TRUE(bbl.getBool("yes"));
+    ASSERT_FALSE(bbl.getBool("no"));
+}
+
+TEST(test_table_keys) {
+    BblState bbl;
+    bbl.exec(R"(
+        (def t (table "x" 1 "y" 2))
+        (def ks (t.keys))
+        (def n (ks.length))
+    )");
+    ASSERT_EQ(bbl.getInt("n"), (int64_t)2);
+}
+
+TEST(test_table_length) {
+    BblState bbl;
+    bbl.exec(R"((def t (table "a" 1 "b" 2 "c" 3)) (def n (t.length)))");
+    ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
+}
+
+TEST(test_table_push_pop) {
+    BblState bbl;
+    bbl.exec(R"(
+        (def t (table))
+        (t.push "first")
+        (t.push "second")
+        (def len (t.length))
+        (def val (t.pop))
+    )");
+    ASSERT_EQ(bbl.getInt("len"), (int64_t)2);
+    ASSERT_EQ(std::string(bbl.getString("val")), std::string("second"));
+}
+
+TEST(test_table_method_first_resolution) {
+    BblState bbl;
+    bbl.exec(R"(
+        (def t (table "length" 42))
+        (def mlen (t.length))
+        (def klen (t.get "length"))
+    )");
+    ASSERT_EQ(bbl.getInt("mlen"), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("klen"), (int64_t)42);
+}
+
+TEST(test_table_get_cpp) {
+    BblState bbl;
+    bbl.exec(R"((def t (table "name" "hero" "hp" 100)))");
+    BblTable* tbl = bbl.getTable("t");
+    BblValue nameKey = BblValue::makeString(bbl.intern("name"));
+    BblValue nameVal = tbl->get(nameKey);
+    ASSERT_EQ(nameVal.type, BBL::Type::String);
+    ASSERT_EQ(nameVal.stringVal->data, std::string("hero"));
+    ASSERT_EQ(tbl->length(), (size_t)2);
+    ASSERT_TRUE(tbl->has(nameKey));
+}
+
+TEST(test_table_empty) {
+    BblState bbl;
+    bbl.exec(R"((def t (table)) (def n (t.length)))");
+    ASSERT_EQ(bbl.getInt("n"), (int64_t)0);
+}
+
+TEST(test_table_get_missing) {
+    BblState bbl;
+    bbl.exec(R"((def t (table "a" 1)) (def v (t.get "missing")))");
+    ASSERT_EQ(bbl.getType("v"), BBL::Type::Null);
+}
+
+TEST(test_table_delete_missing) {
+    BblState bbl;
+    bbl.exec(R"((def t (table "a" 1)) (t.delete "missing") (def n (t.length)))");
+    ASSERT_EQ(bbl.getInt("n"), (int64_t)1);
+}
+
+TEST(test_table_pop_no_int_keys) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"((def t (table "a" 1)) (t.pop))"));
+}
+
+TEST(test_table_closure_shared_capture) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (def t (table))
+        (def f (fn () (t.push 1)))
+        (f)
+        (def n (t.length))
+    )");
+    ASSERT_EQ(bbl.getInt("n"), (int64_t)1);
+}
+
+TEST(test_table_place_expression) {
+    BblState bbl;
+    bbl.exec(R"(
+        (def t (table "hp" 100))
+        (set t.hp 80)
+        (def v t.hp)
+    )");
+    ASSERT_EQ(bbl.getInt("v"), (int64_t)80);
+}
+
+// ========== Phase 4: String comparison ==========
+
+TEST(test_string_eq_interned) {
+    BblState bbl;
+    bbl.exec(R"((def r (== "hello" "hello")))");
+    ASSERT_TRUE(bbl.getBool("r"));
+}
+
+TEST(test_string_neq) {
+    BblState bbl;
+    bbl.exec(R"((def r (== "a" "b")))");
+    ASSERT_FALSE(bbl.getBool("r"));
+}
+
+TEST(test_string_lt_type_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"((< "a" "b"))"));
+}
+
+TEST(test_string_gt_type_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"((> "a" "b"))"));
+}
+
+TEST(test_string_concat_multi) {
+    BblState bbl;
+    bbl.exec(R"((def s (+ "a" "b" "c")))");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("abc"));
+}
+
 // ========== Main ==========
 
 int main() {
@@ -1264,6 +1447,34 @@ int main() {
     RUN(test_vector_get_data_cpp);
     RUN(test_dot_on_int_error);
     RUN(test_string_length_method);
+
+    // Phase 4: Tables
+    std::cout << "--- Tables ---" << std::endl;
+    RUN(test_table_construct_string_keys);
+    RUN(test_table_dot_read_string_key);
+    RUN(test_table_integer_indexed);
+    RUN(test_table_get_set);
+    RUN(test_table_delete);
+    RUN(test_table_has);
+    RUN(test_table_keys);
+    RUN(test_table_length);
+    RUN(test_table_push_pop);
+    RUN(test_table_method_first_resolution);
+    RUN(test_table_get_cpp);
+    RUN(test_table_empty);
+    RUN(test_table_get_missing);
+    RUN(test_table_delete_missing);
+    RUN(test_table_pop_no_int_keys);
+    RUN(test_table_closure_shared_capture);
+    RUN(test_table_place_expression);
+
+    // Phase 4: String comparison
+    std::cout << "--- String Comparison ---" << std::endl;
+    RUN(test_string_eq_interned);
+    RUN(test_string_neq);
+    RUN(test_string_lt_type_error);
+    RUN(test_string_gt_type_error);
+    RUN(test_string_concat_multi);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

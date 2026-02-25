@@ -97,6 +97,8 @@ struct BblVec {
     const uint8_t* at(size_t i) const { return data.data() + i * elemSize; }
 };
 
+struct BblTable;
+
 namespace BBL {
 
 class StructBuilder {
@@ -147,6 +149,7 @@ struct BblValue {
         BblCFunction cfnVal;
         BblStruct* structVal;
         BblVec* vectorVal;
+        BblTable* tableVal;
     };
 
     BblValue() : type(BBL::Type::Null), intVal(0) {}
@@ -160,9 +163,21 @@ struct BblValue {
     static BblValue makeCFn(BblCFunction f) { BblValue r; r.type = BBL::Type::Fn; r.isCFn = true; r.cfnVal = f; return r; }
     static BblValue makeStruct(BblStruct* s) { BblValue r; r.type = BBL::Type::Struct; r.structVal = s; return r; }
     static BblValue makeVector(BblVec* v) { BblValue r; r.type = BBL::Type::Vector; r.vectorVal = v; return r; }
+    static BblValue makeTable(BblTable* t) { BblValue r; r.type = BBL::Type::Table; r.tableVal = t; return r; }
 
     bool operator==(const BblValue& o) const;
     bool operator!=(const BblValue& o) const { return !(*this == o); }
+};
+
+struct BblTable {
+    std::vector<std::pair<BblValue, BblValue>> entries;
+    int64_t nextIntKey = 1;
+
+    size_t length() const { return entries.size(); }
+    BblValue get(const BblValue& key) const;
+    void set(const BblValue& key, const BblValue& val);
+    bool has(const BblValue& key) const;
+    bool del(const BblValue& key);
 };
 
 struct BblScope {
@@ -300,6 +315,7 @@ struct BblState {
     std::vector<BblFn*> allocatedFns;
     std::vector<BblStruct*> allocatedStructs;
     std::vector<BblVec*> allocatedVectors;
+    std::vector<BblTable*> allocatedTables;
 
     // Type descriptors
     std::unordered_map<std::string, StructDesc> structDescs;
@@ -328,6 +344,7 @@ struct BblState {
     BblFn* allocFn();
     BblStruct* allocStruct(StructDesc* desc);
     BblVec* allocVector(const std::string& elemType, BBL::Type elemTypeTag, size_t elemSize);
+    BblTable* allocTable();
 
     void exec(const std::string& source);
     void execfile(const std::string& path);
@@ -387,6 +404,7 @@ struct BblState {
     double getFloat(const std::string& name) const;
     bool getBool(const std::string& name) const;
     const char* getString(const std::string& name) const;
+    BblTable* getTable(const std::string& name) const;
 
     // Setters
     void setInt(const std::string& name, int64_t val);
