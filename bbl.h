@@ -65,6 +65,7 @@ struct BblFn;
 
 struct BblValue {
     BBL::Type type = BBL::Type::Null;
+    bool isCFn = false;
     union {
         int64_t intVal;
         double floatVal;
@@ -72,6 +73,7 @@ struct BblValue {
         BblString* stringVal;
         BblBinary* binaryVal;
         BblFn* fnVal;
+        BblCFunction cfnVal;
     };
 
     BblValue() : type(BBL::Type::Null), intVal(0) {}
@@ -82,6 +84,7 @@ struct BblValue {
     static BblValue makeString(BblString* s) { BblValue r; r.type = BBL::Type::String; r.stringVal = s; return r; }
     static BblValue makeBinary(BblBinary* b) { BblValue r; r.type = BBL::Type::Binary; r.binaryVal = b; return r; }
     static BblValue makeFn(BblFn* f) { BblValue r; r.type = BBL::Type::Fn; r.fnVal = f; return r; }
+    static BblValue makeCFn(BblCFunction f) { BblValue r; r.type = BBL::Type::Fn; r.isCFn = true; r.cfnVal = f; return r; }
 
     bool operator==(const BblValue& o) const;
     bool operator!=(const BblValue& o) const { return !(*this == o); }
@@ -206,12 +209,31 @@ std::vector<AstNode> parse(BblLexer& lexer);
 
 // ---------- BblState ----------
 
+struct Frame {
+    std::string file;
+    int line = 0;
+    std::string expr;
+};
+
 struct BblState {
     BblScope rootScope;
     std::unordered_map<std::string, BblString*> internTable;
     std::vector<BblString*> allocatedStrings;
     std::vector<BblBinary*> allocatedBinaries;
     std::vector<BblFn*> allocatedFns;
+
+    // C function call interface
+    std::vector<BblValue> callArgs;
+    BblValue returnValue;
+    bool hasReturn = false;
+
+    // Backtrace
+    std::vector<Frame> callStack;
+    std::string currentFile;
+    std::string scriptDir;
+
+    // Print capture (for testing)
+    std::string* printCapture = nullptr;
 
     BblState();
     ~BblState();
@@ -225,6 +247,26 @@ struct BblState {
 
     void exec(const std::string& source);
     void execfile(const std::string& path);
+    void defn(const std::string& name, BblCFunction fn);
+
+    // C function arg access
+    int argCount() const;
+    bool hasArg(int i) const;
+    BBL::Type getArgType(int i) const;
+    int64_t getIntArg(int i) const;
+    double getFloatArg(int i) const;
+    bool getBoolArg(int i) const;
+    const char* getStringArg(int i) const;
+    BblBinary* getBinaryArg(int i) const;
+    BblValue getArg(int i) const;
+
+    // C function return
+    void pushInt(int64_t val);
+    void pushFloat(double val);
+    void pushBool(bool val);
+    void pushString(const char* str);
+    void pushNull();
+    void pushBinary(const uint8_t* ptr, size_t size);
 
     // Introspection
     bool has(const std::string& name) const;
@@ -235,8 +277,21 @@ struct BblState {
     bool getBool(const std::string& name) const;
     const char* getString(const std::string& name) const;
 
+    // Setters
+    void setInt(const std::string& name, int64_t val);
+    void setFloat(const std::string& name, double val);
+    void setString(const std::string& name, const char* str);
+    void set(const std::string& name, BblValue val);
+
     // Eval
     BblValue eval(const AstNode& node, BblScope& scope);
     BblValue evalList(const AstNode& node, BblScope& scope);
     BblValue callFn(BblFn* fn, const std::vector<BblValue>& args, int callLine);
+
+    void printBacktrace(const std::string& what);
 };
+
+namespace BBL {
+    void addPrint(BblState& bbl);
+    void addStdLib(BblState& bbl);
+}

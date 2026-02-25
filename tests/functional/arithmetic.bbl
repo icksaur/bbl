@@ -1,0 +1,7 @@
+(print (+ 2 3))
+(print " ")
+(print (* 4 5))
+(print " ")
+(print (- 10 3))
+(print " ")
+(print (/ 20 4))

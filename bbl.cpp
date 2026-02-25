@@ -4,6 +4,9 @@
 #include <cstring>
 #include <cmath>
 #include <stdexcept>
+#include <cinttypes>
+#include <cstdio>
+#include <filesystem>
 
 // ---------- BblValue ----------
 
@@ -712,6 +715,18 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             return result;
         }
 
+        if (op == "execfile") {
+            if (node.children.size() < 2) {
+                throw BBL::Error{"execfile requires a path argument"};
+            }
+            BblValue pathVal = eval(node.children[1], scope);
+            if (pathVal.type != BBL::Type::String) {
+                throw BBL::Error{"execfile: argument must be a string"};
+            }
+            execfile(pathVal.stringVal->data);
+            return BblValue::makeNull();
+        }
+
         // Not a special form - check for built-in operators and functions
 
         if (op == "not") {
@@ -822,6 +837,20 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
         for (size_t i = 1; i < node.children.size(); i++) {
             args.push_back(eval(node.children[i], scope));
         }
+        if (headVal.isCFn) {
+            callArgs = std::move(args);
+            hasReturn = false;
+            returnValue = BblValue::makeNull();
+            callStack.push_back(Frame{currentFile, node.line, head.type == NodeType::Symbol ? head.stringVal : "<expr>"});
+            int rc = headVal.cfnVal(this);
+            callStack.pop_back();
+            BblValue ret = hasReturn ? returnValue : BblValue::makeNull();
+            callArgs.clear();
+            hasReturn = false;
+            returnValue = BblValue::makeNull();
+            (void)rc;
+            return ret;
+        }
         return callFn(headVal.fnVal, args, node.line);
     }
 
@@ -864,13 +893,32 @@ void BblState::exec(const std::string& source) {
 }
 
 void BblState::execfile(const std::string& path) {
-    std::ifstream file(path);
+    namespace fs = std::filesystem;
+    fs::path resolved;
+    if (fs::path(path).is_absolute()) {
+        throw BBL::Error{"execfile: absolute paths not allowed: " + path};
+    }
+    if (path.find("..") != std::string::npos) {
+        throw BBL::Error{"execfile: parent directory traversal not allowed: " + path};
+    }
+    if (scriptDir.empty()) {
+        resolved = fs::path(path);
+    } else {
+        resolved = fs::path(scriptDir) / path;
+    }
+    std::ifstream file(resolved);
     if (!file.is_open()) {
-        throw BBL::Error{"file read failed: " + path};
+        throw BBL::Error{"file read failed: " + resolved.string()};
     }
     std::ostringstream ss;
     ss << file.rdbuf();
+    std::string savedFile = currentFile;
+    std::string savedDir = scriptDir;
+    currentFile = resolved.string();
+    scriptDir = resolved.parent_path().string();
     exec(ss.str());
+    currentFile = savedFile;
+    scriptDir = savedDir;
 }
 
 // ---------- Introspection ----------
@@ -925,4 +973,227 @@ const char* BblState::getString(const std::string& name) const {
         throw BBL::Error{"type mismatch: expected string, got " + typeName(v.type)};
     }
     return v.stringVal->data.c_str();
+}
+
+// ---------- Setters ----------
+
+void BblState::setInt(const std::string& name, int64_t val) {
+    rootScope.def(name, BblValue::makeInt(val));
+}
+
+void BblState::setFloat(const std::string& name, double val) {
+    rootScope.def(name, BblValue::makeFloat(val));
+}
+
+void BblState::setString(const std::string& name, const char* str) {
+    rootScope.def(name, BblValue::makeString(intern(str)));
+}
+
+void BblState::set(const std::string& name, BblValue val) {
+    rootScope.def(name, val);
+}
+
+// ---------- C function registration ----------
+
+void BblState::defn(const std::string& name, BblCFunction fn) {
+    rootScope.def(name, BblValue::makeCFn(fn));
+}
+
+// ---------- C function args ----------
+
+int BblState::argCount() const {
+    return static_cast<int>(callArgs.size());
+}
+
+bool BblState::hasArg(int i) const {
+    return i >= 0 && i < static_cast<int>(callArgs.size());
+}
+
+BBL::Type BblState::getArgType(int i) const {
+    if (!hasArg(i)) {
+        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds (count " + std::to_string(argCount()) + ")"};
+    }
+    return callArgs[i].type;
+}
+
+int64_t BblState::getIntArg(int i) const {
+    if (!hasArg(i)) {
+        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds"};
+    }
+    if (callArgs[i].type != BBL::Type::Int) {
+        throw BBL::Error{"type mismatch: expected int arg, got " + typeName(callArgs[i].type)};
+    }
+    return callArgs[i].intVal;
+}
+
+double BblState::getFloatArg(int i) const {
+    if (!hasArg(i)) {
+        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds"};
+    }
+    if (callArgs[i].type != BBL::Type::Float) {
+        throw BBL::Error{"type mismatch: expected float arg, got " + typeName(callArgs[i].type)};
+    }
+    return callArgs[i].floatVal;
+}
+
+bool BblState::getBoolArg(int i) const {
+    if (!hasArg(i)) {
+        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds"};
+    }
+    if (callArgs[i].type != BBL::Type::Bool) {
+        throw BBL::Error{"type mismatch: expected bool arg, got " + typeName(callArgs[i].type)};
+    }
+    return callArgs[i].boolVal;
+}
+
+const char* BblState::getStringArg(int i) const {
+    if (!hasArg(i)) {
+        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds"};
+    }
+    if (callArgs[i].type != BBL::Type::String) {
+        throw BBL::Error{"type mismatch: expected string arg, got " + typeName(callArgs[i].type)};
+    }
+    return callArgs[i].stringVal->data.c_str();
+}
+
+BblBinary* BblState::getBinaryArg(int i) const {
+    if (!hasArg(i)) {
+        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds"};
+    }
+    if (callArgs[i].type != BBL::Type::Binary) {
+        throw BBL::Error{"type mismatch: expected binary arg, got " + typeName(callArgs[i].type)};
+    }
+    return callArgs[i].binaryVal;
+}
+
+BblValue BblState::getArg(int i) const {
+    if (!hasArg(i)) {
+        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds"};
+    }
+    return callArgs[i];
+}
+
+// ---------- C function return ----------
+
+void BblState::pushInt(int64_t val) {
+    returnValue = BblValue::makeInt(val);
+    hasReturn = true;
+}
+
+void BblState::pushFloat(double val) {
+    returnValue = BblValue::makeFloat(val);
+    hasReturn = true;
+}
+
+void BblState::pushBool(bool val) {
+    returnValue = BblValue::makeBool(val);
+    hasReturn = true;
+}
+
+void BblState::pushString(const char* str) {
+    returnValue = BblValue::makeString(intern(str));
+    hasReturn = true;
+}
+
+void BblState::pushNull() {
+    returnValue = BblValue::makeNull();
+    hasReturn = true;
+}
+
+void BblState::pushBinary(const uint8_t* ptr, size_t size) {
+    std::vector<uint8_t> data(ptr, ptr + size);
+    returnValue = BblValue::makeBinary(allocBinary(std::move(data)));
+    hasReturn = true;
+}
+
+// ---------- Backtrace ----------
+
+void BblState::printBacktrace(const std::string& what) {
+    fprintf(stderr, "error: %s\n", what.c_str());
+    for (int i = static_cast<int>(callStack.size()) - 1; i >= 0; i--) {
+        auto& f = callStack[i];
+        fprintf(stderr, "  at %s  %s:%d\n", f.expr.c_str(), f.file.c_str(), f.line);
+    }
+}
+
+// ---------- addPrint / addStdLib ----------
+
+static int bblPrint(BblState* bbl) {
+    int count = bbl->argCount();
+    for (int i = 0; i < count; i++) {
+        BBL::Type t = bbl->getArgType(i);
+        char buf[64];
+        switch (t) {
+            case BBL::Type::String:
+                if (bbl->printCapture) {
+                    *bbl->printCapture += bbl->getStringArg(i);
+                } else {
+                    fputs(bbl->getStringArg(i), stdout);
+                }
+                break;
+            case BBL::Type::Int:
+                snprintf(buf, sizeof(buf), "%" PRId64, bbl->getIntArg(i));
+                if (bbl->printCapture) {
+                    *bbl->printCapture += buf;
+                } else {
+                    fputs(buf, stdout);
+                }
+                break;
+            case BBL::Type::Float:
+                snprintf(buf, sizeof(buf), "%g", bbl->getArg(i).floatVal);
+                if (bbl->printCapture) {
+                    *bbl->printCapture += buf;
+                } else {
+                    fputs(buf, stdout);
+                }
+                break;
+            case BBL::Type::Bool:
+                if (bbl->printCapture) {
+                    *bbl->printCapture += bbl->getBoolArg(i) ? "true" : "false";
+                } else {
+                    fputs(bbl->getBoolArg(i) ? "true" : "false", stdout);
+                }
+                break;
+            case BBL::Type::Null:
+                if (bbl->printCapture) {
+                    *bbl->printCapture += "null";
+                } else {
+                    fputs("null", stdout);
+                }
+                break;
+            case BBL::Type::Binary: {
+                auto* b = bbl->getBinaryArg(i);
+                snprintf(buf, sizeof(buf), "<binary %zu bytes>", b->length());
+                if (bbl->printCapture) {
+                    *bbl->printCapture += buf;
+                } else {
+                    fputs(buf, stdout);
+                }
+                break;
+            }
+            case BBL::Type::Fn:
+                if (bbl->printCapture) {
+                    *bbl->printCapture += "<fn>";
+                } else {
+                    fputs("<fn>", stdout);
+                }
+                break;
+            default:
+                if (bbl->printCapture) {
+                    *bbl->printCapture += "<unknown>";
+                } else {
+                    fputs("<unknown>", stdout);
+                }
+                break;
+        }
+    }
+    return 0;
+}
+
+void BBL::addPrint(BblState& bbl) {
+    bbl.defn("print", bblPrint);
+}
+
+void BBL::addStdLib(BblState& bbl) {
+    BBL::addPrint(bbl);
 }
