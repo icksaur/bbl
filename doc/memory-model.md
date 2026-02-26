@@ -51,25 +51,23 @@ The GC runs periodically — triggered by allocation pressure (e.g. after N byte
 ```
 bbl.execfile("script.bbl")
   └─ root scope of script.bbl
-       ├─ (def x 10)                     ← root-scope binding
-       ├─ (def make-adder (fn (n)        ← defines outer fn
+       ├─ (= x 10)                     ← root-scope binding
+       ├─ (= make-adder (fn (n)        ← defines outer fn
        │     (fn (x) (+ x n))            ← inner fn captures n from make-adder's frame
        │  ))
-       └─ (def add5 (make-adder 5))      ← add5 is a fn with n=5 in its capture env
+       └─ (= add5 (make-adder 5))      ← add5 is a fn with n=5 in its capture env
 ```
 
 The captured environment is stored as a `{name, BblValue}[]` on the `fn` object.  The GC traces through it during mark phase.
 
-### `def` / `set` semantics with captures
+### `=` semantics with captures
 
-`set` uses **scope-chain lookup**: it checks local → captured → root for an existing name.  If found, it rebinds that slot.  If not found, runtime error.
-
-`def` always creates a new binding in the current scope, regardless of what exists in outer scopes.  This allows intentional shadowing.
+`=` uses **assign-or-create** semantics: it checks local → captured → root for an existing name.  If found, it rebinds that slot.  If not found, it creates a new binding in the current scope.
 
 ```bbl
-(def x 10)
-(def f (fn ()
-    (set x 20)     // modifies captured x
+(= x 10)
+(= f (fn ()
+    (= x 20)     // modifies captured x
 ))
 (f)
 // x is still 10 here — the closure modified its own snapshot (x is a value type)
@@ -82,12 +80,12 @@ For GC-managed types, `set` in a closure makes the new object visible anywhere t
 Both `fn` bodies and `execfile`'d / `exec`'d code return the value of their last evaluated expression.  There is no explicit `return` keyword.
 
 ```bbl
-(def double (fn (x) (* x 2)))
+(= double (fn (x) (* x 2)))
 
-(def classify (fn (x)
-    (def label "other")
-    (if (< x 0) (set label "negative"))
-    (if (== x 0) (set label "zero"))
+(= classify (fn (x)
+    (= label "other")
+    (if (< x 0) (= label "negative"))
+    (if (== x 0) (= label "zero"))
     label
 ))
 ```
@@ -99,9 +97,9 @@ Struct instances are **value types** — their data layout is C++ compatible.  S
 Copying a struct is `memcpy`.  No GC involvement in struct operations.
 
 ```bbl
-(def a (vertex 1.0 2.0 3.0))
-(def b a)         // b is a copy — memcpy
-(set b.x 9.0)    // does not affect a
+(= a (vertex 1.0 2.0 3.0))
+(= b a)         // b is a copy — memcpy
+(= b.x 9.0)    // does not affect a
 ```
 
 ## type descriptors: global lifetime

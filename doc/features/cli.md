@@ -38,10 +38,10 @@ bbl build.bbl output.obj --verbose
 
 ```bbl
 // args is a table: (table 1 "output.obj" 2 "--verbose")
-(def i 0)
+(= i 0)
 (loop (< i (args.length))
     (print (args.at i) "\n")
-    (set i (+ i 1))
+    (= i (+ i 1))
 )
 ```
 
@@ -58,7 +58,7 @@ With no arguments, `bbl` starts a read-eval-print loop.  The environment persist
 ```
 > (print "hello")
 hello
-> (def greet (fn (name)
+> (= greet (fn (name)
 .     (print "hi " name "\n")
 . ))
 > (greet "world")
@@ -95,7 +95,7 @@ bbl -e '(print (+ 1 2))'
 Multiple `-e` flags are evaluated in order within the same environment:
 
 ```sh
-bbl -e '(def x 10)' -e '(print (* x x))'
+bbl -e '(= x 10)' -e '(print (* x x))'
 100
 ```
 

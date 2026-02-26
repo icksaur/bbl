@@ -13,9 +13,9 @@ Resolution depends on the type of the left-hand value.
 Structs have no methods.  The `.` operator on a struct always resolves to a field lookup.
 
 ```bbl
-(def v (vertex 1.0 2.0 3.0))
+(= v (vertex 1.0 2.0 3.0))
 (print v.x)          // read field
-(set v.x 5.0)        // write field (single-level place expression)
+(= v.x 5.0)        // write field (single-level place expression)
 ```
 
 The runtime looks up the field name in the struct's `StructBuilder` descriptor.  If the field exists, it reads or writes at the stored byte offset.  If not, runtime error.
@@ -23,16 +23,16 @@ The runtime looks up the field name in the struct's `StructBuilder` descriptor. 
 For composed structs, chained access reads through nested descriptors:
 
 ```bbl
-(def tri (triangle (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
+(= tri (triangle (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
 (print tri.a.x)      // read: triangle descriptor → field "a" → vertex descriptor → field "x"
 ```
 
 Chained reads are allowed.  Chained writes are not — use an intermediate variable:
 
 ```bbl
-(def v tri.a)
-(set v.x 5.0)
-(set tri.a v)
+(= v tri.a)
+(= v.x 5.0)
+(= tri.a v)
 ```
 
 ### table — methods first, then key access
@@ -44,20 +44,20 @@ Tables have registered methods and also support string-key access via `.`.  The 
 3. If not found → string-key access.  Equivalent to `(t.get "name")`.
 
 ```bbl
-(def player (table "name" "hero" "hp" 100))
+(= player (table "name" "hero" "hp" 100))
 
 // method dispatch — "keys" matches a table method
-(def ks (player.keys))
+(= ks (player.keys))
 
 // string-key access — "name" is not a method, so read
 (print player.name)           // "hero"
-(set player.hp 80)            // write via place expression
+(= player.hp 80)            // write via place expression
 ```
 
 This means table keys that collide with method names are only accessible via the `get`/`set` methods:
 
 ```bbl
-(def t (table "length" 42))
+(= t (table "length" 42))
 (print t.length)              // table method — returns number of entries, not 42
 (print (t.get "length"))      // string-key access — returns 42
 ```
@@ -75,7 +75,7 @@ Vectors support method calls.  The `.` operator looks up the identifier in the v
 | `at` | access element by index |
 
 ```bbl
-(def verts (vector vertex (vertex 0 1 0)))
+(= verts (vector vertex (vertex 0 1 0)))
 (verts.push (vertex 1 0 0))
 (print (verts.length))       // 2
 (print (verts.at 0).x)       // 0
@@ -94,7 +94,7 @@ Strings support method calls via the `.` operator.
 Additional string methods are deferred (see stdlib).
 
 ```bbl
-(def s "hello")
+(= s "hello")
 (print (s.length))           // 5
 ```
 
@@ -105,7 +105,7 @@ Using `.` with an unknown identifier on a string is a runtime error.
 Userdata types have methods registered via `TypeBuilder` in C++.  The `.` operator looks up the identifier in the type descriptor's method table.
 
 ```bbl
-(def f (fopen "out.txt"))
+(= f (fopen "out.txt"))
 (f.write "hello")
 (f.close)
 ```
@@ -121,7 +121,7 @@ Binaries support a single method via the `.` operator.
 | `length` | byte count |
 
 ```bbl
-(def blob (filebytes "texture.png"))
+(= blob (filebytes "texture.png"))
 (print (blob.length))
 ```
 
@@ -168,12 +168,12 @@ int file_write(BblState* bbl) {
 
 | pattern | meaning |
 |---------|---------|
-| `(set v.x 5.0)` | struct field write |
-| `(set player.hp 80)` | table string-key write |
+| `(= v.x 5.0)` | struct field write |
+| `(= player.hp 80)` | table string-key write |
 
 For struct fields, the runtime writes directly at the field offset.  For tables, it writes the string key.
 
-Only single-level writes are allowed.  `(set tri.a.x 5.0)` is a compile error.  Use an intermediate variable instead.
+Only single-level writes are allowed.  `(= tri.a.x 5.0)` is a compile error.  Use an intermediate variable instead.
 
 ## error cases
 
@@ -184,7 +184,7 @@ Only single-level writes are allowed.  `(set tri.a.x 5.0)` is a compile error.  
 | unknown field on struct | runtime error: struct "T" has no field "name" |
 | unknown method on vector, string | runtime error: type has no method "name" |
 | unknown method on userdata | runtime error: userdata "T" has no method "name" |
-| chained write `(set a.b.c val)` | error: only single-level place writes allowed |
+| chained write `(= a.b.c val)` | error: only single-level place writes allowed |
 
 ## design rationale
 

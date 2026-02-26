@@ -1,0 +1,5 @@
+(= result (do (= a 10) (= b 20) (+ a b)))
+(print result "\n")
+(if true
+    (do (print "then1\n") (print "then2\n"))
+    (do (print "else1\n") (print "else2\n")))

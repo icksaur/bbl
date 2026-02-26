@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <ostream>
@@ -216,21 +217,28 @@ struct BblTable {
 };
 
 struct BblScope {
-    std::unordered_map<std::string, BblValue> bindings;
+    std::unique_ptr<std::unordered_map<uint32_t, BblValue>> bindings;
     BblScope* parent = nullptr;
+
+    // Flat mode for function call scopes
+    std::vector<BblValue> slots;
+    const std::unordered_map<uint32_t, size_t>* slotMap = nullptr;
 
     BblScope() = default;
     explicit BblScope(BblScope* p) : parent(p) {}
 
-    void def(const std::string& name, BblValue val);
-    void set(const std::string& name, BblValue val);
-    BblValue* lookup(const std::string& name);
+    void def(uint32_t id, BblValue val);
+    void set(uint32_t id, BblValue val);
+    BblValue* lookup(uint32_t id);
 };
 
 struct BblFn {
     std::vector<std::string> params;
+    std::vector<uint32_t> paramIds;
     std::vector<struct AstNode> body;
-    std::vector<std::pair<std::string, BblValue>> captures;
+    std::vector<std::pair<uint32_t, BblValue>> captures;
+    std::unordered_map<uint32_t, size_t> slotIndex;  // symbol ID → slot position
+    size_t paramSlotStart = 0;  // first param slot (= captures.size() at build time)
     bool marked = false;
 };
 
@@ -329,6 +337,9 @@ struct AstNode {
     std::vector<uint8_t> binaryData;
     std::vector<AstNode> children;
     int line = 1;
+    mutable BblString* cachedString = nullptr;  // lazy-interned string for StringLiteral nodes
+    mutable uint32_t symbolId = 0;                // lazy-resolved symbol ID for Symbol nodes
+    mutable int8_t cachedSpecialForm = -1;        // lazy-resolved SpecialForm for List head symbols
 };
 
 std::vector<AstNode> parse(BblLexer& lexer);
@@ -375,6 +386,11 @@ struct BblState {
 
     // Print capture (for testing)
     std::string* printCapture = nullptr;
+
+    // Symbol ID table
+    mutable std::unordered_map<std::string, uint32_t> symbolIds;
+    mutable uint32_t nextSymbolId = 1;
+    uint32_t resolveSymbol(const std::string& name) const;
 
     BblState();
     ~BblState();
@@ -466,7 +482,7 @@ struct BblState {
     // Eval
     BblValue eval(const AstNode& node, BblScope& scope);
     BblValue evalList(const AstNode& node, BblScope& scope);
-    BblValue callFn(BblFn* fn, const std::vector<BblValue>& args, int callLine);
+    BblValue callFn(BblFn* fn, const BblValue* args, size_t argc, int callLine);
 
     void printBacktrace(const std::string& what);
 };

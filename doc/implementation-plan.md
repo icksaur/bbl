@@ -62,7 +62,7 @@ Tokenize BBL source into a token stream.  Token types:
 | `Int` | `42`, `0`, `-3` |
 | `Float` | `3.14`, `0.5` |
 | `String` | `"hello"`, `"with \"escapes\""` |
-| `Symbol` | `def`, `print`, `my-var`, `+` |
+| `Symbol` | `=`, `print`, `my-var`, `+` |
 | `Bool` | `true`, `false` |
 | `Null` | `null` |
 | `Dot` | `.` |
@@ -77,8 +77,8 @@ Binary literal: on seeing `0b`, parse decimal size, read `:`, read exactly N byt
 
 Unit tests:
 - Tokenize `(+ 1 2)` → `LParen Symbol("+" ) Int(1) Int(2) RParen Eof`
-- Tokenize `(def x "hello")` → correct token sequence
-- Tokenize `(def y 3.14)` → `Float(3.14)`
+- Tokenize `(= x "hello")` → correct token sequence
+- Tokenize `(= y 3.14)` → `Float(3.14)`
 - Tokenize `true false null` → `Bool(true) Bool(false) Null`
 - Tokenize comments: `(+ 1 // comment\n 2)` → `LParen Symbol Int(1) Int(2) RParen`
 - Tokenize string escapes: `"a\"b\\c\n"` → correct string content
@@ -118,7 +118,7 @@ Unit tests:
 - Parse `3.14` → `FloatLiteral(3.14)`
 - Parse `"hello"` → `StringLiteral("hello")`
 - Parse `(+ 1 2)` → `List[Symbol(+), Int(1), Int(2)]`
-- Parse `(def x (+ 1 2))` → nested `List`
+- Parse `(= x (+ 1 2))` → nested `List`
 - Parse `v.x` → `DotAccess(Symbol(v), "x")`
 - Parse `(verts.push (vertex 1 2 3))` → `List` with `DotAccess` head
 - Parse multiple top-level expressions → vector of nodes
@@ -166,15 +166,14 @@ Unit tests:
 
 Scope is a `struct BblScope { std::unordered_map<std::string, BblValue> bindings; BblScope* parent; }`.
 
-- `def` adds to current scope
-- `set` walks chain: local → parent → ... → root.  Not found = error.
+- `=` assigns to an existing binding or creates one if it doesn't exist.
 - `fn` call creates fresh scope.  `loop`/`if` share enclosing scope.
 
 Unit tests (via `bbl.exec()`):
-- `(def x 10)` then `bbl.getInt("x")` → 10
-- `(def x 10) (set x 20)` → `bbl.getInt("x")` → 20
-- `(set y 5)` → throws `BBL::Error` (undefined)
-- `(def x 1) (def x 2)` → `bbl.getInt("x")` → 2 (shadowing in same scope)
+- `(= x 10)` then `bbl.getInt("x")` → 10
+- `(= x 10) (= x 20)` → `bbl.getInt("x")` → 20
+- `(= y 5)` → creates binding, `bbl.getInt("y")` → 5
+- `(= x 1) (= x 2)` → `bbl.getInt("x")` → 2 (shadowing in same scope)
 
 ### 1.7 core eval — arithmetic, comparison, logic
 
@@ -183,39 +182,39 @@ Evaluate s-expressions.  Implement:
 - Arithmetic: `+`, `-`, `*`, `/`, `%` with int/float promotion
 - Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
 - Logical: `and`, `or` (short-circuit special forms), `not` (function)
-- `def`, `set`
+- `=` (assign-or-create)
 - `if` (then-only and then-else forms)
 - `loop` (while condition body...)
 - String concatenation via `+`
 
 Unit tests (via `bbl.exec()` + getters):
-- `(def x (+ 1 2))` → `getInt("x")` = 3
-- `(def x (+ 1.0 2.0))` → `getFloat("x")` = 3.0
-- `(def x (+ 1 2.0))` → `getFloat("x")` = 3.0 (int→float promotion)
-- `(def x (* 3 4))` → 12
-- `(def x (/ 10 3))` → 3 (int division)
-- `(def x (/ 10.0 3.0))` → ~3.333
-- `(def x (% 10 3))` → 1
-- `(def x (== 1 1))` → `getBool("x")` = true
-- `(def x (< 1 2))` → true
-- `(def b (and true false))` → false
-- `(def b (or false true))` → true
-- `(def b (not true))` → false
-- Short-circuit: `(def x 0) (or true (set x 1))` → x stays 0
-- String concat: `(def s (+ "a" "b"))` → `getString("s")` = "ab"
+- `(= x (+ 1 2))` → `getInt("x")` = 3
+- `(= x (+ 1.0 2.0))` → `getFloat("x")` = 3.0
+- `(= x (+ 1 2.0))` → `getFloat("x")` = 3.0 (int→float promotion)
+- `(= x (* 3 4))` → 12
+- `(= x (/ 10 3))` → 3 (int division)
+- `(= x (/ 10.0 3.0))` → ~3.333
+- `(= x (% 10 3))` → 1
+- `(= x (== 1 1))` → `getBool("x")` = true
+- `(= x (< 1 2))` → true
+- `(= b (and true false))` → false
+- `(= b (or false true))` → true
+- `(= b (not true))` → false
+- Short-circuit: `(= x 0) (or true (= x 1))` → x stays 0
+- String concat: `(= s (+ "a" "b"))` → `getString("s")` = "ab"
 - Division by zero: `(/ 10 0)` → throws `BBL::Error` ("division by zero")
 - Division by zero (float): `(/ 10.0 0.0)` → throws `BBL::Error`
 - Type error: `(+ 1 "hello")` → throws `BBL::Error`
-- Type error: `(if 42 (def x 1))` → error (non-bool condition)
+- Type error: `(if 42 (= x 1))` → error (non-bool condition)
 - Non-bool in `and`: `(and 1 true)` → type error
 - Non-bool in `or`: `(or 0 1)` → type error
 - Non-bool in `not`: `(not 42)` → type error
-- `if` is a statement: `(def x (if true 42))` → x = null (if does not produce a value)
-- `loop` is a statement: `(def x (loop false 1))` → x = null
-- `if`: `(def x 0) (if true (set x 1))` → x = 1
-- `if` else: `(def x 0) (if false (set x 1) (set x 2))` → x = 2
-- `loop`: `(def i 0) (loop (< i 5) (set i (+ i 1)))` → i = 5
-- Nested: `(def x (+ (* 2 3) (/ 10 2)))` → 11
+- `if` is a statement: `(= x (if true 42))` → x = null (if does not produce a value)
+- `loop` is a statement: `(= x (loop false 1))` → x = null
+- `if`: `(= x 0) (if true (= x 1))` → x = 1
+- `if` else: `(= x 0) (if false (= x 1) (= x 2))` → x = 2
+- `loop`: `(= i 0) (loop (< i 5) (= i (+ i 1)))` → i = 5
+- Nested: `(= x (+ (* 2 3) (/ 10 2)))` → 11
 
 ### 1.8 functions and closures
 
@@ -224,15 +223,15 @@ Unit tests (via `bbl.exec()` + getters):
 - Last expression is the return value
 
 Unit tests:
-- `(def f (fn (x) (* x 2))) (def r (f 5))` → r = 10
-- `(def f (fn (x y) (+ x y))) (def r (f 3 4))` → r = 7
-- `(def f (fn () 42)) (def r (f))` → r = 42
-- Arity error: `(def f (fn (x) x)) (f 1 2)` → error
-- Closure capture (value): `(def x 10) (def f (fn () x)) (set x 99) (def r (f))` → r = 10
-- Closure write doesn't leak back (value type): `(def x 10) (def f (fn () (set x 20))) (f)` → `bbl.getInt("x")` = 10 (outer x unchanged — closure modified its own snapshot)
-- Closure shared GC object: `(def t (table)) (def f (fn () (t.push 1))) (f)` → table length = 1 (shared container mutation visible) — requires tables from phase 4, defer this test to phase 4
-- Higher-order: `(def make (fn (n) (fn (x) (+ x n)))) (def add5 (make 5)) (def r (add5 3))` → r = 8
-- Last expression return: `(def f (fn () 1 2 3)) (def r (f))` → r = 3
+- `(= f (fn (x) (* x 2))) (= r (f 5))` → r = 10
+- `(= f (fn (x y) (+ x y))) (= r (f 3 4))` → r = 7
+- `(= f (fn () 42)) (= r (f))` → r = 42
+- Arity error: `(= f (fn (x) x)) (f 1 2)` → error
+- Closure capture (value): `(= x 10) (= f (fn () x)) (= x 99) (= r (f))` → r = 10
+- Closure write doesn't leak back (value type): `(= x 10) (= f (fn () (= x 20))) (f)` → `bbl.getInt("x")` = 10 (outer x unchanged — closure modified its own snapshot)
+- Closure shared GC object: `(= t (table)) (= f (fn () (t.push 1))) (f)` → table length = 1 (shared container mutation visible) — requires tables from phase 4, defer this test to phase 4
+- Higher-order: `(= make (fn (n) (fn (x) (+ x n)))) (= add5 (make 5)) (= r (add5 3))` → r = 8
+- Last expression return: `(= f (fn () 1 2 3)) (= r (f))` → r = 3
 
 Closure implementation note: the `fn` value stores its own array of captured `{name, BblValue}` pairs, copied from the enclosing scope at definition time.  When the closure is called, scope lookup is: local bindings → captured array.  This gives value-type snapshot semantics per memory-model.md.
 
@@ -242,10 +241,10 @@ Closure implementation note: the `fn` value stores its own array of captured `{n
 - `(exec "code")` from script — fresh isolated scope, returns last expression
 
 Unit tests:
-- `bbl.exec("(def x 10)")` then `bbl.getInt("x")` → 10
+- `bbl.exec("(= x 10)")` then `bbl.getInt("x")` → 10
 - Two `bbl.exec()` calls — second sees first's definitions
-- `(def r (exec "(+ 1 2)"))` → r = 3
-- `(def x 99) (def r (exec "(def y 5) y"))` → r = 5, x still 99, y not visible in caller
+- `(= r (exec "(+ 1 2)"))` → r = 3
+- `(= x 99) (= r (exec "(= y 5) y"))` → r = 5, x still 99, y not visible in caller
 
 ### validation
 
@@ -372,8 +371,8 @@ Deliverable: `StructBuilder` works, struct types are usable from scripts, vector
 
 Unit tests:
 - Register `vertex{float x,y,z}`, construct from script, read fields back
-- `(def v (vertex 1.0 2.0 3.0)) (def rx v.x)` → rx = 1.0
-- Field write: `(set v.x 5.0)` → v.x = 5.0
+- `(= v (vertex 1.0 2.0 3.0)) (= rx v.x)` → rx = 1.0
+- Field write: `(= v.x 5.0)` → v.x = 5.0
 - Composed structs: `triangle{vertex a,b,c}`, chained read `tri.a.x`
 - Arity error: `(vertex 1.0 2.0)` → error (missing z)
 - Type error: `(vertex 1.0 2.0 "three")` → error
@@ -383,7 +382,7 @@ Unit tests:
 - `BblVector<T>` — contiguous typed storage
 - Construction: `(vector vertex (vertex 0 1 0) (vertex 1 0 0))`
 - Methods: `push`, `pop`, `clear`, `length`, `at`
-- `at` returns a copy (value type).  Writable via place expression: `(set (verts.at 0) val)`
+- `at` returns a copy (value type).  Writable via place expression: `(= (verts.at 0) val)`
 - Type checking on push/at-write: must match declared element type
 - C++ getter: `bbl.getVector<vertex>("name")` → direct `T*` pointer
 
@@ -436,7 +435,7 @@ Deliverable: tables work as heterogeneous key-value containers.  String internin
 - Construction: `(table "key" val ...)` or `(table 1 val 2 val ...)`
 - Methods: `get`, `set`, `delete`, `has`, `keys`, `length`, `push`, `pop`, `at`
 - `.` on table: method-first resolution, then string-key access
-- Place expression: `(set player.hp 80)` writes string key
+- Place expression: `(= player.hp 80)` writes string key
 
 Unit tests:
 - Construct string-keyed table, read fields via `.`
@@ -449,8 +448,8 @@ Unit tests:
 - Empty table: `(table)` — length 0
 - `(t.get "missing")` → null (absent key)
 - `(t.delete "missing")` → no error (no-op)
-- `(def t (table "a" 1)) (t.pop)` → error (no integer keys)
-- Closure shared GC capture (deferred from phase 1.8): `(def t (table)) (def f (fn () (t.push 1))) (f)` → table length = 1
+- `(= t (table "a" 1)) (t.pop)` → error (no integer keys)
+- Closure shared GC capture (deferred from phase 1.8): `(= t (table)) (= f (fn () (t.push 1))) (f)` → table length = 1
 
 ### 4.2 string methods and comparison
 
@@ -669,7 +668,7 @@ Functional test:
 
 | phase | deliverable | key tests |
 |-------|-------------|-----------|
-| 1 | lexer + parser + core eval (def/set/if/loop/fn/exec, arithmetic, closures) | unit: tokenizer, parser, eval via `bbl.exec()` |
+| 1 | lexer + parser + core eval (=/if/loop/fn/exec, arithmetic, closures) | unit: tokenizer, parser, eval via `bbl.exec()` |
 | 2 | C functions + print + C++ setters/introspection + CLI + execfile + errors | unit: defn, push/arg API, setters, print capture; functional: hello.bbl |
 | 3 | structs + vectors + method dispatch + type descriptors (vector/string/binary) | unit: StructBuilder, getVector, `.` dispatch; functional: structs.bbl |
 | 4 | tables + strings + table type descriptor | unit: table methods, interning, closure GC capture; functional: tables.bbl |

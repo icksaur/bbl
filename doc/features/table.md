@@ -14,13 +14,13 @@ Heterogeneous key-value container.  Replaces both ordered lists and hash maps �
 
 ```bbl
 // string-keyed
-(def player (table "name" "hero" "hp" 100 "alive" true))
+(= player (table "name" "hero" "hp" 100 "alive" true))
 
 // integer-indexed
-(def items (table 1 "sword" 2 "shield" 3 "potion"))
+(= items (table 1 "sword" 2 "shield" 3 "potion"))
 
 // empty table
-(def t (table))
+(= t (table))
 ```
 
 ## string-key access via `.`
@@ -29,7 +29,7 @@ The `.` operator on a table provides syntactic sugar for string-key access:
 
 ```bbl
 (print player.name)         // read — equivalent to (player.get "name")
-(set player.hp 80)          // write via place expression
+(= player.hp 80)          // write via place expression
 ```
 
 If the identifier matches a table method name (see methods below), the method takes priority.  Use `get`/`set` for keys that collide with method names.
@@ -37,7 +37,7 @@ If the identifier matches a table method name (see methods below), the method ta
 ## dynamic key access
 
 ```bbl
-(def key "hp")
+(= key "hp")
 (print (player.get key))    // 80
 (player.set key 60)
 ```
@@ -47,7 +47,7 @@ If the identifier matches a table method name (see methods below), the method ta
 `at` provides 0-based positional access to integer-keyed entries:
 
 ```bbl
-(def items (table 1 "sword" 2 "shield" 3 "potion"))
+(= items (table 1 "sword" 2 "shield" 3 "potion"))
 (print (items.at 0))        // "sword" (first integer key)
 (print (items.at 2))        // "potion" (third integer key)
 ```
@@ -73,7 +73,7 @@ When `.` is used on a table, methods are checked before string-key access.  The 
 If a table has a key that collides with a method name, use `get`/`set` to access it:
 
 ```bbl
-(def t (table "length" 42))
+(= t (table "length" 42))
 (print t.length)             // method — returns number of entries
 (print (t.get "length"))     // string-key — returns 42
 ```
@@ -83,19 +83,19 @@ If a table has a key that collides with a method name, use `get`/`set` to access
 Table keys can be iterated via `keys`:
 
 ```bbl
-(def player (table "name" "hero" "hp" 100))
-(def ks (player.keys))
-(def i 0)
+(= player (table "name" "hero" "hp" 100))
+(= ks (player.keys))
+(= i 0)
 (loop (< i (ks.length))
-    (def k (ks.at i))
+    (= k (ks.at i))
     (print k ": " (player.get k) "\n")
-    (set i (+ i 1))
+    (= i (+ i 1))
 )
 ```
 
 ## ownership
 
-- Table is GC-managed.  `(def b a)` shares the reference.
+- Table is GC-managed.  `(= b a)` shares the reference.
 - Values can be any type — heterogeneous.
 - Tables can contain other tables, closures, userdata, etc.
 - The GC traces through table entries to find reachable objects.

@@ -36,6 +36,7 @@ check math        "2 7 256"
 check file_io     "hello from bbl"
 check binary_data "5"
 check recursion   "$(printf '1\n1\n120\n3628800\n0\n1\n55\n0\n15')"
+check do_block    "$(printf '30\nthen1\nthen2')"
 
 # Phase 6: args test (needs extra arguments)
 check_args() {
@@ -73,7 +74,7 @@ check_repl
 # Phase 6: multiple -e flags
 check_multi_e() {
     local actual
-    actual=$("$BBL" -e '(def x 10)' -e '(print (* x x))' 2>/dev/null)
+    actual=$("$BBL" -e '(= x 10)' -e '(print (* x x))' 2>/dev/null)
     if [ "$actual" = "100" ]; then
         echo "  PASS  multi_e"
         PASS=$((PASS + 1))

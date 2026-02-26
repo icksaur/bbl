@@ -1,9 +1,9 @@
 // file_io.bbl - functional test for file I/O
-(def f (fopen "/tmp/bbl_func_test.txt" "w"))
+(= f (fopen "/tmp/bbl_func_test.txt" "w"))
 (f.write "hello from bbl")
 (f.close)
 
-(def f2 (fopen "/tmp/bbl_func_test.txt" "r"))
-(def contents (f2.read))
+(= f2 (fopen "/tmp/bbl_func_test.txt" "r"))
+(= contents (f2.read))
 (f2.close)
 (print contents)

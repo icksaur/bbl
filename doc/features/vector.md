@@ -13,8 +13,8 @@ Contiguous typed storage for value types and structs.  The primary container for
 `vector` takes a type and zero or more initial elements:
 
 ```bbl
-(def verts (vector vertex (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
-(def nums (vector int 1 2 3 4 5))
+(= verts (vector vertex (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
+(= nums (vector int 1 2 3 4 5))
 ```
 
 The type argument is required.  All elements must match the declared type.  This is the one place BBL enforces a type constraint — it's needed to guarantee contiguous memory layout.
@@ -29,7 +29,7 @@ Allowed element types: numeric types (`int`, `float`), `bool`, and registered st
 
 ```bbl
 (print (verts.at 0).x)                    // read field of element 0
-(set (verts.at 0) (vertex 5 5 5))         // overwrite element 0
+(= (verts.at 0) (vertex 5 5 5))         // overwrite element 0
 ```
 
 Out-of-bounds index → runtime error.
@@ -37,11 +37,11 @@ Out-of-bounds index → runtime error.
 ### by iteration — `loop` with `at` and `length`
 
 ```bbl
-(def i 0)
+(= i 0)
 (loop (< i (verts.length))
-    (def v (verts.at i))
+    (= v (verts.at i))
     (print v.x " " v.y " " v.z "\n")
-    (set i (+ i 1))
+    (= i (+ i 1))
 )
 ```
 
@@ -71,7 +71,7 @@ This is necessary for the contiguous layout guarantee.  A vector of `vertex` mus
 
 ## ownership
 
-- Vector is GC-managed.  `(def b a)` shares the reference.
+- Vector is GC-managed.  `(= b a)` shares the reference.
 - Elements are value types (integers, floats, structs), stored inline by copy.
 - Struct elements are POD only — no GC references inside struct elements.
 

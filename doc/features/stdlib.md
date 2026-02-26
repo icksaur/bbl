@@ -61,9 +61,9 @@ Registered by `BBL::addFileIo(bbl)`.  Provides `fopen`, `filebytes`, and the `Fi
 ### fopen
 
 ```bbl
-(def f (fopen "path.txt"))            // read mode (default)
-(def f (fopen "path.txt" "w"))        // write mode
-(def f (fopen "path.txt" "a"))        // append mode
+(= f (fopen "path.txt"))            // read mode (default)
+(= f (fopen "path.txt" "w"))        // write mode
+(= f (fopen "path.txt" "a"))        // append mode
 ```
 
 Opens a file and returns a `File` (typed userdata, GC-managed).  Mode strings follow C `fopen()` conventions: `"r"` (default if omitted), `"w"`, `"a"`, `"rb"`, `"wb"`, etc.
@@ -89,12 +89,12 @@ Runtime error if the file cannot be opened.
 
 ```bbl
 // read a whole file
-(def f (fopen "data.txt"))
-(def contents (f.read))
+(= f (fopen "data.txt"))
+(= contents (f.read))
 (f.close)
 
 // write line by line
-(def out (fopen "log.txt" "w"))
+(= out (fopen "log.txt" "w"))
 (out.write "hello\n")
 (out.write "world\n")
 (out.close)
@@ -103,7 +103,7 @@ Runtime error if the file cannot be opened.
 ### filebytes
 
 ```bbl
-(def tex (filebytes "texture.png"))
+(= tex (filebytes "texture.png"))
 ```
 
 Reads an entire file into memory and returns a `binary`.  Opens the file, reads all bytes, closes the file, returns the result.  See [binary-data.md](binary-data.md) for the `BblBinary` type.
@@ -146,7 +146,7 @@ Registered by `BBL::addMath(bbl)`.  All math functions operate on `float` (f64) 
 `pi` and `e` are defined as `float` variables in the root scope by `addMath`:
 
 ```bbl
-(def circumference (* 2.0 pi r))
+(= circumference (* 2.0 pi r))
 ```
 
 ---

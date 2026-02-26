@@ -1,0 +1,87 @@
+// Task: Implement map/filter/reduce using closures, process a dataset
+// Tests: closures, higher-order functions, table iteration, functional patterns
+
+// map: apply f to each element, return new table
+(= map (fn (t f)
+    (= result (table))
+    (= i 0)
+    (= len (t.length))
+    (loop (< i len)
+        (result.push (f (t.at i)))
+        (= i (+ i 1)))
+    result))
+
+// filter: keep elements where pred returns true
+(= filter (fn (t pred)
+    (= result (table))
+    (= i 0)
+    (= len (t.length))
+    (loop (< i len)
+        (if (pred (t.at i))
+            (result.push (t.at i)))
+        (= i (+ i 1)))
+    result))
+
+// reduce: fold with accumulator
+(= reduce (fn (t f init)
+    (= acc init)
+    (= i 0)
+    (= len (t.length))
+    (loop (< i len)
+        (= acc (f acc (t.at i)))
+        (= i (+ i 1)))
+    acc))
+
+// print-table: helper to print all elements
+(= print-table (fn (t)
+    (= i 0)
+    (= len (t.length))
+    (loop (< i len)
+        (if (> i 0)
+            (print " "))
+        (print (t.at i))
+        (= i (+ i 1)))
+    (print "\n")))
+
+// Build dataset: integers 1..20
+(= nums (table))
+(= i 1)
+(loop (<= i 20)
+    (nums.push i)
+    (= i (+ i 1)))
+
+// 1. Square each number
+(= squares (map nums (fn (x) (* x x))))
+(print "squares: ")
+(print-table squares)
+
+// 2. Filter for even values
+(= evens (filter squares (fn (x) (== (% x 2) 0))))
+(print "even_squares: ")
+(print-table evens)
+
+// 3. Sum of even squares
+(= even-sum (reduce evens (fn (acc x) (+ acc x)) 0))
+(print "sum_even_squares: " even-sum "\n")
+
+// 4. Pipeline: sum of squares of odd numbers 1..20
+(= odds (filter nums (fn (x) (!= (% x 2) 0))))
+(= odd-squares (map odds (fn (x) (* x x))))
+(= odd-sq-sum (reduce odd-squares (fn (acc x) (+ acc x)) 0))
+(print "sum_odd_squares: " odd-sq-sum "\n")
+
+// 5. Compose: make an adder factory, apply it via map
+(= make-adder (fn (n) (fn (x) (+ x n))))
+(= add10 (make-adder 10))
+(= shifted (map nums add10))
+(print "shifted: ")
+(print-table shifted)
+
+// 6. Count elements matching a predicate (using reduce + do)
+(= count-if (fn (t pred)
+    (reduce t (fn (acc x)
+        (if (pred x) (= acc (+ acc 1)))
+        acc) 0)))
+
+(= big (count-if squares (fn (x) (> x 100))))
+(print "squares_over_100: " big "\n")

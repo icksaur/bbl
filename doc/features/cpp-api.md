@@ -38,12 +38,13 @@ auto* tex = bbl.getBinary("player-texture");
 |--------|-------|-------------|
 | `bbl.execfile(filename)` | file path | parse and execute a `.bbl` file |
 | `bbl.exec(source)` | code string | parse and execute a string of BBL source code |
+| `bbl.execExpr(source)` | code string | parse, execute, and return the result as a `BblValue` |
 
 Both accumulate into the same root scope from C++.  The distinction is only the source of the code.
 
 ```cpp
 bbl.execfile("types.bbl");           // load type definitions from file
-bbl.exec("(def scale 2.0)");          // inject a definition from a string
+bbl.exec("(= scale 2.0)");          // inject a definition from a string
 bbl.execfile("scene.bbl");            // scene.bbl can use 'scale'
 ```
 
@@ -79,7 +80,8 @@ A C function receives a pointer to the `BblState`.  It reads arguments by index,
 | `bbl->getStringArg(i)` | `const char*` | read string argument (interned, valid for BblState lifetime) |
 | `bbl->getBinaryArg(i)` | `BblBinary*` | read binary argument |
 | `bbl->getArg(i)` | `BblValue` | read argument as tagged value |
-| `bbl->getUserDataArg(i)` | `void*` | read userdata argument (opaque pointer) |
+
+For userdata arguments, use `getArg(i)` and access `val.userdataVal`.
 
 Reading an argument with the wrong type accessor is a `BBL::Error`.
 
@@ -166,7 +168,8 @@ After `execfile()` or `exec()`, the root scope is alive.  The C++ caller can rea
 | `bbl.getBool(name)` | `bool` | read bool variable |
 | `bbl.getString(name)` | `const char*` | read string variable |
 | `bbl.getBinary(name)` | `BblBinary*` | read binary variable |
-| `bbl.getVector<T>(name)` | `BblVector<T>*` | read typed vector (contiguous `T*` buffer) |
+| `bbl.getVectorData<T>(name)` | `T*` | direct pointer to typed contiguous vector data |
+| `bbl.getVectorLength<T>(name)` | `size_t` | number of elements in typed vector |
 | `bbl.getTable(name)` | `BblTable*` | read table variable |
 | `bbl.get(name)` | `BblValue` | read variable as tagged value |
 
@@ -199,13 +202,7 @@ bbl.execfile("ui-layout.bbl");
 
 ### iterating the environment
 
-```cpp
-bbl.forEach([](const char* name, const BblValue& val) {
-    printf("%s: type=%d\n", name, val.type);
-});
-```
-
-Iterates all variables in the root scope.
+Use `bbl.get(name)` and `bbl.has(name)` to inspect specific variables.
 
 ## userdata — opaque C++ pointers
 
@@ -214,7 +211,7 @@ An opaque `void*` with a registered type descriptor (methods and optional destru
 ### destructor signature
 
 ```cpp
-typedef void (*BblDestructor)(void* ptr);
+typedef void (*BblUserDataDestructor)(void* ptr);
 ```
 
 The destructor receives the raw `void*` pointer.  It is responsible for freeing the underlying resource.  Called by the GC when the object is collected.
@@ -240,7 +237,7 @@ void addFileType(BblState& bbl) {
     builder.method("read", file_read);
     builder.method("write", file_write);
     builder.method("close", file_close);
-    builder.destructor(file_destroy);
+    builder.destructor(file_destroy);  // BblUserDataDestructor
     bbl.registerType(builder);
 
     bbl.defn("fopen", bbl_fopen);
@@ -282,9 +279,9 @@ void addVertex(BblState& bbl) {
 After registration, scripts can use the type:
 
 ```bbl
-(def v (vertex 1.0 2.0 3.0))
+(= v (vertex 1.0 2.0 3.0))
 (print v.x)
-(def verts (vector vertex (vertex 0 1 0) (vertex 1 0 0)))
+(= verts (vector vertex (vertex 0 1 0) (vertex 1 0 0)))
 ```
 
 The registered struct has exactly the same binary layout as the C++ struct — `getVector<vertex>()` returns a pointer to data that C++ can use directly.
@@ -320,14 +317,13 @@ void addTriangle(BblState& bbl) {
 
 `structField()` references a previously registered struct type by name.  The inner struct's fields are accessible via dot: `tri.a.x`.
 
-## BblVector<T>
+## BblVec (typed vector access)
 
-Returned by `getVector<T>()`.  Provides direct access to the contiguous backing buffer.
+Access the contiguous backing buffer from C++ via `getVectorData<T>()` and `getVectorLength<T>()`:
 
 ```cpp
-auto* verts = bbl.getVector<vertex>("player-verts");
-vertex* data = verts->data();      // T* — direct pointer to contiguous elements
-size_t n = verts->length();        // number of elements
+vertex* data = bbl.getVectorData<vertex>("player-verts");
+size_t n = bbl.getVectorLength<vertex>("player-verts");
 
 // hand directly to GPU
 glBufferData(GL_ARRAY_BUFFER, n * sizeof(vertex), data, GL_STATIC_DRAW);
@@ -342,7 +338,7 @@ Returned by `getBinary()` or `getBinaryArg()`.  Data is always in memory (no laz
 ```cpp
 auto* tex = bbl.getBinary("player-texture");
 size_t len = tex->length();
-const uint8_t* data = tex->data();
+const uint8_t* data = tex->data.data();  // data is a std::vector<uint8_t>
 ```
 
 ## BblTable
@@ -351,9 +347,14 @@ Returned by `getTable()`.  Provides iteration and lookup from C++.
 
 ```cpp
 auto* t = bbl.getTable("player");
-BblValue name = t->get("name");      // get by string key
-bool has_hp = t->has("hp");
+
+// BblTable methods take BblValue keys — use intern() to create string keys
+BblValue key = BblValue::makeString(bbl.intern("name"));
+BblValue name = t->get(key);
+bool has_hp = t->has(BblValue::makeString(bbl.intern("hp")));
 size_t len = t->length();
+
+// also available: t->set(key, val), t->del(key)
 ```
 
 ## standard library — `BBL::addStdLib()`
@@ -373,7 +374,7 @@ bbl.execfile("script.bbl");
 | `BBL::addPrint(bbl)` | `print` — variadic, prints all args to stdout |
 | `BBL::addFileIo(bbl)` | `fopen` → `File` type with `read`, `read-bytes`, `write`, `write-bytes`, `close`, `flush` methods; `filebytes` → read a file into a `BblBinary` |
 | `BBL::addMath(bbl)` | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sqrt`, `abs`, `floor`, `ceil`, `min`, `max`, `pow`, `log`, `log2`, `log10`, `exp`; constants `pi`, `e` |
-| `BBL::addString(bbl)` | string methods — deferred, placeholder for v1 |
+| `BBL::addString(bbl)` | string methods — not yet implemented |
 
 See [features/stdlib.md](features/stdlib.md) for full script-side documentation of each module.
 
@@ -390,9 +391,9 @@ bbl.execfile("script.bbl");
 The `File` type is a userdata with methods and a destructor:
 
 ```bbl
-(def f (fopen "out.txt"))
+(= f (fopen "out.txt"))
 (f.write "hello")
-(def contents (f.read))
+(= contents (f.read))
 (f.close)
 // f collected by GC eventually — destructor closes if still open
 // prefer explicit close for deterministic resource management

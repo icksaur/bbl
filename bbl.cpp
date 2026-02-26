@@ -1,4 +1,5 @@
 #include "bbl.h"
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <cstring>
@@ -82,29 +83,64 @@ bool BblValue::operator==(const BblValue& o) const {
 
 // ---------- BblScope ----------
 
-void BblScope::def(const std::string& name, BblValue val) {
-    bindings[name] = val;
+void BblScope::def(uint32_t id, BblValue val) {
+    if (slotMap) {
+        auto it = slotMap->find(id);
+        if (it != slotMap->end()) { slots[it->second] = val; return; }
+    }
+    if (!bindings) bindings = std::make_unique<std::unordered_map<uint32_t, BblValue>>();
+    (*bindings)[id] = val;
 }
 
-void BblScope::set(const std::string& name, BblValue val) {
+void BblScope::set(uint32_t id, BblValue val) {
+    if (slotMap) {
+        auto it = slotMap->find(id);
+        if (it != slotMap->end()) { slots[it->second] = val; return; }
+        if (bindings) {
+            auto bit = bindings->find(id);
+            if (bit != bindings->end()) { bit->second = val; return; }
+        }
+        throw BBL::Error{"undefined symbol"};
+    }
     for (BblScope* s = this; s; s = s->parent) {
-        auto it = s->bindings.find(name);
-        if (it != s->bindings.end()) {
-            it->second = val;
-            return;
+        if (s->bindings) {
+            auto it = s->bindings->find(id);
+            if (it != s->bindings->end()) {
+                it->second = val;
+                return;
+            }
         }
     }
-    throw BBL::Error{"undefined symbol: " + name};
+    throw BBL::Error{"undefined symbol"};
 }
 
-BblValue* BblScope::lookup(const std::string& name) {
+BblValue* BblScope::lookup(uint32_t id) {
+    if (slotMap) {
+        auto it = slotMap->find(id);
+        if (it != slotMap->end()) return &slots[it->second];
+        if (bindings) {
+            auto bit = bindings->find(id);
+            if (bit != bindings->end()) return &bit->second;
+        }
+        return nullptr;
+    }
     for (BblScope* s = this; s; s = s->parent) {
-        auto it = s->bindings.find(name);
-        if (it != s->bindings.end()) {
-            return &it->second;
+        if (s->bindings) {
+            auto it = s->bindings->find(id);
+            if (it != s->bindings->end()) {
+                return &it->second;
+            }
         }
     }
     return nullptr;
+}
+
+uint32_t BblState::resolveSymbol(const std::string& name) const {
+    auto it = symbolIds.find(name);
+    if (it != symbolIds.end()) return it->second;
+    uint32_t id = nextSymbolId++;
+    symbolIds[name] = id;
+    return id;
 }
 
 // ---------- Lexer ----------
@@ -437,7 +473,9 @@ std::vector<AstNode> parse(BblLexer& lexer) {
 
 // ---------- BblState ----------
 
-BblState::BblState() = default;
+BblState::BblState() {
+    rootScope.bindings = std::make_unique<std::unordered_map<uint32_t, BblValue>>();
+}
 
 BblState::~BblState() {
     for (auto* s : allocatedStrings) {
@@ -528,7 +566,12 @@ BblUserData* BblState::allocUserData(const std::string& typeName, void* data) {
 static void gcMark(BblValue& val);
 
 static void gcMarkScope(BblScope& scope) {
-    for (auto& [name, val] : scope.bindings) {
+    if (scope.bindings) {
+        for (auto& [name, val] : *scope.bindings) {
+            gcMark(val);
+        }
+    }
+    for (auto& val : scope.slots) {
         gcMark(val);
     }
 }
@@ -591,68 +634,63 @@ void BblState::gc() {
     gcMark(returnValue);
 
     // Sweep binaries
-    for (auto it = allocatedBinaries.begin(); it != allocatedBinaries.end();) {
-        if (!(*it)->marked) {
-            delete *it;
-            it = allocatedBinaries.erase(it);
-        } else {
-            (*it)->marked = false;
-            ++it;
-        }
+    {
+        auto mid = std::partition(allocatedBinaries.begin(), allocatedBinaries.end(),
+                                  [](BblBinary* b) { return b->marked; });
+        for (auto it = mid; it != allocatedBinaries.end(); ++it) delete *it;
+        allocatedBinaries.erase(mid, allocatedBinaries.end());
+        for (auto* b : allocatedBinaries) b->marked = false;
     }
     // Sweep fns
-    for (auto it = allocatedFns.begin(); it != allocatedFns.end();) {
-        if (!(*it)->marked) {
-            delete *it;
-            it = allocatedFns.erase(it);
-        } else {
-            (*it)->marked = false;
-            ++it;
-        }
+    {
+        auto mid = std::partition(allocatedFns.begin(), allocatedFns.end(),
+                                  [](BblFn* f) { return f->marked; });
+        for (auto it = mid; it != allocatedFns.end(); ++it) delete *it;
+        allocatedFns.erase(mid, allocatedFns.end());
+        for (auto* f : allocatedFns) f->marked = false;
     }
     // Sweep structs
-    for (auto it = allocatedStructs.begin(); it != allocatedStructs.end();) {
-        if (!(*it)->marked) {
-            delete *it;
-            it = allocatedStructs.erase(it);
-        } else {
-            (*it)->marked = false;
-            ++it;
-        }
+    {
+        auto mid = std::partition(allocatedStructs.begin(), allocatedStructs.end(),
+                                  [](BblStruct* s) { return s->marked; });
+        for (auto it = mid; it != allocatedStructs.end(); ++it) delete *it;
+        allocatedStructs.erase(mid, allocatedStructs.end());
+        for (auto* s : allocatedStructs) s->marked = false;
     }
     // Sweep vectors
-    for (auto it = allocatedVectors.begin(); it != allocatedVectors.end();) {
-        if (!(*it)->marked) {
-            delete *it;
-            it = allocatedVectors.erase(it);
-        } else {
-            (*it)->marked = false;
-            ++it;
-        }
+    {
+        auto mid = std::partition(allocatedVectors.begin(), allocatedVectors.end(),
+                                  [](BblVec* v) { return v->marked; });
+        for (auto it = mid; it != allocatedVectors.end(); ++it) delete *it;
+        allocatedVectors.erase(mid, allocatedVectors.end());
+        for (auto* v : allocatedVectors) v->marked = false;
     }
     // Sweep tables
-    for (auto it = allocatedTables.begin(); it != allocatedTables.end();) {
-        if (!(*it)->marked) {
-            delete *it;
-            it = allocatedTables.erase(it);
-        } else {
-            (*it)->marked = false;
-            ++it;
-        }
+    {
+        auto mid = std::partition(allocatedTables.begin(), allocatedTables.end(),
+                                  [](BblTable* t) { return t->marked; });
+        for (auto it = mid; it != allocatedTables.end(); ++it) delete *it;
+        allocatedTables.erase(mid, allocatedTables.end());
+        for (auto* t : allocatedTables) t->marked = false;
     }
     // Sweep userdata
-    for (auto it = allocatedUserDatas.begin(); it != allocatedUserDatas.end();) {
-        if (!(*it)->marked) {
+    {
+        auto mid = std::partition(allocatedUserDatas.begin(), allocatedUserDatas.end(),
+                                  [](BblUserData* u) { return u->marked; });
+        for (auto it = mid; it != allocatedUserDatas.end(); ++it) {
             if ((*it)->desc && (*it)->desc->destructor && (*it)->data) {
                 (*it)->desc->destructor((*it)->data);
             }
             delete *it;
-            it = allocatedUserDatas.erase(it);
-        } else {
-            (*it)->marked = false;
-            ++it;
         }
+        allocatedUserDatas.erase(mid, allocatedUserDatas.end());
+        for (auto* u : allocatedUserDatas) u->marked = false;
     }
+    // Adaptive threshold: next GC when allocations double the surviving set
+    size_t liveCount = allocatedBinaries.size() + allocatedFns.size()
+                     + allocatedStructs.size() + allocatedVectors.size()
+                     + allocatedTables.size() + allocatedUserDatas.size();
+    gcThreshold = std::max<size_t>(256, liveCount * 2);
     allocCount = 0;
 }
 
@@ -682,7 +720,10 @@ BblValue BblState::eval(const AstNode& node, BblScope& scope) {
         case NodeType::FloatLiteral:
             return BblValue::makeFloat(node.floatVal);
         case NodeType::StringLiteral:
-            return BblValue::makeString(intern(node.stringVal));
+            if (!node.cachedString) {
+                node.cachedString = intern(node.stringVal);
+            }
+            return BblValue::makeString(node.cachedString);
         case NodeType::BoolLiteral:
             return BblValue::makeBool(node.boolVal);
         case NodeType::NullLiteral:
@@ -690,7 +731,8 @@ BblValue BblState::eval(const AstNode& node, BblScope& scope) {
         case NodeType::BinaryLiteral:
             return BblValue::makeBinary(allocBinary(node.binaryData));
         case NodeType::Symbol: {
-            BblValue* v = scope.lookup(node.stringVal);
+            if (!node.symbolId) node.symbolId = resolveSymbol(node.stringVal);
+            BblValue* v = scope.lookup(node.symbolId);
             if (!v) {
                 throw BBL::Error{"undefined symbol: " + node.stringVal};
             }
@@ -780,13 +822,11 @@ static void gatherFreeVarsBody(const std::vector<AstNode>& body,
             && n.children.size() >= 3
             && n.children[1].type == NodeType::Symbol) {
             auto& bodyOp = n.children[0].stringVal;
-            if (bodyOp == "def" || bodyOp == "=") {
-                // For =, name might reference an outer variable — mark as potential free var
-                if (bodyOp == "=") {
-                    auto& eName = n.children[1].stringVal;
-                    if (!contains(bound, eName) && !contains(freeVars, eName)) {
-                        freeVars.push_back(eName);
-                    }
+            if (bodyOp == "=") {
+                // = name might reference an outer variable — mark as potential free var
+                auto& eName = n.children[1].stringVal;
+                if (!contains(bound, eName) && !contains(freeVars, eName)) {
+                    freeVars.push_back(eName);
                 }
                 gatherFreeVars(n.children[2], bound, freeVars);
                 bound.push_back(n.children[1].stringVal);
@@ -823,13 +863,6 @@ static void gatherFreeVars(const AstNode& node,
                     }
                     return;
                 }
-                if (op == "def") {
-                    // handled by gatherFreeVarsBody
-                    for (size_t i = 1; i < node.children.size(); i++) {
-                        gatherFreeVars(node.children[i], bound, freeVars);
-                    }
-                    return;
-                }
                 if (op == "=") {
                     // = is assign-or-create: process all children (name may be free)
                     for (size_t i = 1; i < node.children.size(); i++) {
@@ -852,6 +885,34 @@ static void gatherFreeVars(const AstNode& node,
     }
 }
 
+// Special form dispatch: enum + static hash map for O(1) lookup
+enum class SpecialForm {
+    None, Eq, If, Loop, And, Or, Fn, Exec, ExecFile,
+    Vector, Table, Not, Add, Sub, Mul, Div, Mod,
+    CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe,
+    Do
+};
+
+static SpecialForm lookupSpecialForm(const std::string& op) {
+    static const std::unordered_map<std::string, SpecialForm> table = {
+        {"=", SpecialForm::Eq},
+        {"if", SpecialForm::If}, {"loop", SpecialForm::Loop},
+        {"and", SpecialForm::And}, {"or", SpecialForm::Or}, {"fn", SpecialForm::Fn},
+        {"exec", SpecialForm::Exec}, {"execfile", SpecialForm::ExecFile},
+        {"vector", SpecialForm::Vector}, {"table", SpecialForm::Table},
+        {"not", SpecialForm::Not}, {"do", SpecialForm::Do},
+        {"+", SpecialForm::Add}, {"-", SpecialForm::Sub}, {"*", SpecialForm::Mul},
+        {"/", SpecialForm::Div}, {"%", SpecialForm::Mod},
+        {"==", SpecialForm::CmpEq}, {"!=", SpecialForm::CmpNe},
+        {"<", SpecialForm::CmpLt}, {">", SpecialForm::CmpGt},
+        {"<=", SpecialForm::CmpLe}, {">=", SpecialForm::CmpGe},
+    };
+    auto it = table.find(op);
+    return it != table.end() ? it->second : SpecialForm::None;
+}
+
+static std::string valueToString(const BblValue& val);
+
 BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
     if (node.children.empty()) {
         return BblValue::makeNull();
@@ -862,53 +923,21 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
     // Special forms
     if (head.type == NodeType::Symbol) {
         auto& op = head.stringVal;
-
-        if (op == "def") {
-            if (node.children.size() < 3) {
-                throw BBL::Error{"def requires a name and value"};
-            }
-            auto& name = node.children[1];
-            if (name.type != NodeType::Symbol) {
-                throw BBL::Error{"def: first argument must be a symbol"};
-            }
-            BblValue val = eval(node.children[2], scope);
-            if (val.type == BBL::Type::Struct) {
-                BblStruct* copy = allocStruct(val.structVal->desc);
-                memcpy(copy->data.data(), val.structVal->data.data(), val.structVal->desc->totalSize);
-                val = BblValue::makeStruct(copy);
-            }
-            scope.def(name.stringVal, val);
-
-            // Enable recursive functions: if the value is a fn whose body
-            // references the name being defined (a free variable that wasn't
-            // captured because the def hadn't completed yet), inject self.
-            if (val.type == BBL::Type::Fn && val.fnVal) {
-                auto& defName = name.stringVal;
-                // Check if defName is a free variable of the fn body
-                // but not already in captures
-                bool alreadyCaptured = false;
-                for (auto& [cname, cval] : val.fnVal->captures) {
-                    if (cname == defName) { alreadyCaptured = true; break; }
-                }
-                if (!alreadyCaptured) {
-                    std::vector<std::string> freeVars;
-                    std::vector<std::string> bound = val.fnVal->params;
-                    gatherFreeVarsBody(val.fnVal->body, bound, freeVars);
-                    if (contains(freeVars, defName)) {
-                        val.fnVal->captures.emplace_back(defName, val);
-                    }
-                }
-            }
-
-            return BblValue::makeNull();
+        SpecialForm sf;
+        if (head.cachedSpecialForm >= 0) {
+            sf = static_cast<SpecialForm>(head.cachedSpecialForm);
+        } else {
+            sf = lookupSpecialForm(op);
+            head.cachedSpecialForm = static_cast<int8_t>(sf);
         }
 
-        if (op == "set" || op == "=") {
+        switch (sf) {
+        case SpecialForm::Eq: {
             if (node.children.size() < 3) {
-                throw BBL::Error{op + " requires a target and value"};
+                throw BBL::Error{"= requires a target and value"};
             }
             auto& target = node.children[1];
-            // Place expression: (= v.x val) or (set v.x val)
+            // Place expression: (= v.x val)
             if (target.type == NodeType::DotAccess && target.children.size() == 1) {
                 BblValue obj = eval(target.children[0], scope);
                 auto& fieldName = target.stringVal;
@@ -935,46 +964,52 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 throw BBL::Error{"cannot set field on " + typeName(obj.type)};
             }
             if (target.type != NodeType::Symbol) {
-                throw BBL::Error{op + ": first argument must be a symbol or place expression"};
+                throw BBL::Error{"=: first argument must be a symbol or place expression"};
             }
             BblValue val = eval(node.children[2], scope);
-            if (op == "set") {
-                // set: rebind existing only
-                scope.set(target.stringVal, val);
+            if (!target.symbolId) target.symbolId = resolveSymbol(target.stringVal);
+            uint32_t targetId = target.symbolId;
+            // assign-or-create
+            BblValue* existing = scope.lookup(targetId);
+            if (existing) {
+                scope.set(targetId, val);
             } else {
-                // =: assign-or-create
-                BblValue* existing = scope.lookup(target.stringVal);
-                if (existing) {
-                    scope.set(target.stringVal, val);
-                } else {
-                    if (val.type == BBL::Type::Struct) {
-                        BblStruct* copy = allocStruct(val.structVal->desc);
-                        memcpy(copy->data.data(), val.structVal->data.data(), val.structVal->desc->totalSize);
-                        val = BblValue::makeStruct(copy);
-                    }
-                    scope.def(target.stringVal, val);
+                if (val.type == BBL::Type::Struct) {
+                    BblStruct* copy = allocStruct(val.structVal->desc);
+                    memcpy(copy->data.data(), val.structVal->data.data(), val.structVal->desc->totalSize);
+                    val = BblValue::makeStruct(copy);
                 }
-                // Recursive function self-capture (same as def)
-                if (val.type == BBL::Type::Fn && val.fnVal) {
-                    auto& defName = target.stringVal;
-                    bool alreadyCaptured = false;
-                    for (auto& [cname, cval] : val.fnVal->captures) {
-                        if (cname == defName) { alreadyCaptured = true; break; }
-                    }
-                    if (!alreadyCaptured) {
-                        std::vector<std::string> freeVars;
-                        std::vector<std::string> bound = val.fnVal->params;
-                        gatherFreeVarsBody(val.fnVal->body, bound, freeVars);
-                        if (contains(freeVars, defName)) {
-                            val.fnVal->captures.emplace_back(defName, val);
-                        }
+                scope.def(targetId, val);
+            }
+            // Recursive function self-capture
+            if (val.type == BBL::Type::Fn && val.fnVal) {
+                auto& defName = target.stringVal;
+                uint32_t defId = targetId;
+                bool alreadyCaptured = false;
+                for (auto& [cid, cval] : val.fnVal->captures) {
+                    if (cid == defId) { alreadyCaptured = true; break; }
+                }
+                if (!alreadyCaptured) {
+                    std::vector<std::string> freeVars;
+                    std::vector<std::string> bound = val.fnVal->params;
+                    gatherFreeVarsBody(val.fnVal->body, bound, freeVars);
+                    if (contains(freeVars, defName)) {
+                        size_t slot = val.fnVal->slotIndex.size();
+                        val.fnVal->slotIndex[defId] = slot;
+                        val.fnVal->captures.emplace_back(defId, val);
                     }
                 }
             }
             return BblValue::makeNull();
         }
-
-        if (op == "if") {
+        case SpecialForm::Do: {
+            BblValue result = BblValue::makeNull();
+            for (size_t i = 1; i < node.children.size(); i++) {
+                result = eval(node.children[i], scope);
+            }
+            return result;
+        }
+        case SpecialForm::If: {
             if (node.children.size() < 3) {
                 throw BBL::Error{"if requires a condition and then-body"};
             }
@@ -989,8 +1024,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             }
             return BblValue::makeNull();
         }
-
-        if (op == "loop") {
+        case SpecialForm::Loop: {
             if (node.children.size() < 3) {
                 throw BBL::Error{"loop requires a condition and body"};
             }
@@ -1009,8 +1043,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             }
             return BblValue::makeNull();
         }
-
-        if (op == "and") {
+        case SpecialForm::And: {
             if (node.children.size() != 3) {
                 throw BBL::Error{"and requires exactly 2 arguments"};
             }
@@ -1027,8 +1060,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             }
             return BblValue::makeBool(right.boolVal);
         }
-
-        if (op == "or") {
+        case SpecialForm::Or: {
             if (node.children.size() != 3) {
                 throw BBL::Error{"or requires exactly 2 arguments"};
             }
@@ -1045,8 +1077,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             }
             return BblValue::makeBool(right.boolVal);
         }
-
-        if (op == "fn") {
+        case SpecialForm::Fn: {
             if (node.children.size() < 3) {
                 throw BBL::Error{"fn requires a parameter list and body"};
             }
@@ -1060,6 +1091,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                     throw BBL::Error{"fn: parameter must be a symbol"};
                 }
                 fn->params.push_back(p.stringVal);
+                fn->paramIds.push_back(resolveSymbol(p.stringVal));
             }
             fn->body.assign(node.children.begin() + 2, node.children.end());
 
@@ -1071,23 +1103,35 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             // Filter: only capture names that are special forms or builtins
             // Actually, capture everything that exists in scope
             static const std::vector<std::string> specialForms = {
-                "def", "set", "=", "if", "loop", "and", "or", "fn", "exec", "not"
+                "=", "if", "loop", "and", "or", "fn", "exec", "not", "do"
             };
             for (auto& name : freeVars) {
                 if (contains(specialForms, name)) {
                     continue;
                 }
-                BblValue* val = scope.lookup(name);
+                uint32_t nameId = resolveSymbol(name);
+                BblValue* val = scope.lookup(nameId);
                 if (val) {
-                    fn->captures.emplace_back(name, *val);
+                    fn->captures.emplace_back(nameId, *val);
                 }
                 // If not found in scope, it might be defined later or be an error at call time
             }
 
+            // Build slot layout: captures first, then params
+            {
+                size_t slot = 0;
+                for (auto& [id, val] : fn->captures) {
+                    fn->slotIndex[id] = slot++;
+                }
+                fn->paramSlotStart = slot;
+                for (auto id : fn->paramIds) {
+                    fn->slotIndex[id] = slot++;
+                }
+            }
+
             return BblValue::makeFn(fn);
         }
-
-        if (op == "exec") {
+        case SpecialForm::Exec: {
             if (node.children.size() < 2) {
                 throw BBL::Error{"exec requires a code string argument"};
             }
@@ -1105,8 +1149,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             }
             return result;
         }
-
-        if (op == "execfile") {
+        case SpecialForm::ExecFile: {
             if (node.children.size() < 2) {
                 throw BBL::Error{"execfile requires a path argument"};
             }
@@ -1117,8 +1160,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             execfile(pathVal.stringVal->data);
             return BblValue::makeNull();
         }
-
-        if (op == "vector") {
+        case SpecialForm::Vector: {
             if (node.children.size() < 2) {
                 throw BBL::Error{"vector requires a type argument"};
             }
@@ -1153,8 +1195,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             }
             return BblValue::makeVector(vec);
         }
-
-        if (op == "table") {
+        case SpecialForm::Table: {
             BblTable* tbl = allocTable();
             size_t argCount = node.children.size() - 1;
             if (argCount % 2 != 0) {
@@ -1170,22 +1211,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             }
             return BblValue::makeTable(tbl);
         }
-
-        // Check if this is a struct constructor call
-        {
-            auto sit = structDescs.find(op);
-            if (sit != structDescs.end()) {
-                std::vector<BblValue> args;
-                for (size_t i = 1; i < node.children.size(); i++) {
-                    args.push_back(eval(node.children[i], scope));
-                }
-                return constructStruct(&sit->second, args, node.line);
-            }
-        }
-
-        // Not a special form - check for built-in operators and functions
-
-        if (op == "not") {
+        case SpecialForm::Not: {
             if (node.children.size() != 2) {
                 throw BBL::Error{"not requires exactly 1 argument"};
             }
@@ -1195,8 +1221,11 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             }
             return BblValue::makeBool(!arg.boolVal);
         }
-
-        if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%") {
+        case SpecialForm::Add:
+        case SpecialForm::Sub:
+        case SpecialForm::Mul:
+        case SpecialForm::Div:
+        case SpecialForm::Mod: {
             if (node.children.size() < 3) {
                 throw BBL::Error{op + " requires at least 2 arguments"};
             }
@@ -1205,10 +1234,11 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 std::string result = left.stringVal->data;
                 for (size_t i = 2; i < node.children.size(); i++) {
                     BblValue right = eval(node.children[i], scope);
-                    if (right.type != BBL::Type::String) {
-                        throw BBL::Error{"type mismatch: + cannot apply to string and " + typeName(right.type)};
+                    if (right.type == BBL::Type::String) {
+                        result += right.stringVal->data;
+                    } else {
+                        result += valueToString(right);
                     }
-                    result += right.stringVal->data;
                 }
                 return BblValue::makeString(intern(result));
             }
@@ -1225,44 +1255,52 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             if (useFloat) {
                 double l = (left.type == BBL::Type::Float) ? left.floatVal : static_cast<double>(left.intVal);
                 double r = (right.type == BBL::Type::Float) ? right.floatVal : static_cast<double>(right.intVal);
-                if (op == "+") { return BblValue::makeFloat(l + r); }
-                if (op == "-") { return BblValue::makeFloat(l - r); }
-                if (op == "*") { return BblValue::makeFloat(l * r); }
-                if (op == "/") {
-                    if (r == 0.0) { throw BBL::Error{"division by zero"}; }
-                    return BblValue::makeFloat(l / r);
-                }
-                if (op == "%") {
-                    if (r == 0.0) { throw BBL::Error{"division by zero"}; }
-                    return BblValue::makeFloat(std::fmod(l, r));
+                switch (sf) {
+                    case SpecialForm::Add: return BblValue::makeFloat(l + r);
+                    case SpecialForm::Sub: return BblValue::makeFloat(l - r);
+                    case SpecialForm::Mul: return BblValue::makeFloat(l * r);
+                    case SpecialForm::Div:
+                        if (r == 0.0) { throw BBL::Error{"division by zero"}; }
+                        return BblValue::makeFloat(l / r);
+                    case SpecialForm::Mod:
+                        if (r == 0.0) { throw BBL::Error{"division by zero"}; }
+                        return BblValue::makeFloat(std::fmod(l, r));
+                    default: break;
                 }
             } else {
                 int64_t l = left.intVal;
                 int64_t r = right.intVal;
-                if (op == "+") { return BblValue::makeInt(l + r); }
-                if (op == "-") { return BblValue::makeInt(l - r); }
-                if (op == "*") { return BblValue::makeInt(l * r); }
-                if (op == "/") {
-                    if (r == 0) { throw BBL::Error{"division by zero"}; }
-                    return BblValue::makeInt(l / r);
-                }
-                if (op == "%") {
-                    if (r == 0) { throw BBL::Error{"division by zero"}; }
-                    return BblValue::makeInt(l % r);
+                switch (sf) {
+                    case SpecialForm::Add: return BblValue::makeInt(l + r);
+                    case SpecialForm::Sub: return BblValue::makeInt(l - r);
+                    case SpecialForm::Mul: return BblValue::makeInt(l * r);
+                    case SpecialForm::Div:
+                        if (r == 0) { throw BBL::Error{"division by zero"}; }
+                        return BblValue::makeInt(l / r);
+                    case SpecialForm::Mod:
+                        if (r == 0) { throw BBL::Error{"division by zero"}; }
+                        return BblValue::makeInt(l % r);
+                    default: break;
                 }
             }
+            break; // unreachable but satisfies compiler
         }
 
-        if (op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">=") {
+        case SpecialForm::CmpEq:
+        case SpecialForm::CmpNe:
+        case SpecialForm::CmpLt:
+        case SpecialForm::CmpGt:
+        case SpecialForm::CmpLe:
+        case SpecialForm::CmpGe: {
             if (node.children.size() != 3) {
                 throw BBL::Error{op + " requires exactly 2 arguments"};
             }
             BblValue left = eval(node.children[1], scope);
             BblValue right = eval(node.children[2], scope);
 
-            if (op == "==" || op == "!=") {
+            if (sf == SpecialForm::CmpEq || sf == SpecialForm::CmpNe) {
                 bool eq = (left == right);
-                return BblValue::makeBool(op == "==" ? eq : !eq);
+                return BblValue::makeBool(sf == SpecialForm::CmpEq ? eq : !eq);
             }
 
             if (left.type != BBL::Type::Int && left.type != BBL::Type::Float) {
@@ -1272,16 +1310,43 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 throw BBL::Error{"type mismatch: " + op + " cannot apply to " + typeName(left.type) + " and " + typeName(right.type)};
             }
 
+            // Integer fast-path — skip int→double conversion
+            if (left.type == BBL::Type::Int && right.type == BBL::Type::Int) {
+                switch (sf) {
+                    case SpecialForm::CmpLt: return BblValue::makeBool(left.intVal < right.intVal);
+                    case SpecialForm::CmpGt: return BblValue::makeBool(left.intVal > right.intVal);
+                    case SpecialForm::CmpLe: return BblValue::makeBool(left.intVal <= right.intVal);
+                    case SpecialForm::CmpGe: return BblValue::makeBool(left.intVal >= right.intVal);
+                    default: break;
+                }
+            }
+
             double l = (left.type == BBL::Type::Float) ? left.floatVal : static_cast<double>(left.intVal);
             double r = (right.type == BBL::Type::Float) ? right.floatVal : static_cast<double>(right.intVal);
 
-            if (op == "<")  { return BblValue::makeBool(l < r); }
-            if (op == ">")  { return BblValue::makeBool(l > r); }
-            if (op == "<=") { return BblValue::makeBool(l <= r); }
-            if (op == ">=") { return BblValue::makeBool(l >= r); }
+            switch (sf) {
+                case SpecialForm::CmpLt: return BblValue::makeBool(l < r);
+                case SpecialForm::CmpGt: return BblValue::makeBool(l > r);
+                case SpecialForm::CmpLe: return BblValue::makeBool(l <= r);
+                case SpecialForm::CmpGe: return BblValue::makeBool(l >= r);
+                default: break;
+            }
+            break;
         }
 
-        // Fall through to function call
+        case SpecialForm::None: {
+            // Check if this is a struct constructor call
+            auto sit = structDescs.find(op);
+            if (sit != structDescs.end()) {
+                std::vector<BblValue> args;
+                for (size_t i = 1; i < node.children.size(); i++) {
+                    args.push_back(eval(node.children[i], scope));
+                }
+                return constructStruct(&sit->second, args, node.line);
+            }
+            break; // fall through to function call
+        }
+        } // end switch(sf)
     }
 
     // DotAccess call: (obj.method args...)
@@ -1472,12 +1537,20 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
 
     // fn call
     if (headVal.type == BBL::Type::Fn) {
-        std::vector<BblValue> args;
-        for (size_t i = 1; i < node.children.size(); i++) {
-            args.push_back(eval(node.children[i], scope));
+        size_t argc = node.children.size() - 1;
+        BblValue sbuf[8];
+        std::vector<BblValue> heap_args;
+        BblValue* args;
+        if (argc <= 8) {
+            for (size_t i = 0; i < argc; i++) sbuf[i] = eval(node.children[i + 1], scope);
+            args = sbuf;
+        } else {
+            heap_args.resize(argc);
+            for (size_t i = 0; i < argc; i++) heap_args[i] = eval(node.children[i + 1], scope);
+            args = heap_args.data();
         }
         if (headVal.isCFn) {
-            callArgs = std::move(args);
+            callArgs.assign(args, args + argc);
             hasReturn = false;
             returnValue = BblValue::makeNull();
             callStack.push_back(Frame{currentFile, node.line, head.type == NodeType::Symbol ? head.stringVal : "<expr>"});
@@ -1490,29 +1563,30 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             (void)rc;
             return ret;
         }
-        return callFn(headVal.fnVal, args, node.line);
+        return callFn(headVal.fnVal, args, argc, node.line);
     }
 
     throw BBL::Error{"cannot call " + typeName(headVal.type) + " as a function"};
 }
 
-BblValue BblState::callFn(BblFn* fn, const std::vector<BblValue>& args, int callLine) {
-    if (args.size() != fn->params.size()) {
+BblValue BblState::callFn(BblFn* fn, const BblValue* args, size_t argc, int callLine) {
+    if (argc != fn->params.size()) {
         throw BBL::Error{"arity mismatch: expected " + std::to_string(fn->params.size())
-                         + " argument(s), got " + std::to_string(args.size())};
+                         + " argument(s), got " + std::to_string(argc)};
     }
 
-    // Fresh scope for the call — no parent scope chain for closures
-    // Instead, use captures + args
+    // Fresh scope for the call — flat mode with slots for captures + params
     BblScope callScope;
+    callScope.slotMap = &fn->slotIndex;
+    callScope.slots.resize(fn->slotIndex.size());
     activeScopes.push_back(&callScope);
-    // Load captures
-    for (auto& [name, val] : fn->captures) {
-        callScope.bindings[name] = val;
+    // Load captures into slots
+    for (auto& [id, val] : fn->captures) {
+        callScope.slots[fn->slotIndex.at(id)] = val;
     }
-    // Bind args (overrides captures if same name)
-    for (size_t i = 0; i < fn->params.size(); i++) {
-        callScope.bindings[fn->params[i]] = args[i];
+    // Bind args into slots by direct offset (no hash lookup)
+    for (size_t i = 0; i < argc; i++) {
+        callScope.slots[fn->paramSlotStart + i] = args[i];
     }
 
     BblValue result = BblValue::makeNull();
@@ -1604,20 +1678,23 @@ void BblState::execfile(const std::string& path) {
 // ---------- Introspection ----------
 
 bool BblState::has(const std::string& name) const {
-    return rootScope.bindings.count(name) > 0;
+    uint32_t id = resolveSymbol(name);
+    return rootScope.bindings->count(id) > 0;
 }
 
 BBL::Type BblState::getType(const std::string& name) const {
-    auto it = rootScope.bindings.find(name);
-    if (it == rootScope.bindings.end()) {
+    uint32_t id = resolveSymbol(name);
+    auto it = rootScope.bindings->find(id);
+    if (it == rootScope.bindings->end()) {
         return BBL::Type::Null;
     }
     return it->second.type;
 }
 
 BblValue BblState::get(const std::string& name) const {
-    auto it = rootScope.bindings.find(name);
-    if (it == rootScope.bindings.end()) {
+    uint32_t id = resolveSymbol(name);
+    auto it = rootScope.bindings->find(id);
+    if (it == rootScope.bindings->end()) {
         throw BBL::Error{"undefined symbol: " + name};
     }
     return it->second;
@@ -1674,24 +1751,24 @@ BblBinary* BblState::getBinary(const std::string& name) const {
 // ---------- Setters ----------
 
 void BblState::setInt(const std::string& name, int64_t val) {
-    rootScope.def(name, BblValue::makeInt(val));
+    rootScope.def(resolveSymbol(name), BblValue::makeInt(val));
 }
 
 void BblState::setFloat(const std::string& name, double val) {
-    rootScope.def(name, BblValue::makeFloat(val));
+    rootScope.def(resolveSymbol(name), BblValue::makeFloat(val));
 }
 
 void BblState::setString(const std::string& name, const char* str) {
-    rootScope.def(name, BblValue::makeString(intern(str)));
+    rootScope.def(resolveSymbol(name), BblValue::makeString(intern(str)));
 }
 
 void BblState::set(const std::string& name, BblValue val) {
-    rootScope.def(name, val);
+    rootScope.def(resolveSymbol(name), val);
 }
 
 void BblState::setBinary(const std::string& name, const uint8_t* ptr, size_t size) {
     std::vector<uint8_t> data(ptr, ptr + size);
-    rootScope.def(name, BblValue::makeBinary(allocBinary(std::move(data))));
+    rootScope.def(resolveSymbol(name), BblValue::makeBinary(allocBinary(std::move(data))));
 }
 
 void BblState::pushUserData(const std::string& typeName, void* ptr) {
@@ -1702,7 +1779,7 @@ void BblState::pushUserData(const std::string& typeName, void* ptr) {
 // ---------- C function registration ----------
 
 void BblState::defn(const std::string& name, BblCFunction fn) {
-    rootScope.def(name, BblValue::makeCFn(fn));
+    rootScope.def(resolveSymbol(name), BblValue::makeCFn(fn));
 }
 
 // ---------- C function args ----------
@@ -2088,120 +2165,62 @@ void BblState::printBacktrace(const std::string& what) {
 
 // ---------- addPrint / addStdLib ----------
 
+static std::string valueToString(const BblValue& val) {
+    char buf[64];
+    switch (val.type) {
+        case BBL::Type::String:
+            return val.stringVal->data;
+        case BBL::Type::Int:
+            snprintf(buf, sizeof(buf), "%" PRId64, val.intVal);
+            return buf;
+        case BBL::Type::Float:
+            snprintf(buf, sizeof(buf), "%g", val.floatVal);
+            return buf;
+        case BBL::Type::Bool:
+            return val.boolVal ? "true" : "false";
+        case BBL::Type::Null:
+            return "null";
+        case BBL::Type::Binary:
+            snprintf(buf, sizeof(buf), "<binary %zu bytes>", val.binaryVal->length());
+            return buf;
+        case BBL::Type::Fn:
+            return "<fn>";
+        case BBL::Type::Table:
+            return "<table length=" + std::to_string(val.tableVal->length()) + ">";
+        case BBL::Type::Vector:
+            return "<vector " + val.vectorVal->elemType + " length=" + std::to_string(val.vectorVal->length()) + ">";
+        case BBL::Type::Struct:
+            return "<struct " + val.structVal->desc->name + ">";
+        case BBL::Type::UserData:
+            return "<userdata " + val.userdataVal->desc->name + ">";
+        default:
+            return "<unknown>";
+    }
+}
+
 static int bblPrint(BblState* bbl) {
     int count = bbl->argCount();
     for (int i = 0; i < count; i++) {
-        BBL::Type t = bbl->getArgType(i);
-        char buf[64];
-        switch (t) {
-            case BBL::Type::String:
-                if (bbl->printCapture) {
-                    *bbl->printCapture += bbl->getStringArg(i);
-                } else {
-                    fputs(bbl->getStringArg(i), stdout);
-                }
-                break;
-            case BBL::Type::Int:
-                snprintf(buf, sizeof(buf), "%" PRId64, bbl->getIntArg(i));
-                if (bbl->printCapture) {
-                    *bbl->printCapture += buf;
-                } else {
-                    fputs(buf, stdout);
-                }
-                break;
-            case BBL::Type::Float:
-                snprintf(buf, sizeof(buf), "%g", bbl->getArg(i).floatVal);
-                if (bbl->printCapture) {
-                    *bbl->printCapture += buf;
-                } else {
-                    fputs(buf, stdout);
-                }
-                break;
-            case BBL::Type::Bool:
-                if (bbl->printCapture) {
-                    *bbl->printCapture += bbl->getBoolArg(i) ? "true" : "false";
-                } else {
-                    fputs(bbl->getBoolArg(i) ? "true" : "false", stdout);
-                }
-                break;
-            case BBL::Type::Null:
-                if (bbl->printCapture) {
-                    *bbl->printCapture += "null";
-                } else {
-                    fputs("null", stdout);
-                }
-                break;
-            case BBL::Type::Binary: {
-                auto* b = bbl->getBinaryArg(i);
-                snprintf(buf, sizeof(buf), "<binary %zu bytes>", b->length());
-                if (bbl->printCapture) {
-                    *bbl->printCapture += buf;
-                } else {
-                    fputs(buf, stdout);
-                }
-                break;
-            }
-            case BBL::Type::Fn:
-                if (bbl->printCapture) {
-                    *bbl->printCapture += "<fn>";
-                } else {
-                    fputs("<fn>", stdout);
-                }
-                break;
-            case BBL::Type::Table: {
-                auto* tbl = bbl->getArg(i).tableVal;
-                std::string s = "<table length=" + std::to_string(tbl->length()) + ">";
-                if (bbl->printCapture) {
-                    *bbl->printCapture += s;
-                } else {
-                    fputs(s.c_str(), stdout);
-                }
-                break;
-            }
-            case BBL::Type::Vector: {
-                auto* vec = bbl->getArg(i).vectorVal;
-                std::string s = "<vector " + vec->elemType + " length=" + std::to_string(vec->length()) + ">";
-                if (bbl->printCapture) {
-                    *bbl->printCapture += s;
-                } else {
-                    fputs(s.c_str(), stdout);
-                }
-                break;
-            }
-            case BBL::Type::Struct: {
-                auto* st = bbl->getArg(i).structVal;
-                std::string s = "<struct " + st->desc->name + ">";
-                if (bbl->printCapture) {
-                    *bbl->printCapture += s;
-                } else {
-                    fputs(s.c_str(), stdout);
-                }
-                break;
-            }
-            case BBL::Type::UserData: {
-                auto* ud = bbl->getArg(i).userdataVal;
-                std::string s = "<userdata " + ud->desc->name + ">";
-                if (bbl->printCapture) {
-                    *bbl->printCapture += s;
-                } else {
-                    fputs(s.c_str(), stdout);
-                }
-                break;
-            }
-            default:
-                if (bbl->printCapture) {
-                    *bbl->printCapture += "<unknown>";
-                } else {
-                    fputs("<unknown>", stdout);
-                }
-                break;
+        std::string s = valueToString(bbl->getArg(i));
+        if (bbl->printCapture) {
+            *bbl->printCapture += s;
+        } else {
+            fputs(s.c_str(), stdout);
         }
     }
     return 0;
 }
 
+static int bblStr(BblState* bbl) {
+    if (bbl->argCount() != 1) throw BBL::Error{"str requires 1 argument"};
+    std::string s = valueToString(bbl->getArg(0));
+    bbl->pushString(s.c_str());
+    return 1;
+}
+
 void BBL::addPrint(BblState& bbl) {
     bbl.defn("print", bblPrint);
+    bbl.defn("str", bblStr);
 }
 
 // ---------- addFileIo ----------

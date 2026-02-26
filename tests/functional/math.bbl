@@ -1,5 +1,5 @@
 // math.bbl - functional test for math stdlib
-(def r (sqrt 4.0))
-(def a (abs -7))
-(def p (pow 2.0 8.0))
+(= r (sqrt 4.0))
+(= a (abs -7))
+(= p (pow 2.0 8.0))
 (print r " " a " " p)

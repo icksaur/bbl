@@ -1,0 +1,45 @@
+// Task: Generate a 15x15 multiplication table and write to /tmp/bblbench_mult.txt
+// Tests: file I/O, str, string + auto-coerce, nested loops
+
+// Left-pad a string with spaces to reach target width
+(= pad-left (fn (s width)
+    (loop (< s.length width)
+        (= s (+ " " s)))
+    s))
+
+(= size 15)
+(= out "")
+
+// Header row
+(= out (+ out "    |"))
+(= j 1)
+(loop (<= j size)
+    (= out (+ out (pad-left (str j) 4)))
+    (= j (+ j 1)))
+(= out (+ out "\n"))
+
+// Separator line
+(= out (+ out "----+"))
+(= j 1)
+(loop (<= j size)
+    (= out (+ out "----"))
+    (= j (+ j 1)))
+(= out (+ out "\n"))
+
+// Data rows
+(= i 1)
+(loop (<= i size)
+    (= out (+ out (pad-left (str i) 4) "|"))
+    (= j 1)
+    (loop (<= j size)
+        (= out (+ out (pad-left (str (* i j)) 4)))
+        (= j (+ j 1)))
+    (= out (+ out "\n"))
+    (= i (+ i 1)))
+
+// Write to file
+(= f (fopen "/tmp/bblbench_mult.txt" "w"))
+(f.write out)
+(f.close)
+
+(print out.length " bytes written\n")

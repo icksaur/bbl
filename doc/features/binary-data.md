@@ -22,8 +22,8 @@ First-class binary blobs that can embed arbitrary byte sequences (textures, audi
 Bencode uses the same `<size>:<data>` convention.
 
 ```bbl
-(def texture 0b65536:<65536 raw bytes>)
-(def audio 0b1048576:<1048576 bytes of PCM data>)
+(= texture 0b65536:<65536 raw bytes>)
+(= audio 0b1048576:<1048576 bytes of PCM data>)
 ```
 
 ## lexer behavior
@@ -51,7 +51,7 @@ BblBinary {
 
 ## ownership
 
-- `binary` is GC-managed.  `(def b a)` where `a` is a binary makes both names point to the same buffer.
+- `binary` is GC-managed.  `(= b a)` where `a` is a binary makes both names point to the same buffer.
 - The GC frees the buffer when no references remain.
 
 ## methods
@@ -69,7 +69,7 @@ A binary blob's buffer is **mutable in memory**.  Script code and C++ can write 
 `filebytes` reads an external file's entire contents into a `BblBinary`.
 
 ```bbl
-(def tex (filebytes "texture.png"))
+(= tex (filebytes "texture.png"))
 ```
 
 ### behavior
@@ -111,11 +111,11 @@ Binary blobs are the reason BBL exists.  A serializer writes `.bbl` files with e
 ```bbl
 // vertex and mesh types registered from C++
 
-(def player-verts (vector vertex
+(= player-verts (vector vertex
     (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)
 ))
-(def player-texture 0b65536:<65536 bytes of png>)
-(def player-audio 0b1048576:<1048576 bytes of wav>)
+(= player-texture 0b65536:<65536 bytes of png>)
+(= player-audio 0b1048576:<1048576 bytes of wav>)
 ```
 
 C++ loads the script.  The texture and audio blobs are read into memory at parse time.
@@ -126,7 +126,7 @@ From a shell:
 
 ```bash
 SIZE=$(stat -c%s texture.png)
-printf '(def texture 0b%d:' "$SIZE" > scene.bbl
+printf '(= texture 0b%d:' "$SIZE" > scene.bbl
 cat texture.png >> scene.bbl
 printf ')\n' >> scene.bbl
 ```

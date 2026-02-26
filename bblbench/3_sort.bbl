@@ -1,0 +1,59 @@
+// Task: Implement insertion sort on a table of 20 numbers
+// Tests: tables as mutable arrays, nested loops, comparison, function-as-block
+
+// Build the dataset (push gives 1-based integer keys)
+(= data (table))
+(data.push 38) (data.push 27) (data.push 43) (data.push 3)
+(data.push 9)  (data.push 82) (data.push 10) (data.push 44)
+(data.push 17) (data.push 25) (data.push 91) (data.push 4)
+(data.push 62) (data.push 55) (data.push 71) (data.push 36)
+(data.push 15) (data.push 48) (data.push 20) (data.push 67)
+
+(= len (data.length))
+
+// Print unsorted
+(print "unsorted: ")
+(= i 1)
+(loop (<= i len)
+    (if (> i 1)
+        (print " "))
+    (print (data.get i))
+    (= i (+ i 1)))
+(print "\n")
+
+// Insertion sort
+// Inner loop: shift elements right until we find the insertion point
+(= shift-right (fn (data j key)
+    (loop (and (> j 1) (> (data.get (- j 1)) key))
+        (data.set j (data.get (- j 1)))
+        (= j (- j 1)))
+    (data.set j key)))
+
+(= i 2)
+(loop (<= i len)
+    (= key (data.get i))
+    (shift-right data i key)
+    (= i (+ i 1)))
+
+// Print sorted
+(print "sorted:   ")
+(= i 1)
+(loop (<= i len)
+    (if (> i 1)
+        (print " "))
+    (print (data.get i))
+    (= i (+ i 1)))
+(print "\n")
+
+// Verify: check that each element <= next
+(= ok true)
+(= i 1)
+(loop (< i len)
+    (if (> (data.get i) (data.get (+ i 1)))
+        (= ok false))
+    (= i (+ i 1)))
+(print "sorted_ok: " ok "\n")
+
+// Print min and max
+(print "min: " (data.get 1) "\n")
+(print "max: " (data.get len) "\n")

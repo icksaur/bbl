@@ -1,4 +1,4 @@
 // binary_data.bbl - functional test for binary data
-(def b 0b5:hello)
-(def n (b.length))
+(= b 0b5:hello)
+(= n (b.length))
 (print n)

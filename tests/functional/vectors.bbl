@@ -1,4 +1,4 @@
-(def v (vector int 10 20 30))
+(= v (vector int 10 20 30))
 (print (v.length))
 (print " ")
 (v.push 40)
@@ -6,5 +6,5 @@
 (print " ")
 (print (v.at 0))
 (print " ")
-(def last (v.pop))
+(= last (v.pop))
 (print last)

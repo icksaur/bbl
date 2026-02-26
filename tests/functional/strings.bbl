@@ -1,5 +1,5 @@
-(def a "hello")
-(def b "hello")
+(= a "hello")
+(= b "hello")
 (print (== a b))
 (print " " (+ "a" "b" "c"))
 (print " " (a.length))

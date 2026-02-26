@@ -7,9 +7,9 @@ BBL terminology and how it relates to (or differs from) traditional Lisp concept
 | term | meaning |
 |------|---------|
 | **s-expression** | `(op args...)` — the fundamental syntax unit. |
-| **special form** | An s-expression handled directly by the interpreter rather than as a function call.  `def`, `set`, `if`, `loop`, `fn`, `execfile`, `exec`, `and`, `or`. |
-| **place expression** | The target of `(set place val)` — an expression that identifies a writable location.  A symbol (`x`), a dot access (`v.x`), or an indexed access (`(verts.at 0)`).  Single-level only — no chaining like `(set a.b.c val)`. |
-| **binding** | An entry in a scope table: a name associated with a value.  `(def x 5)` creates a binding; `(set x 10)` rebinds it. |
+| **special form** | An s-expression handled directly by the interpreter rather than as a function call.  `=`, `if`, `loop`, `fn`, `execfile`, `exec`, `and`, `or`, `not`. |
+| **place expression** | The target of `(= place val)` — an expression that identifies a writable location.  A symbol (`x`), a dot access (`v.x`), or an indexed access (`(verts.at 0)`).  Single-level only — no chaining like `(= a.b.c val)`. |
+| **binding** | An entry in a scope table: a name associated with a value.  `(= x 5)` creates a binding; `(= x 10)` rebinds it. |
 | **scope** | A symbol → value table.  There is one scope type.  It is either **fresh** (new table, e.g. `fn` call) or **shared** (runs in the enclosing table, e.g. `loop`, `if`). |
 | **root scope** | The outermost scope of a script.  What other languages call "global."  Not special — same data structure as a function's local scope. |
 | **capture** | When a `fn` is evaluated, free variables from the enclosing scope are copied into the `fn` value's environment.  Value types are snapshotted; GC-managed types are shared (same object). |

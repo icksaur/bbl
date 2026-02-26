@@ -1,10 +1,10 @@
 // function_calls.bbl — many function calls
 // Measures: scope creation, callFn overhead
-(def add (fn (a b) (+ a b)))
-(def i 0)
-(def sum 0)
+(= add (fn (a b) (+ a b)))
+(= i 0)
+(= sum 0)
 (loop (< i 500000)
-    (set sum (add sum i))
-    (set i (+ i 1))
+    (= sum (add sum i))
+    (= i (+ i 1))
 )
 (print sum)

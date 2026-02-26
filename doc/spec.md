@@ -71,8 +71,6 @@ For place expressions (struct fields, table keys), `=` writes to the location:
 (= player.hp 80)      // write to table key or struct field
 ```
 
-**Legacy aliases**: `def` (always creates) and `set` (always rebinds, errors if missing) still work for backwards compatibility but `=` is preferred.
-
 ### lexer rules for literals
 
 Symbols never start with a digit.  All numeric and binary literals start with a digit.  The lexer dispatches on the first characters:
@@ -205,7 +203,7 @@ See [features/function.md](features/function.md) for recursive functions and the
 
 **Arithmetic**: `+` `-` `*` `/` `%` — prefix.  `int + int = int`, `float + float = float`, `int + float = float`.  Three promotion rules.
 
-`+` is variadic for strings — multiple string arguments are concatenated left-to-right: `(+ "hello" " " "world")` → `"hello world"`.  `+` on incompatible types (e.g. `int + string`) is a runtime error.
+`+` is variadic for strings — multiple string arguments are concatenated left-to-right: `(+ "hello" " " "world")` → `"hello world"`.  When the left operand is a string, non-string operands are auto-coerced: `(+ "score=" 42)` → `"score=42"`.  `+` where the left operand is numeric and right is string is a runtime error.
 
 **Comparison**: `==` `!=` `<` `>` `<=` `>=` — produce `bool`.  Numeric comparison promotes.  String `==`/`!=` use interned pointer equality (O(1)).  Ordering operators on strings are a type error.
 
@@ -225,8 +223,7 @@ Conditions in `if`, `loop`, and `and`/`or` must evaluate to `bool`.  Non-bool va
 | form | purpose |
 |------|--------|
 | `=` | assign-or-create: rebind if exists, create if not; also place writes |
-| `def` | create a new binding in current scope (legacy) |
-| `set` | rebind existing variable or place write (legacy) |
+| `do` | evaluate multiple expressions sequentially, return last value |
 | `loop` | while-loop |
 | `if` | conditional branching |
 | `and` | short-circuit logical AND |
@@ -237,26 +234,27 @@ Conditions in `if`, `loop`, and `and`/`or` must evaluate to `bool`.  Non-bool va
 
 ### control flow
 
-`loop` and `if` are special forms — their bodies run in the enclosing scope.
+`loop`, `if`, and `do` are special forms — their bodies run in the enclosing scope.
+
+`do` evaluates multiple expressions sequentially and returns the value of the last one:
 
 ```bbl
-(= i 0)
-(loop (< i 10)
-    (print i "\n")
-    (= i (+ i 1))     // modifies enclosing scope's i
-)
+(= result (do (= a 10) (= b 20) (+ a b)))   // result = 30
 ```
 
-`if` takes a condition, a then-body, and an optional else-body:
+`if` takes a condition, a then-body, and an optional else-body.  Each branch is a single expression — use `do` to group multiple expressions:
 
 ```bbl
 (if (== x 0)
     (print "zero")
-    (print "nonzero")
-)
+    (print "nonzero"))
+
+(if (> hp 0)
+    (do (= alive true) (print "alive\n"))
+    (do (= alive false) (print "dead\n")))
 ```
 
-`if` is a statement — it does not return a value.  To compute a value conditionally, use a function or assign in both branches:
+`if` is a statement — it does not return a value.  To compute a value conditionally, assign in both branches:
 
 ```bbl
 (= label "other")
@@ -299,7 +297,7 @@ Table iteration via `keys`:
 ```bbl
 (= verts (vector vertex (vertex 0 1 0) (vertex 1 0 0)))
 (print (verts.at 0).x)                    // read
-(set (verts.at 0) (vertex 5 5 5))         // write whole element
+(= (verts.at 0) (vertex 5 5 5))         // write whole element
 ```
 
 ### member access — the `.` operator
@@ -337,14 +335,14 @@ Place writes are **single-level only** — one dot or one `at`, not chained:
 |---------|---------|
 | `symbol` | assign variable: `(= x 5)` |
 | `obj.field` | struct field or table string-key: `(= v.x 5)` or `(= player.hp 80)` |
-| `(obj.at index)` | container index: `(set (verts.at 0) val)` |
+| `(obj.at index)` | container index: `(= (verts.at 0) val)` |
 
 For deeper mutation, use intermediate variables:
 
 ```bbl
 (= v (verts.at 0))
 (= v.x 5.0)
-(set (verts.at 0) v)
+(= (verts.at 0) v)
 ```
 
 ### method dispatch
@@ -363,6 +361,13 @@ Built-in container methods:
 | `table` | `get`, `set`, `delete`, `has`, `keys`, `length`, `push`, `pop`, `at` |
 | `string` | `length` (more in string library — deferred) |
 | `binary` | `length` |
+
+Built-in free functions (registered via `addStdLib`):
+
+| function | purpose |
+|----------|---------|
+| `print` | print values to stdout (no trailing newline) |
+| `str` | convert any value to its string representation |
 
 ### execfile / exec
 

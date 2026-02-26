@@ -54,8 +54,8 @@ GC-managed types (shared on assignment):
 ## examples
 
 ```bbl
-(def world "world")
-(def hello (fn ()
+(= world "world")
+(= hello (fn ()
     (print "Hello, " world "!\n")
 ))
 (hello)
@@ -63,12 +63,12 @@ GC-managed types (shared on assignment):
 
 ```bbl
 // vertex registered from C++ via StructBuilder
-(def tri (vector vertex (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
+(= tri (vector vertex (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
 (print (tri.at 0).x)
 ```
 
 ```bbl
-(def texture 0b65536:<65536 bytes of png data>)
+(= texture 0b65536:<65536 bytes of png data>)
 ```
 
 ## control flow
@@ -76,19 +76,19 @@ GC-managed types (shared on assignment):
 ### loops
 
 ```bbl
-(def i 0)
+(= i 0)
 (loop (< i 10)
     (print i "\n")
-    (set i (+ i 1))
+    (= i (+ i 1))
 )
 ```
 
 ### conditionals
 
 ```bbl
-(def label "other")
-(if (== choice 0) (set label "zero"))
-(if (== choice 1) (set label "one"))
+(= label "other")
+(if (== choice 0) (= label "zero"))
+(if (== choice 1) (= label "one"))
 ```
 
 ## tables
@@ -96,19 +96,19 @@ GC-managed types (shared on assignment):
 Heterogeneous key-value container.  String and integer keys.
 
 ```bbl
-(def player (table "name" "hero" "hp" 100 "alive" true))
+(= player (table "name" "hero" "hp" 100 "alive" true))
 (print player.name)
-(set player.hp 80)
+(= player.hp 80)
 
-(def items (table 1 "sword" 2 "shield" 3 "potion"))
+(= items (table 1 "sword" 2 "shield" 3 "potion"))
 (print (items.at 1))
 ```
 
 ## closures
 
 ```bbl
-(def make-adder (fn (n) (fn (x) (+ x n))))
-(def add5 (make-adder 5))
+(= make-adder (fn (n) (fn (x) (+ x n))))
+(= add5 (make-adder 5))
 (add5 3)   // 8
 ```
 
@@ -159,21 +159,21 @@ bbl.execfile("script.bbl");
 Binary blob literal: `0b<size>:<raw bytes>`.  The lexer reads all bytes immediately into memory.
 
 ```bbl
-(def png-texture 0b4096:<4096 bytes of png>)
+(= png-texture 0b4096:<4096 bytes of png>)
 (load-texture "character-skin" png-texture)
 ```
 
 Read from file:
 
 ```bbl
-(def texture (filebytes "texture.png"))
+(= texture (filebytes "texture.png"))
 ```
 
 Generate from shell:
 
 ```bash
 SIZE=$(stat -c%s texture.png)
-printf '(def texture 0b%d:' "$SIZE" > scene.bbl
+printf '(= texture 0b%d:' "$SIZE" > scene.bbl
 cat texture.png >> scene.bbl
 printf ')\n' >> scene.bbl
 ```

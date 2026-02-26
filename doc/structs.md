@@ -76,7 +76,7 @@ The inner struct's fields are accessible via dot chaining: `tri.a.x`.
 After registration, the type name is a callable constructor in scripts:
 
 ```bbl
-(def v (vertex 1.0 2.0 3.0))
+(= v (vertex 1.0 2.0 3.0))
 ```
 
 Arguments are positional, matching the order fields were registered.  The runtime validates argument count and types.
@@ -92,28 +92,28 @@ Read via `.`:
 Write via `set` (single-level place expression):
 
 ```bbl
-(set v.x 5.0)
+(= v.x 5.0)
 ```
 
 ### composition
 
 ```bbl
-(def tri (triangle (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
+(= tri (triangle (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
 (print tri.a.x)      // read through nested struct — allowed
 ```
 
 Chained reads work.  Chained writes do not — use an intermediate variable:
 
 ```bbl
-(def v tri.a)
-(set v.x 5.0)
-(set tri.a v)
+(= v tri.a)
+(= v.x 5.0)
+(= tri.a v)
 ```
 
 ### vectors of structs
 
 ```bbl
-(def verts (vector vertex
+(= verts (vector vertex
     (vertex 0 1 0)
     (vertex 1 0 0)
     (vertex -1 0 0)
@@ -128,9 +128,9 @@ Because structs are POD, the vector's backing buffer is a contiguous `T*` that C
 Structs are value types.  Assignment copies the bytes:
 
 ```bbl
-(def a (vertex 1.0 2.0 3.0))
-(def b a)             // b is an independent copy
-(set b.x 99.0)
+(= a (vertex 1.0 2.0 3.0))
+(= b a)             // b is an independent copy
+(= b.x 99.0)
 (print a.x)           // 1.0 — a is unchanged
 ```
 
@@ -141,7 +141,7 @@ Passing a struct to a function copies it.  Returning a struct from a function co
 Structs have no methods.  The `.` operator on a struct always resolves to field access.  If you need operations on struct data, define standalone functions:
 
 ```bbl
-(def vertex-length (fn (v)
+(= vertex-length (fn (v)
     (sqrt (+ (* v.x v.x) (* v.y v.y) (* v.z v.z)))
 ))
 (print (vertex-length (vertex 3.0 4.0 0.0)))   // 5.0

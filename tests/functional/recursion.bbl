@@ -1,9 +1,9 @@
 // Recursive factorial
-(def fact (fn (n)
-    (def result 1)
+(= fact (fn (n)
+    (= result 1)
     (if (<= n 1)
-        (set result 1)
-        (set result (* n (fact (- n 1))))
+        (= result 1)
+        (= result (* n (fact (- n 1))))
     )
     result
 ))
@@ -13,11 +13,11 @@
 (print (fact 10) "\n")
 
 // Recursive fibonacci
-(def fib (fn (n)
-    (def result 0)
+(= fib (fn (n)
+    (= result 0)
     (if (<= n 1)
-        (set result n)
-        (set result (+ (fib (- n 1)) (fib (- n 2))))
+        (= result n)
+        (= result (+ (fib (- n 1)) (fib (- n 2))))
     )
     result
 ))
@@ -26,22 +26,22 @@
 (print (fib 10) "\n")
 
 // Recursive countdown — returns base case
-(def countdown (fn (n)
-    (def result n)
+(= countdown (fn (n)
+    (= result n)
     (if (> n 0)
-        (set result (countdown (- n 1)))
+        (= result (countdown (- n 1)))
     )
     result
 ))
 (print (countdown 5) "\n")
 
 // Recursive sum of list elements via table
-(def sum-table (fn (t i)
-    (def result 0)
+(= sum-table (fn (t i)
+    (= result 0)
     (if (< i (t.length))
-        (set result (+ (t.at i) (sum-table t (+ i 1))))
+        (= result (+ (t.at i) (sum-table t (+ i 1))))
     )
     result
 ))
-(def nums (table 0 1 1 2 2 3 3 4 4 5))
+(= nums (table 0 1 1 2 2 3 3 4 4 5))
 (print (sum-table nums 0) "\n")

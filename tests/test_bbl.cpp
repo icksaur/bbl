@@ -61,12 +61,12 @@ TEST(test_lexer_basic) {
     ASSERT_EQ(lex.nextToken().type, TokenType::Eof);
 }
 
-TEST(test_lexer_def_string) {
-    BblLexer lex("(def x \"hello\")");
+TEST(test_lexer_eq_string) {
+    BblLexer lex("(= x \"hello\")");
     ASSERT_EQ(lex.nextToken().type, TokenType::LParen);
     auto d = lex.nextToken();
     ASSERT_EQ(d.type, TokenType::Symbol);
-    ASSERT_EQ(d.stringVal, std::string("def"));
+    ASSERT_EQ(d.stringVal, std::string("="));
     auto x = lex.nextToken();
     ASSERT_EQ(x.type, TokenType::Symbol);
     ASSERT_EQ(x.stringVal, std::string("x"));
@@ -213,7 +213,7 @@ TEST(test_parse_list) {
 }
 
 TEST(test_parse_nested) {
-    BblLexer lex("(def x (+ 1 2))");
+    BblLexer lex("(= x (+ 1 2))");
     auto nodes = parse(lex);
     ASSERT_EQ(nodes.size(), (size_t)1);
     ASSERT_EQ(nodes[0].type, NodeType::List);
@@ -323,26 +323,27 @@ TEST(test_intern_different_pointer) {
 
 // ========== Scope Tests ==========
 
-TEST(test_scope_def_get) {
+TEST(test_scope_assign_get) {
     BblState bbl;
-    bbl.exec("(def x 10)");
+    bbl.exec("(= x 10)");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)10);
 }
 
 TEST(test_scope_set) {
     BblState bbl;
-    bbl.exec("(def x 10) (set x 20)");
+    bbl.exec("(= x 10) (= x 20)");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)20);
 }
 
-TEST(test_scope_set_undefined) {
+TEST(test_scope_assign_creates) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(set y 5)"));
+    bbl.exec("(= y 5)");
+    ASSERT_EQ(bbl.getInt("y"), (int64_t)5);
 }
 
 TEST(test_scope_shadow) {
     BblState bbl;
-    bbl.exec("(def x 1) (def x 2)");
+    bbl.exec("(= x 1) (= x 2)");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)2);
 }
 
@@ -350,49 +351,49 @@ TEST(test_scope_shadow) {
 
 TEST(test_add_int) {
     BblState bbl;
-    bbl.exec("(def x (+ 1 2))");
+    bbl.exec("(= x (+ 1 2))");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)3);
 }
 
 TEST(test_add_float) {
     BblState bbl;
-    bbl.exec("(def x (+ 1.0 2.0))");
+    bbl.exec("(= x (+ 1.0 2.0))");
     ASSERT_NEAR(bbl.getFloat("x"), 3.0, 0.001);
 }
 
 TEST(test_add_promotion) {
     BblState bbl;
-    bbl.exec("(def x (+ 1 2.0))");
+    bbl.exec("(= x (+ 1 2.0))");
     ASSERT_NEAR(bbl.getFloat("x"), 3.0, 0.001);
 }
 
 TEST(test_multiply) {
     BblState bbl;
-    bbl.exec("(def x (* 3 4))");
+    bbl.exec("(= x (* 3 4))");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)12);
 }
 
 TEST(test_int_division) {
     BblState bbl;
-    bbl.exec("(def x (/ 10 3))");
+    bbl.exec("(= x (/ 10 3))");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)3);
 }
 
 TEST(test_float_division) {
     BblState bbl;
-    bbl.exec("(def x (/ 10.0 3.0))");
+    bbl.exec("(= x (/ 10.0 3.0))");
     ASSERT_NEAR(bbl.getFloat("x"), 3.333, 0.01);
 }
 
 TEST(test_modulo) {
     BblState bbl;
-    bbl.exec("(def x (% 10 3))");
+    bbl.exec("(= x (% 10 3))");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)1);
 }
 
 TEST(test_subtract) {
     BblState bbl;
-    bbl.exec("(def x (- 10 3))");
+    bbl.exec("(= x (- 10 3))");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)7);
 }
 
@@ -413,7 +414,7 @@ TEST(test_add_type_error) {
 
 TEST(test_nested_arithmetic) {
     BblState bbl;
-    bbl.exec("(def x (+ (* 2 3) (/ 10 2)))");
+    bbl.exec("(= x (+ (* 2 3) (/ 10 2)))");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)11);
 }
 
@@ -421,43 +422,43 @@ TEST(test_nested_arithmetic) {
 
 TEST(test_eq_true) {
     BblState bbl;
-    bbl.exec("(def x (== 1 1))");
+    bbl.exec("(= x (== 1 1))");
     ASSERT_TRUE(bbl.getBool("x"));
 }
 
 TEST(test_eq_false) {
     BblState bbl;
-    bbl.exec("(def x (== 1 2))");
+    bbl.exec("(= x (== 1 2))");
     ASSERT_FALSE(bbl.getBool("x"));
 }
 
 TEST(test_lt) {
     BblState bbl;
-    bbl.exec("(def x (< 1 2))");
+    bbl.exec("(= x (< 1 2))");
     ASSERT_TRUE(bbl.getBool("x"));
 }
 
 TEST(test_gt) {
     BblState bbl;
-    bbl.exec("(def x (> 2 1))");
+    bbl.exec("(= x (> 2 1))");
     ASSERT_TRUE(bbl.getBool("x"));
 }
 
 TEST(test_lte) {
     BblState bbl;
-    bbl.exec("(def x (<= 2 2))");
+    bbl.exec("(= x (<= 2 2))");
     ASSERT_TRUE(bbl.getBool("x"));
 }
 
 TEST(test_gte) {
     BblState bbl;
-    bbl.exec("(def x (>= 2 2))");
+    bbl.exec("(= x (>= 2 2))");
     ASSERT_TRUE(bbl.getBool("x"));
 }
 
 TEST(test_neq) {
     BblState bbl;
-    bbl.exec("(def x (!= 1 2))");
+    bbl.exec("(= x (!= 1 2))");
     ASSERT_TRUE(bbl.getBool("x"));
 }
 
@@ -465,49 +466,49 @@ TEST(test_neq) {
 
 TEST(test_and_true) {
     BblState bbl;
-    bbl.exec("(def b (and true true))");
+    bbl.exec("(= b (and true true))");
     ASSERT_TRUE(bbl.getBool("b"));
 }
 
 TEST(test_and_false) {
     BblState bbl;
-    bbl.exec("(def b (and true false))");
+    bbl.exec("(= b (and true false))");
     ASSERT_FALSE(bbl.getBool("b"));
 }
 
 TEST(test_or_true) {
     BblState bbl;
-    bbl.exec("(def b (or false true))");
+    bbl.exec("(= b (or false true))");
     ASSERT_TRUE(bbl.getBool("b"));
 }
 
 TEST(test_or_false) {
     BblState bbl;
-    bbl.exec("(def b (or false false))");
+    bbl.exec("(= b (or false false))");
     ASSERT_FALSE(bbl.getBool("b"));
 }
 
 TEST(test_not_true) {
     BblState bbl;
-    bbl.exec("(def b (not true))");
+    bbl.exec("(= b (not true))");
     ASSERT_FALSE(bbl.getBool("b"));
 }
 
 TEST(test_not_false) {
     BblState bbl;
-    bbl.exec("(def b (not false))");
+    bbl.exec("(= b (not false))");
     ASSERT_TRUE(bbl.getBool("b"));
 }
 
 TEST(test_short_circuit_or) {
     BblState bbl;
-    bbl.exec("(def x 0) (or true (set x 1))");
+    bbl.exec("(= x 0) (or true (= x 1))");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)0);
 }
 
 TEST(test_short_circuit_and) {
     BblState bbl;
-    bbl.exec("(def x 0) (and false (set x 1))");
+    bbl.exec("(= x 0) (and false (= x 1))");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)0);
 }
 
@@ -530,131 +531,132 @@ TEST(test_not_type_error) {
 
 TEST(test_string_concat) {
     BblState bbl;
-    bbl.exec("(def s (+ \"a\" \"b\"))");
+    bbl.exec("(= s (+ \"a\" \"b\"))");
     ASSERT_EQ(std::string(bbl.getString("s")), std::string("ab"));
 }
 
 TEST(test_string_concat_variadic) {
     BblState bbl;
-    bbl.exec("(def s (+ \"hello\" \" \" \"world\"))");
+    bbl.exec("(= s (+ \"hello\" \" \" \"world\"))");
     ASSERT_EQ(std::string(bbl.getString("s")), std::string("hello world"));
 }
 
-TEST(test_string_int_type_error) {
+TEST(test_string_int_auto_coerce) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(+ \"a\" 1)"));
+    bbl.exec("(= s (+ \"a\" 1))");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("a1"));
 }
 
 // ========== If/Loop Tests ==========
 
 TEST(test_if_then) {
     BblState bbl;
-    bbl.exec("(def x 0) (if true (set x 1))");
+    bbl.exec("(= x 0) (if true (= x 1))");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)1);
 }
 
 TEST(test_if_else) {
     BblState bbl;
-    bbl.exec("(def x 0) (if false (set x 1) (set x 2))");
+    bbl.exec("(= x 0) (if false (= x 1) (= x 2))");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)2);
 }
 
 TEST(test_if_statement_returns_null) {
     BblState bbl;
-    bbl.exec("(def x (if true 42))");
+    bbl.exec("(= x (if true 42))");
     ASSERT_EQ(bbl.getType("x"), BBL::Type::Null);
 }
 
 TEST(test_if_non_bool_condition) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(if 42 (def x 1))"));
+    ASSERT_THROW(bbl.exec("(if 42 (= x 1))"));
 }
 
 TEST(test_loop_basic) {
     BblState bbl;
-    bbl.exec("(def i 0) (loop (< i 5) (set i (+ i 1)))");
+    bbl.exec("(= i 0) (loop (< i 5) (= i (+ i 1)))");
     ASSERT_EQ(bbl.getInt("i"), (int64_t)5);
 }
 
 TEST(test_loop_statement_returns_null) {
     BblState bbl;
-    bbl.exec("(def x (loop false 1))");
+    bbl.exec("(= x (loop false 1))");
     ASSERT_EQ(bbl.getType("x"), BBL::Type::Null);
 }
 
 TEST(test_loop_non_bool_condition) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(loop 1 (def x 0))"));
+    ASSERT_THROW(bbl.exec("(loop 1 (= x 0))"));
 }
 
 // ========== Function Tests ==========
 
 TEST(test_fn_basic) {
     BblState bbl;
-    bbl.exec("(def f (fn (x) (* x 2))) (def r (f 5))");
+    bbl.exec("(= f (fn (x) (* x 2))) (= r (f 5))");
     ASSERT_EQ(bbl.getInt("r"), (int64_t)10);
 }
 
 TEST(test_fn_multi_arg) {
     BblState bbl;
-    bbl.exec("(def f (fn (x y) (+ x y))) (def r (f 3 4))");
+    bbl.exec("(= f (fn (x y) (+ x y))) (= r (f 3 4))");
     ASSERT_EQ(bbl.getInt("r"), (int64_t)7);
 }
 
 TEST(test_fn_zero_arg) {
     BblState bbl;
-    bbl.exec("(def f (fn () 42)) (def r (f))");
+    bbl.exec("(= f (fn () 42)) (= r (f))");
     ASSERT_EQ(bbl.getInt("r"), (int64_t)42);
 }
 
 TEST(test_fn_arity_error) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(def f (fn (x) x)) (f 1 2)"));
+    ASSERT_THROW(bbl.exec("(= f (fn (x) x)) (f 1 2)"));
 }
 
 TEST(test_closure_value_capture) {
     BblState bbl;
-    bbl.exec("(def x 10) (def f (fn () x)) (set x 99) (def r (f))");
+    bbl.exec("(= x 10) (= f (fn () x)) (= x 99) (= r (f))");
     ASSERT_EQ(bbl.getInt("r"), (int64_t)10);
 }
 
 TEST(test_closure_write_no_leak) {
     BblState bbl;
-    bbl.exec("(def x 10) (def f (fn () (set x 20))) (f)");
+    bbl.exec("(= x 10) (= f (fn () (= x 20))) (f)");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)10);
 }
 
 TEST(test_higher_order) {
     BblState bbl;
-    bbl.exec("(def make (fn (n) (fn (x) (+ x n)))) (def add5 (make 5)) (def r (add5 3))");
+    bbl.exec("(= make (fn (n) (fn (x) (+ x n)))) (= add5 (make 5)) (= r (add5 3))");
     ASSERT_EQ(bbl.getInt("r"), (int64_t)8);
 }
 
 TEST(test_last_expression_return) {
     BblState bbl;
-    bbl.exec("(def f (fn () 1 2 3)) (def r (f))");
+    bbl.exec("(= f (fn () 1 2 3)) (= r (f))");
     ASSERT_EQ(bbl.getInt("r"), (int64_t)3);
 }
 
 TEST(test_fn_with_def_inside) {
     BblState bbl;
-    bbl.exec("(def f (fn (x) (def y (* x 2)) (+ y 1))) (def r (f 5))");
+    bbl.exec("(= f (fn (x) (= y (* x 2)) (+ y 1))) (= r (f 5))");
     ASSERT_EQ(bbl.getInt("r"), (int64_t)11);
 }
 
 TEST(test_fn_iterative_factorial) {
     BblState bbl;
     bbl.exec(R"(
-        (def factorial (fn (n)
-            (def result 1)
-            (def i 1)
+        (= factorial (fn (n)
+            (= result 1)
+            (= i 1)
             (loop (<= i n)
-                (set result (* result i))
-                (set i (+ i 1))
+                (= result (* result i))
+                (= i (+ i 1))
             )
             result
         ))
-        (def r (factorial 5))
+        (= r (factorial 5))
     )");
     ASSERT_EQ(bbl.getInt("r"), (int64_t)120);
 }
@@ -663,26 +665,26 @@ TEST(test_fn_iterative_factorial) {
 
 TEST(test_exec_defines_var) {
     BblState bbl;
-    bbl.exec("(def x 10)");
+    bbl.exec("(= x 10)");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)10);
 }
 
 TEST(test_exec_accumulates) {
     BblState bbl;
-    bbl.exec("(def x 10)");
-    bbl.exec("(def y (+ x 5))");
+    bbl.exec("(= x 10)");
+    bbl.exec("(= y (+ x 5))");
     ASSERT_EQ(bbl.getInt("y"), (int64_t)15);
 }
 
 TEST(test_script_exec_returns_value) {
     BblState bbl;
-    bbl.exec("(def r (exec \"(+ 1 2)\"))");
+    bbl.exec("(= r (exec \"(+ 1 2)\"))");
     ASSERT_EQ(bbl.getInt("r"), (int64_t)3);
 }
 
 TEST(test_script_exec_isolates_scope) {
     BblState bbl;
-    bbl.exec("(def x 99) (def r (exec \"(def y 5) y\"))");
+    bbl.exec("(= x 99) (= r (exec \"(= y 5) y\"))");
     ASSERT_EQ(bbl.getInt("r"), (int64_t)5);
     ASSERT_EQ(bbl.getInt("x"), (int64_t)99);
     ASSERT_FALSE(bbl.has("y"));
@@ -692,14 +694,14 @@ TEST(test_script_exec_isolates_scope) {
 
 TEST(test_has) {
     BblState bbl;
-    bbl.exec("(def x 1)");
+    bbl.exec("(= x 1)");
     ASSERT_TRUE(bbl.has("x"));
     ASSERT_FALSE(bbl.has("y"));
 }
 
 TEST(test_get_type) {
     BblState bbl;
-    bbl.exec("(def x 1) (def s \"hi\") (def b true) (def n null)");
+    bbl.exec("(= x 1) (= s \"hi\") (= b true) (= n null)");
     ASSERT_EQ(bbl.getType("x"), BBL::Type::Int);
     ASSERT_EQ(bbl.getType("s"), BBL::Type::String);
     ASSERT_EQ(bbl.getType("b"), BBL::Type::Bool);
@@ -708,7 +710,7 @@ TEST(test_get_type) {
 
 TEST(test_get_wrong_type) {
     BblState bbl;
-    bbl.exec("(def x 1)");
+    bbl.exec("(= x 1)");
     ASSERT_THROW(bbl.getString("x"));
 }
 
@@ -733,21 +735,21 @@ static int testGetArgCount(BblState* bbl) {
 TEST(test_defn_basic) {
     BblState bbl;
     bbl.defn("myadd", testAdd);
-    bbl.exec("(def r (myadd 10 20))");
+    bbl.exec("(= r (myadd 10 20))");
     ASSERT_EQ(bbl.getInt("r"), (int64_t)30);
 }
 
 TEST(test_defn_args) {
     BblState bbl;
     bbl.defn("count", testGetArgCount);
-    bbl.exec("(def c (count 1 2 3))");
+    bbl.exec("(= c (count 1 2 3))");
     ASSERT_EQ(bbl.getInt("c"), (int64_t)3);
 }
 
 TEST(test_defn_return_int) {
     BblState bbl;
     bbl.defn("myadd", testAdd);
-    bbl.exec("(def x (myadd 3 4))");
+    bbl.exec("(= x (myadd 3 4))");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)7);
 }
 
@@ -759,14 +761,14 @@ static int testReturnString(BblState* bbl) {
 TEST(test_defn_return_string) {
     BblState bbl;
     bbl.defn("greet", testReturnString);
-    bbl.exec("(def s (greet))");
+    bbl.exec("(= s (greet))");
     ASSERT_EQ(std::string(bbl.getString("s")), std::string("hello"));
 }
 
 TEST(test_defn_arg_type_check) {
     BblState bbl;
     bbl.defn("myadd", testAdd);
-    bbl.exec("(def x 42)");
+    bbl.exec("(= x 42)");
     // Call with wrong type
     ASSERT_THROW(bbl.exec("(myadd \"a\" \"b\")"));
 }
@@ -781,7 +783,7 @@ TEST(test_defn_arg_out_of_bounds) {
 TEST(test_defn_no_return) {
     BblState bbl;
     bbl.defn("noop", testNoReturn);
-    bbl.exec("(def r (noop))");
+    bbl.exec("(= r (noop))");
     ASSERT_EQ(bbl.getType("r"), BBL::Type::Null);
 }
 
@@ -905,7 +907,7 @@ static void addVertex(BblState& bbl) {
 TEST(test_struct_construct) {
     BblState bbl;
     addVertex(bbl);
-    bbl.exec("(def v (vertex 1.0 2.0 3.0))");
+    bbl.exec("(= v (vertex 1.0 2.0 3.0))");
     ASSERT_TRUE(bbl.has("v"));
     ASSERT_EQ(bbl.getType("v"), BBL::Type::Struct);
 }
@@ -913,7 +915,7 @@ TEST(test_struct_construct) {
 TEST(test_struct_field_read) {
     BblState bbl;
     addVertex(bbl);
-    bbl.exec("(def v (vertex 1.0 2.0 3.0)) (def rx v.x) (def ry v.y) (def rz v.z)");
+    bbl.exec("(= v (vertex 1.0 2.0 3.0)) (= rx v.x) (= ry v.y) (= rz v.z)");
     ASSERT_NEAR(bbl.getFloat("rx"), 1.0, 0.001);
     ASSERT_NEAR(bbl.getFloat("ry"), 2.0, 0.001);
     ASSERT_NEAR(bbl.getFloat("rz"), 3.0, 0.001);
@@ -922,14 +924,14 @@ TEST(test_struct_field_read) {
 TEST(test_struct_field_write) {
     BblState bbl;
     addVertex(bbl);
-    bbl.exec("(def v (vertex 1.0 2.0 3.0)) (set v.x 5.0) (def rx v.x)");
+    bbl.exec("(= v (vertex 1.0 2.0 3.0)) (= v.x 5.0) (= rx v.x)");
     ASSERT_NEAR(bbl.getFloat("rx"), 5.0, 0.001);
 }
 
 TEST(test_struct_copy_semantics) {
     BblState bbl;
     addVertex(bbl);
-    bbl.exec("(def a (vertex 1.0 2.0 3.0)) (def b a) (set b.x 99.0) (def ax a.x) (def bx b.x)");
+    bbl.exec("(= a (vertex 1.0 2.0 3.0)) (= b a) (= b.x 99.0) (= ax a.x) (= bx b.x)");
     ASSERT_NEAR(bbl.getFloat("ax"), 1.0, 0.001);
     ASSERT_NEAR(bbl.getFloat("bx"), 99.0, 0.001);
 }
@@ -950,10 +952,10 @@ TEST(test_struct_composed) {
     BblState bbl;
     addVertex(bbl);
     addTriangle(bbl);
-    bbl.exec("(def tri (triangle (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))");
-    bbl.exec("(def ax tri.a.x)");
+    bbl.exec("(= tri (triangle (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))");
+    bbl.exec("(= ax tri.a.x)");
     ASSERT_NEAR(bbl.getFloat("ax"), 0.0, 0.001);
-    bbl.exec("(def by tri.b.y)");
+    bbl.exec("(= by tri.b.y)");
     ASSERT_NEAR(bbl.getFloat("by"), 0.0, 0.001);
 }
 
@@ -972,82 +974,82 @@ TEST(test_struct_type_error) {
 TEST(test_struct_unknown_field) {
     BblState bbl;
     addVertex(bbl);
-    ASSERT_THROW(bbl.exec("(def v (vertex 1.0 2.0 3.0)) (def w v.w)"));
+    ASSERT_THROW(bbl.exec("(= v (vertex 1.0 2.0 3.0)) (= w v.w)"));
 }
 
 // ========== Phase 3: Vectors ==========
 
 TEST(test_vector_int) {
     BblState bbl;
-    bbl.exec("(def v (vector int 1 2 3))");
+    bbl.exec("(= v (vector int 1 2 3))");
     ASSERT_EQ(bbl.getType("v"), BBL::Type::Vector);
 }
 
 TEST(test_vector_length) {
     BblState bbl;
-    bbl.exec("(def v (vector int 1 2 3)) (def n (v.length))");
+    bbl.exec("(= v (vector int 1 2 3)) (= n (v.length))");
     ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
 }
 
 TEST(test_vector_at) {
     BblState bbl;
-    bbl.exec("(def v (vector int 10 20 30)) (def x (v.at 1))");
+    bbl.exec("(= v (vector int 10 20 30)) (= x (v.at 1))");
     ASSERT_EQ(bbl.getInt("x"), (int64_t)20);
 }
 
 TEST(test_vector_push) {
     BblState bbl;
-    bbl.exec("(def v (vector int 1 2)) (v.push 3) (def n (v.length))");
+    bbl.exec("(= v (vector int 1 2)) (v.push 3) (= n (v.length))");
     ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
 }
 
 TEST(test_vector_pop) {
     BblState bbl;
-    bbl.exec("(def v (vector int 10 20 30)) (def last (v.pop)) (def n (v.length))");
+    bbl.exec("(= v (vector int 10 20 30)) (= last (v.pop)) (= n (v.length))");
     ASSERT_EQ(bbl.getInt("last"), (int64_t)30);
     ASSERT_EQ(bbl.getInt("n"), (int64_t)2);
 }
 
 TEST(test_vector_clear) {
     BblState bbl;
-    bbl.exec("(def v (vector int 1 2 3)) (v.clear) (def n (v.length))");
+    bbl.exec("(= v (vector int 1 2 3)) (v.clear) (= n (v.length))");
     ASSERT_EQ(bbl.getInt("n"), (int64_t)0);
 }
 
 TEST(test_vector_struct) {
     BblState bbl;
     addVertex(bbl);
-    bbl.exec("(def verts (vector vertex (vertex 0 1 0) (vertex 1 0 0)))");
-    bbl.exec("(def x (verts.at 0).x)");
+    bbl.exec("(= verts (vector vertex (vertex 0 1 0) (vertex 1 0 0)))");
+    bbl.exec("(= x (verts.at 0).x)");
     ASSERT_NEAR(bbl.getFloat("x"), 0.0, 0.001);
 }
 
 TEST(test_vector_push_struct) {
     BblState bbl;
     addVertex(bbl);
-    bbl.exec("(def verts (vector vertex)) (verts.push (vertex 3 4 5)) (def n (verts.length))");
+    bbl.exec("(= verts (vector vertex)) (verts.push (vertex 3 4 5)) (= n (verts.length))");
     ASSERT_EQ(bbl.getInt("n"), (int64_t)1);
 }
 
 TEST(test_vector_type_mismatch) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(def v (vector int 1 2)) (v.push \"bad\")"));
+    ASSERT_THROW(bbl.exec("(= v (vector int 1 2)) (v.push \"bad\")"));
 }
 
 TEST(test_vector_out_of_bounds) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(def v (vector int 1)) (v.at 5)"));
+    ASSERT_THROW(bbl.exec("(= v (vector int 1)) (v.at 5)"));
 }
 
 TEST(test_vector_pop_empty) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(def v (vector int)) (v.pop)"));
+    ASSERT_THROW(bbl.exec("(= v (vector int)) (v.pop)"));
 }
 
 TEST(test_vector_get_data_cpp) {
     BblState bbl;
     addVertex(bbl);
-    bbl.exec("(def verts (vector vertex (vertex 1 2 3) (vertex 4 5 6)))");
+    bbl.exec("(= verts (vector vertex (vertex 1 2 3) (vertex 4 5 6)))");
     Vertex* data = bbl.getVectorData<Vertex>("verts");
     size_t len = bbl.getVectorLength<Vertex>("verts");
     ASSERT_EQ(len, (size_t)2);
@@ -1059,12 +1061,12 @@ TEST(test_vector_get_data_cpp) {
 
 TEST(test_dot_on_int_error) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(def x 5) (def y x.foo)"));
+    ASSERT_THROW(bbl.exec("(= x 5) (= y x.foo)"));
 }
 
 TEST(test_string_length_method) {
     BblState bbl;
-    bbl.exec("(def s \"hello\") (def n (s.length))");
+    bbl.exec("(= s \"hello\") (= n (s.length))");
     ASSERT_EQ(bbl.getInt("n"), (int64_t)5);
 }
 
@@ -1072,7 +1074,7 @@ TEST(test_string_length_method) {
 
 TEST(test_table_construct_string_keys) {
     BblState bbl;
-    bbl.exec(R"((def t (table "name" "hero" "hp" 100)))");
+    bbl.exec(R"((= t (table "name" "hero" "hp" 100)))");
     ASSERT_EQ(bbl.getType("t"), BBL::Type::Table);
     auto* tbl = bbl.getTable("t");
     ASSERT_EQ(tbl->length(), (size_t)2);
@@ -1080,24 +1082,24 @@ TEST(test_table_construct_string_keys) {
 
 TEST(test_table_dot_read_string_key) {
     BblState bbl;
-    bbl.exec(R"((def t (table "name" "hero" "hp" 100)) (def n t.name) (def h t.hp))");
+    bbl.exec(R"((= t (table "name" "hero" "hp" 100)) (= n t.name) (= h t.hp))");
     ASSERT_EQ(std::string(bbl.getString("n")), std::string("hero"));
     ASSERT_EQ(bbl.getInt("h"), (int64_t)100);
 }
 
 TEST(test_table_integer_indexed) {
     BblState bbl;
-    bbl.exec(R"((def t (table 1 "sword" 2 "shield" 3 "potion")) (def v (t.at 0)))");
+    bbl.exec(R"((= t (table 1 "sword" 2 "shield" 3 "potion")) (= v (t.at 0)))");
     ASSERT_EQ(std::string(bbl.getString("v")), std::string("sword"));
 }
 
 TEST(test_table_get_set) {
     BblState bbl;
     bbl.exec(R"(
-        (def t (table "a" 1))
+        (= t (table "a" 1))
         (t.set "b" 2)
-        (def a (t.get "a"))
-        (def b (t.get "b"))
+        (= a (t.get "a"))
+        (= b (t.get "b"))
     )");
     ASSERT_EQ(bbl.getInt("a"), (int64_t)1);
     ASSERT_EQ(bbl.getInt("b"), (int64_t)2);
@@ -1106,9 +1108,9 @@ TEST(test_table_get_set) {
 TEST(test_table_delete) {
     BblState bbl;
     bbl.exec(R"(
-        (def t (table "a" 1 "b" 2))
+        (= t (table "a" 1 "b" 2))
         (t.delete "a")
-        (def len (t.length))
+        (= len (t.length))
     )");
     ASSERT_EQ(bbl.getInt("len"), (int64_t)1);
 }
@@ -1116,9 +1118,9 @@ TEST(test_table_delete) {
 TEST(test_table_has) {
     BblState bbl;
     bbl.exec(R"(
-        (def t (table "a" 1))
-        (def yes (t.has "a"))
-        (def no (t.has "b"))
+        (= t (table "a" 1))
+        (= yes (t.has "a"))
+        (= no (t.has "b"))
     )");
     ASSERT_TRUE(bbl.getBool("yes"));
     ASSERT_FALSE(bbl.getBool("no"));
@@ -1127,27 +1129,27 @@ TEST(test_table_has) {
 TEST(test_table_keys) {
     BblState bbl;
     bbl.exec(R"(
-        (def t (table "x" 1 "y" 2))
-        (def ks (t.keys))
-        (def n (ks.length))
+        (= t (table "x" 1 "y" 2))
+        (= ks (t.keys))
+        (= n (ks.length))
     )");
     ASSERT_EQ(bbl.getInt("n"), (int64_t)2);
 }
 
 TEST(test_table_length) {
     BblState bbl;
-    bbl.exec(R"((def t (table "a" 1 "b" 2 "c" 3)) (def n (t.length)))");
+    bbl.exec(R"((= t (table "a" 1 "b" 2 "c" 3)) (= n (t.length)))");
     ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
 }
 
 TEST(test_table_push_pop) {
     BblState bbl;
     bbl.exec(R"(
-        (def t (table))
+        (= t (table))
         (t.push "first")
         (t.push "second")
-        (def len (t.length))
-        (def val (t.pop))
+        (= len (t.length))
+        (= val (t.pop))
     )");
     ASSERT_EQ(bbl.getInt("len"), (int64_t)2);
     ASSERT_EQ(std::string(bbl.getString("val")), std::string("second"));
@@ -1156,9 +1158,9 @@ TEST(test_table_push_pop) {
 TEST(test_table_method_first_resolution) {
     BblState bbl;
     bbl.exec(R"(
-        (def t (table "length" 42))
-        (def mlen (t.length))
-        (def klen (t.get "length"))
+        (= t (table "length" 42))
+        (= mlen (t.length))
+        (= klen (t.get "length"))
     )");
     ASSERT_EQ(bbl.getInt("mlen"), (int64_t)1);
     ASSERT_EQ(bbl.getInt("klen"), (int64_t)42);
@@ -1166,7 +1168,7 @@ TEST(test_table_method_first_resolution) {
 
 TEST(test_table_get_cpp) {
     BblState bbl;
-    bbl.exec(R"((def t (table "name" "hero" "hp" 100)))");
+    bbl.exec(R"((= t (table "name" "hero" "hp" 100)))");
     BblTable* tbl = bbl.getTable("t");
     BblValue nameKey = BblValue::makeString(bbl.intern("name"));
     BblValue nameVal = tbl->get(nameKey);
@@ -1178,35 +1180,35 @@ TEST(test_table_get_cpp) {
 
 TEST(test_table_empty) {
     BblState bbl;
-    bbl.exec(R"((def t (table)) (def n (t.length)))");
+    bbl.exec(R"((= t (table)) (= n (t.length)))");
     ASSERT_EQ(bbl.getInt("n"), (int64_t)0);
 }
 
 TEST(test_table_get_missing) {
     BblState bbl;
-    bbl.exec(R"((def t (table "a" 1)) (def v (t.get "missing")))");
+    bbl.exec(R"((= t (table "a" 1)) (= v (t.get "missing")))");
     ASSERT_EQ(bbl.getType("v"), BBL::Type::Null);
 }
 
 TEST(test_table_delete_missing) {
     BblState bbl;
-    bbl.exec(R"((def t (table "a" 1)) (t.delete "missing") (def n (t.length)))");
+    bbl.exec(R"((= t (table "a" 1)) (t.delete "missing") (= n (t.length)))");
     ASSERT_EQ(bbl.getInt("n"), (int64_t)1);
 }
 
 TEST(test_table_pop_no_int_keys) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec(R"((def t (table "a" 1)) (t.pop))"));
+    ASSERT_THROW(bbl.exec(R"((= t (table "a" 1)) (t.pop))"));
 }
 
 TEST(test_table_closure_shared_capture) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec(R"(
-        (def t (table))
-        (def f (fn () (t.push 1)))
+        (= t (table))
+        (= f (fn () (t.push 1)))
         (f)
-        (def n (t.length))
+        (= n (t.length))
     )");
     ASSERT_EQ(bbl.getInt("n"), (int64_t)1);
 }
@@ -1214,9 +1216,9 @@ TEST(test_table_closure_shared_capture) {
 TEST(test_table_place_expression) {
     BblState bbl;
     bbl.exec(R"(
-        (def t (table "hp" 100))
-        (set t.hp 80)
-        (def v t.hp)
+        (= t (table "hp" 100))
+        (= t.hp 80)
+        (= v t.hp)
     )");
     ASSERT_EQ(bbl.getInt("v"), (int64_t)80);
 }
@@ -1225,13 +1227,13 @@ TEST(test_table_place_expression) {
 
 TEST(test_string_eq_interned) {
     BblState bbl;
-    bbl.exec(R"((def r (== "hello" "hello")))");
+    bbl.exec(R"((= r (== "hello" "hello")))");
     ASSERT_TRUE(bbl.getBool("r"));
 }
 
 TEST(test_string_neq) {
     BblState bbl;
-    bbl.exec(R"((def r (== "a" "b")))");
+    bbl.exec(R"((= r (== "a" "b")))");
     ASSERT_FALSE(bbl.getBool("r"));
 }
 
@@ -1247,7 +1249,7 @@ TEST(test_string_gt_type_error) {
 
 TEST(test_string_concat_multi) {
     BblState bbl;
-    bbl.exec(R"((def s (+ "a" "b" "c")))");
+    bbl.exec(R"((= s (+ "a" "b" "c")))");
     ASSERT_EQ(std::string(bbl.getString("s")), std::string("abc"));
 }
 
@@ -1255,7 +1257,7 @@ TEST(test_string_concat_multi) {
 
 TEST(test_get_binary) {
     BblState bbl;
-    bbl.exec("(def b 0b3:abc)");
+    bbl.exec("(= b 0b3:abc)");
     auto* b = bbl.getBinary("b");
     ASSERT_EQ(b->length(), (size_t)3);
     ASSERT_EQ(b->data[0], (uint8_t)'a');
@@ -1276,8 +1278,8 @@ TEST(test_set_binary) {
 TEST(test_gc_no_crash) {
     BblState bbl;
     bbl.exec(R"(
-        (def t (table "a" 1))
-        (def t null)
+        (= t (table "a" 1))
+        (= t null)
     )");
     bbl.gc();
     ASSERT_TRUE(true);
@@ -1286,8 +1288,8 @@ TEST(test_gc_no_crash) {
 TEST(test_gc_closure_survives) {
     BblState bbl;
     bbl.exec(R"(
-        (def f (fn (x) (+ x 1)))
-        (def r (f 5))
+        (= f (fn (x) (+ x 1)))
+        (= r (f 5))
     )");
     bbl.gc();
     ASSERT_EQ(bbl.getInt("r"), (int64_t)6);
@@ -1298,13 +1300,38 @@ TEST(test_gc_stress) {
     bbl.gcThreshold = 16;
     BBL::addStdLib(bbl);
     bbl.exec(R"(
-        (def i 0)
+        (= i 0)
         (loop (< i 200)
-            (def t (table "x" i))
-            (set i (+ i 1))
+            (= t (table "x" i))
+            (= i (+ i 1))
         )
     )");
     ASSERT_EQ(bbl.getInt("i"), (int64_t)200);
+}
+
+TEST(test_gc_flat_scope_slots) {
+    // Verify GC marks values stored in flat-scope slots (fn call scopes).
+    // A function allocates a table and returns it; GC fires during the call
+    // because gcThreshold is set very low.
+    BblState bbl;
+    bbl.gcThreshold = 1;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= make-table (fn (x) (table "val" x)))
+        (= last null)
+        (= i 0)
+        (loop (< i 50)
+            (= last (make-table i))
+            (= i (+ i 1))
+        )
+    )");
+    BblValue last = bbl.get("last");
+    ASSERT_EQ(last.type, BBL::Type::Table);
+    // The table from the last iteration should have "val" = 49
+    BblValue key = BblValue::makeString(bbl.intern("val"));
+    BblValue val = last.tableVal->get(key);
+    ASSERT_EQ(val.type, BBL::Type::Int);
+    ASSERT_EQ(val.intVal, (int64_t)49);
 }
 
 // ========== Phase 5: TypeBuilder & Userdata ==========
@@ -1342,7 +1369,7 @@ TEST(test_typebuilder_register) {
     counterDestructed = false;
     auto* ud = bbl.allocUserData("Counter", &counterValue);
     bbl.set("c", BblValue::makeUserData(ud));
-    bbl.exec(R"((def v (c.value)))");
+    bbl.exec(R"((= v (c.value)))");
     ASSERT_EQ(bbl.getInt("v"), (int64_t)42);
 }
 
@@ -1355,7 +1382,7 @@ TEST(test_typebuilder_method_call) {
     counterValue = 10;
     auto* ud = bbl.allocUserData("Counter", &counterValue);
     bbl.set("c", BblValue::makeUserData(ud));
-    bbl.exec(R"((c.increment) (def v (c.value)))");
+    bbl.exec(R"((c.increment) (= v (c.value)))");
     ASSERT_EQ(bbl.getInt("v"), (int64_t)11);
 }
 
@@ -1369,7 +1396,7 @@ TEST(test_typebuilder_destructor_on_gc) {
     int val = 99;
     auto* ud = bbl.allocUserData("Counter", &val);
     bbl.set("c", BblValue::makeUserData(ud));
-    bbl.exec("(def c null)");
+    bbl.exec("(= c null)");
     bbl.gc();
     ASSERT_TRUE(counterDestructed);
 }
@@ -1390,21 +1417,21 @@ TEST(test_userdata_wrong_method) {
 TEST(test_math_sqrt) {
     BblState bbl;
     BBL::addMath(bbl);
-    bbl.exec("(def r (sqrt 4.0))");
+    bbl.exec("(= r (sqrt 4.0))");
     ASSERT_NEAR(bbl.getFloat("r"), 2.0, 0.001);
 }
 
 TEST(test_math_sin) {
     BblState bbl;
     BBL::addMath(bbl);
-    bbl.exec("(def r (sin 0.0))");
+    bbl.exec("(= r (sin 0.0))");
     ASSERT_NEAR(bbl.getFloat("r"), 0.0, 0.001);
 }
 
 TEST(test_math_abs_int_promoted) {
     BblState bbl;
     BBL::addMath(bbl);
-    bbl.exec("(def r (abs -5))");
+    bbl.exec("(= r (abs -5))");
     ASSERT_NEAR(bbl.getFloat("r"), 5.0, 0.001);
 }
 
@@ -1424,7 +1451,7 @@ TEST(test_math_pi_e) {
 TEST(test_math_pow) {
     BblState bbl;
     BBL::addMath(bbl);
-    bbl.exec("(def r (pow 2.0 10.0))");
+    bbl.exec("(= r (pow 2.0 10.0))");
     ASSERT_NEAR(bbl.getFloat("r"), 1024.0, 0.001);
 }
 
@@ -1434,11 +1461,11 @@ TEST(test_file_write_read) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec(R"(
-        (def f (fopen "/tmp/bbl_test_io.txt" "w"))
+        (= f (fopen "/tmp/bbl_test_io.txt" "w"))
         (f.write "hello bbl")
         (f.close)
-        (def f2 (fopen "/tmp/bbl_test_io.txt" "r"))
-        (def contents (f2.read))
+        (= f2 (fopen "/tmp/bbl_test_io.txt" "r"))
+        (= contents (f2.read))
         (f2.close)
     )");
     ASSERT_EQ(std::string(bbl.getString("contents")), std::string("hello bbl"));
@@ -1448,13 +1475,13 @@ TEST(test_file_read_bytes) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec(R"(
-        (def f (fopen "/tmp/bbl_test_io2.txt" "w"))
+        (= f (fopen "/tmp/bbl_test_io2.txt" "w"))
         (f.write "abcde")
         (f.close)
-        (def f2 (fopen "/tmp/bbl_test_io2.txt" "rb"))
-        (def b (f2.read-bytes 3))
+        (= f2 (fopen "/tmp/bbl_test_io2.txt" "rb"))
+        (= b (f2.read-bytes 3))
         (f2.close)
-        (def n (b.length))
+        (= n (b.length))
     )");
     ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
 }
@@ -1489,7 +1516,7 @@ TEST(test_print_table_format) {
     BBL::addPrint(bbl);
     std::string out;
     bbl.printCapture = &out;
-    bbl.exec(R"((def t (table "a" 1 "b" 2)) (print t))");
+    bbl.exec(R"((= t (table "a" 1 "b" 2)) (print t))");
     ASSERT_EQ(out, std::string("<table length=2>"));
 }
 
@@ -1502,7 +1529,7 @@ TEST(test_print_struct_format) {
     bbl.registerStruct(sb);
     std::string out;
     bbl.printCapture = &out;
-    bbl.exec(R"((def s (TestS 1.0)) (print s))");
+    bbl.exec(R"((= s (TestS 1.0)) (print s))");
     ASSERT_EQ(out, std::string("<struct TestS>"));
 }
 
@@ -1517,7 +1544,7 @@ TEST(test_execExpr_returns_last) {
 
 TEST(test_execExpr_null_for_def) {
     BblState bbl;
-    BblValue v = bbl.execExpr("(def x 5)");
+    BblValue v = bbl.execExpr("(= x 5)");
     // def returns null
     ASSERT_TRUE(true); // just don't crash
     ASSERT_EQ(bbl.getInt("x"), (int64_t)5);
@@ -1533,7 +1560,7 @@ TEST(test_bbl_path_resolution) {
     fs::create_directories("/tmp/bbl_test_path");
     {
         std::ofstream f("/tmp/bbl_test_path/lib.bbl");
-        f << "(def loaded true)";
+        f << "(= loaded true)";
     }
     // Set BBL_PATH and try to execfile from a different dir
     setenv("BBL_PATH", "/tmp/bbl_test_path", 1);
@@ -1576,15 +1603,15 @@ TEST(test_sandbox_chain) {
 TEST(test_recursive_factorial) {
     BblState bbl;
     bbl.exec(R"(
-        (def fact (fn (n)
-            (def result 1)
+        (= fact (fn (n)
+            (= result 1)
             (if (<= n 1)
-                (set result 1)
-                (set result (* n (fact (- n 1))))
+                (= result 1)
+                (= result (* n (fact (- n 1))))
             )
             result
         ))
-        (def r (fact 10))
+        (= r (fact 10))
     )");
     ASSERT_EQ(bbl.getInt("r"), 3628800LL);
 }
@@ -1592,15 +1619,15 @@ TEST(test_recursive_factorial) {
 TEST(test_recursive_fibonacci) {
     BblState bbl;
     bbl.exec(R"(
-        (def fib (fn (n)
-            (def result 0)
+        (= fib (fn (n)
+            (= result 0)
             (if (<= n 1)
-                (set result n)
-                (set result (+ (fib (- n 1)) (fib (- n 2))))
+                (= result n)
+                (= result (+ (fib (- n 1)) (fib (- n 2))))
             )
             result
         ))
-        (def r (fib 10))
+        (= r (fib 10))
     )");
     ASSERT_EQ(bbl.getInt("r"), 55LL);
 }
@@ -1609,14 +1636,14 @@ TEST(test_recursive_countdown) {
     // Recursive function that counts down and returns the base case value
     BblState bbl;
     bbl.exec(R"(
-        (def countdown (fn (n)
-            (def result n)
+        (= countdown (fn (n)
+            (= result n)
             (if (> n 0)
-                (set result (countdown (- n 1)))
+                (= result (countdown (- n 1)))
             )
             result
         ))
-        (def r (countdown 5))
+        (= r (countdown 5))
     )");
     ASSERT_EQ(bbl.getInt("r"), 0LL);
 }
@@ -1625,8 +1652,8 @@ TEST(test_recursive_self_capture_only) {
     // Ensure that a non-recursive fn doesn't get a self-capture injected
     BblState bbl;
     bbl.exec(R"(
-        (def add1 (fn (x) (+ x 1)))
-        (def r (add1 9))
+        (= add1 (fn (x) (+ x 1)))
+        (= r (add1 9))
     )");
     ASSERT_EQ(bbl.getInt("r"), 10LL);
 }
@@ -1724,6 +1751,103 @@ TEST(test_eq_create_inside_fn) {
     ASSERT_EQ(bbl.getInt("r"), 42LL);
 }
 
+// ========== do block tests ==========
+
+TEST(test_do_basic) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= x (do 1 2 3))");
+    ASSERT_EQ(bbl.getInt("x"), 3LL);
+}
+TEST(test_do_empty) {
+    BblState bbl;
+    bbl.exec("(= x (do))");
+    ASSERT_EQ(bbl.getType("x"), BBL::Type::Null);
+}
+TEST(test_do_side_effects) {
+    BblState bbl;
+    bbl.exec("(= a 0) (do (= a 1) (= a 2))");
+    ASSERT_EQ(bbl.getInt("a"), 2LL);
+}
+TEST(test_do_in_if_then) {
+    BblState bbl;
+    bbl.exec("(= a 0) (= b 0) (if true (do (= a 1) (= b 2)))");
+    ASSERT_EQ(bbl.getInt("a"), 1LL);
+    ASSERT_EQ(bbl.getInt("b"), 2LL);
+}
+TEST(test_do_in_if_else) {
+    BblState bbl;
+    bbl.exec("(= a 0) (= b 0) (if false (= a 99) (do (= a 1) (= b 2)))");
+    ASSERT_EQ(bbl.getInt("a"), 1LL);
+    ASSERT_EQ(bbl.getInt("b"), 2LL);
+}
+TEST(test_do_nested) {
+    BblState bbl;
+    bbl.exec("(= x (do (do 1 2) (do 3 4)))");
+    ASSERT_EQ(bbl.getInt("x"), 4LL);
+}
+TEST(test_do_in_fn) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= f (fn (x) (do (= y (* x 2)) y))) (= r (f 5))");
+    ASSERT_EQ(bbl.getInt("r"), 10LL);
+}
+
+// ========== str built-in tests ==========
+
+TEST(test_str_int) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= s (str 42))");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("42"));
+}
+TEST(test_str_float) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= s (str 3.14))");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("3.14"));
+}
+TEST(test_str_bool) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= s (str true))");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("true"));
+}
+TEST(test_str_null) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= s (str null))");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("null"));
+}
+TEST(test_str_concat) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= s (+ \"val=\" (str 99)))");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("val=99"));
+}
+
+// ========== string + auto-coerce tests ==========
+
+TEST(test_string_plus_int) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= s (+ \"val=\" 42))");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("val=42"));
+}
+TEST(test_string_plus_float) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= s (+ \"pi=\" 3.14))");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("pi=3.14"));
+}
+TEST(test_string_plus_bool) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= s (+ \"ok=\" true))");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("ok=true"));
+}
+TEST(test_string_plus_mixed) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= s (+ \"a\" 1 \" b\" 2.5 \" c\" true))");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("a1 b2.5 ctrue"));
+}
+TEST(test_int_plus_string_still_errors) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("(+ 1 \"hello\")"));
+}
+
 // ========== Main ==========
 
 int main() {
@@ -1732,7 +1856,7 @@ int main() {
     // Lexer
     std::cout << "--- Lexer ---" << std::endl;
     RUN(test_lexer_basic);
-    RUN(test_lexer_def_string);
+    RUN(test_lexer_eq_string);
     RUN(test_lexer_float);
     RUN(test_lexer_bool_null);
     RUN(test_lexer_comments);
@@ -1775,9 +1899,9 @@ int main() {
 
     // Scope
     std::cout << "--- Scope ---" << std::endl;
-    RUN(test_scope_def_get);
+    RUN(test_scope_assign_get);
     RUN(test_scope_set);
-    RUN(test_scope_set_undefined);
+    RUN(test_scope_assign_creates);
     RUN(test_scope_shadow);
 
     // Arithmetic
@@ -1823,7 +1947,7 @@ int main() {
     std::cout << "--- String Concat ---" << std::endl;
     RUN(test_string_concat);
     RUN(test_string_concat_variadic);
-    RUN(test_string_int_type_error);
+    RUN(test_string_int_auto_coerce);
 
     // If/Loop
     std::cout << "--- If/Loop ---" << std::endl;
@@ -1960,6 +2084,7 @@ int main() {
     RUN(test_gc_no_crash);
     RUN(test_gc_closure_survives);
     RUN(test_gc_stress);
+    RUN(test_gc_flat_scope_slots);
 
     // Phase 5: TypeBuilder & Userdata
     RUN(test_typebuilder_register);
@@ -2009,6 +2134,32 @@ int main() {
     RUN(test_eq_higher_order);
     RUN(test_eq_recursive_fn);
     RUN(test_eq_create_inside_fn);
+
+    // do block
+    std::cout << "--- do block ---" << std::endl;
+    RUN(test_do_basic);
+    RUN(test_do_empty);
+    RUN(test_do_side_effects);
+    RUN(test_do_in_if_then);
+    RUN(test_do_in_if_else);
+    RUN(test_do_nested);
+    RUN(test_do_in_fn);
+
+    // str built-in
+    std::cout << "--- str built-in ---" << std::endl;
+    RUN(test_str_int);
+    RUN(test_str_float);
+    RUN(test_str_bool);
+    RUN(test_str_null);
+    RUN(test_str_concat);
+
+    // string + auto-coerce
+    std::cout << "--- string + auto-coerce ---" << std::endl;
+    RUN(test_string_plus_int);
+    RUN(test_string_plus_float);
+    RUN(test_string_plus_bool);
+    RUN(test_string_plus_mixed);
+    RUN(test_int_plus_string_still_errors);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

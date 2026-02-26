@@ -63,18 +63,18 @@ These are the runtime conditions that produce errors:
 | non-bool condition | `(if 42 (print "yes"))` | `type mismatch: condition must be bool, got int` |
 | out of bounds | `(verts.at 99)` on a 3-element vector | `index 99 out of bounds (length 3)` |
 | undefined symbol | `(print x)` where `x` was never defined | `undefined symbol: x` |
-| undefined on set | `(set y 5)` where `y` was never defined | `undefined symbol: y` |
+| undefined on set | `(= y 5)` where `y` was never defined | `undefined symbol: y` |
 | arity mismatch | `(greet)` where `greet` takes 1 arg | `arity mismatch: greet expects 1 argument, got 0` |
 | struct constructor | `(vertex 1.0 2.0)` (missing z) | `vertex constructor expects 3 fields, got 2` |
 | vector type | `(verts.push "hello")` into a `vector vertex` | `type mismatch: expected vertex, got string` |
 | division by zero | `(/ x 0)` | `division by zero` |
 | file I/O | `(filebytes "missing.bin")` | `file read failed: missing.bin` |
-| parse error | `(def x (+ 1)` (missing `)`) | `parse error: expected ')' at script.bbl:1` |
+| parse error | `(= x (+ 1)` (missing `)`) | `parse error: expected ')' at script.bbl:1` |
 | pop empty | `(verts.pop)` on empty vector | `pop on empty vector` |
 | no field | `(print v.w)` on a vertex with x/y/z | `struct "vertex" has no field "w"` |
 | no field | `(v.push 1)` on a struct | `struct "vertex" has no field "push"` |
-| dot on wrong type | `(def x 5)` then `x.foo` | `type error: int has no fields or methods` |
-| chained write | `(set tri.a.x 5.0)` | `error: only single-level place writes allowed` |
+| dot on wrong type | `(= x 5)` then `x.foo` | `type error: int has no fields or methods` |
+| chained write | `(= tri.a.x 5.0)` | `error: only single-level place writes allowed` |
 
 ## what errors do NOT do
 

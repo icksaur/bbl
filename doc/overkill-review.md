@@ -249,21 +249,13 @@ If structs are POD-only (value types and other structs, no strings/containers/fu
 
 The cost: `[= mesh [struct [uint32 id string name]]]` is no longer valid.  Name would need to be a separate variable or stored in a table.  This pushes the design toward: structs for numeric/binary data (the serialization case), tables for everything else (the scripting case).
 
-### C. separate `def` and `set`
+### C. ~~separate `def` and `set`~~ (not adopted)
 
-`=` doing create, rebind, and place-write means the evaluator must walk the scope chain on every assignment to decide which operation to perform.  The "lookup-then-assign" semantics also make it impossible to intentionally shadow a variable.
+> **Update:** The language uses only `=` (assign-or-create).  `def` and `set` were considered but ultimately removed to keep the language simpler.
 
-- `def` creates a new binding in the current scope (always).
-- `set` rebinds an existing binding or writes to a place (always).  Error if the name doesn't exist.
+Original analysis: `=` doing create, rebind, and place-write means the evaluator must walk the scope chain on every assignment to decide which operation to perform.  The "lookup-then-assign" semantics also make it impossible to intentionally shadow a variable.
 
-```bbl
-[def x 10]
-[set x 20]
-[def x 30]     // shadows — new binding in current scope
-[set y 5]      // error: y not defined
-```
-
-The evaluator always knows which operation to perform.  No scope-chain walk for `def`.  Error on typos with `set`.  This is how Scheme (`define` vs `set!`), Rust (`let` vs assignment), and most languages work.
+The trade-off was accepted: simplicity of a single assignment operator outweighs the benefits of separate `def`/`set`.
 
 ### D. use parentheses instead of square brackets
 

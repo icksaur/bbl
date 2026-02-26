@@ -1,5 +1,5 @@
 # Performance Improvements
-Status: proposed
+Status: done
 
 ## Goal
 

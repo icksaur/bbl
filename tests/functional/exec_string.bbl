@@ -1,2 +1,2 @@
-(def result (exec "(+ 10 20)"))
+(= result (exec "(+ 10 20)"))
 (print result)

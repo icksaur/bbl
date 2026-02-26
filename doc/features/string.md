@@ -9,7 +9,7 @@ Basic string manipulation for scripting.  Strings are interned, immutable, GC-ma
 `+` is variadic for strings — multiple string arguments are concatenated left-to-right:
 
 ```bbl
-(def greeting (+ "hello" " " "world"))   // "hello world"
+(= greeting (+ "hello" " " "world"))   // "hello world"
 ```
 
 The result is a new interned string.  Mixing string and non-string types is a type error (no implicit conversion).

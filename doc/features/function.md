@@ -79,9 +79,9 @@ A `fn` expression captures **free variables** from the enclosing scope at the ti
 The interpreter performs a static AST walk (`gatherFreeVars`) over the function body to identify free variables — symbols used in the body that are not:
 
 1. Parameters of this function
-2. Assigned by `=` or `def` within the body
+2. Assigned by `=` within the body
 3. Parameters of nested `fn` expressions
-4. Special forms (`=`, `def`, `set`, `if`, `loop`, `and`, `or`, `fn`, `exec`, `not`)
+4. Special forms (`=`, `if`, `loop`, `and`, `or`, `fn`, `exec`, `not`)
 
 Each free variable is looked up in the enclosing scope at the time the `fn` expression evaluates.  If found, its current value is stored in the function's capture list.  If not found (e.g., the name will be defined later or is a typo), it is silently skipped — the missing binding will cause an "undefined symbol" error at call time.
 
