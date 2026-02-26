@@ -51,23 +51,27 @@ S-expressions.  First element is the operator or function.  Comments are `//`.
 
 ```bbl
 (print "hello")       // function call
-(def x 10)            // define a new binding
-(set x 20)            // rebind existing variable
-(+ x 1)              // prefix math
+(= x 10)              // create or rebind a variable
+(+ x 1)               // prefix math
 ```
 
-### `def` and `set`
+### `=` (assign-or-create)
 
-`def` creates a new binding in the current scope.  `set` rebinds an existing binding or writes to a place expression.
+`=` is the universal assignment form.  If the name already exists in the scope chain (local → captured → root), `=` rebinds it.  If not found, `=` creates a new binding in the current scope.
 
 ```bbl
-(def x 10)            // new binding
-(set x 20)            // rebind — x must already exist
-(def x 30)            // shadows — new binding in current scope
-(set y 5)             // error: y not defined
+(= x 10)              // creates x (not yet defined)
+(= x 20)              // rebinds x (already exists)
+(= y (+ x 1))         // creates y = 21
 ```
 
-`set` walks the scope chain (local → captured → root).  If the name exists, it rebinds.  If not found, runtime error.  This prevents typo-based silent variable creation.
+For place expressions (struct fields, table keys), `=` writes to the location:
+
+```bbl
+(= player.hp 80)      // write to table key or struct field
+```
+
+**Legacy aliases**: `def` (always creates) and `set` (always rebinds, errors if missing) still work for backwards compatibility but `=` is preferred.
 
 ### lexer rules for literals
 
@@ -91,8 +95,8 @@ Binary blob literal: `0b<size>:<raw bytes>`.  Size is a decimal byte count.  The
 The lexer reads all bytes immediately into memory.  No lazy loading.
 
 ```bbl
-(def blob 0b4096:<4096 raw bytes>)
-(def texture 0b65536:<65536 bytes of png data>)
+(= blob 0b4096:<4096 raw bytes>)
+(= texture 0b65536:<65536 bytes of png data>)
 ```
 
 ### structs
@@ -102,7 +106,7 @@ See [structs.md](structs.md) for details.
 Structs are registered from C++ via `StructBuilder`.  There is no script-level `struct` keyword.  Scripts use struct types as constructors and access fields via `.`:
 
 ```bbl
-(def v (vertex 1.0 2.0 3.0))
+(= v (vertex 1.0 2.0 3.0))
 (print v.x)
 ```
 
@@ -111,7 +115,7 @@ Structs are **value types** with C++ compatible binary layout.  POD only — no 
 Structs compose:
 
 ```bbl
-(def tri (triangle (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
+(= tri (triangle (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
 ```
 
 ### vectors
@@ -119,7 +123,7 @@ Structs compose:
 Contiguous typed storage for value types and structs.
 
 ```bbl
-(def verts (vector vertex (vertex 0 1 0)))
+(= verts (vector vertex (vertex 0 1 0)))
 (verts.push (vertex 1 0 0))
 (verts.push (vertex -1 0 0))
 ```
@@ -132,23 +136,23 @@ Constructed with alternating key-value pairs (string-keyed) or sequential values
 
 ```bbl
 // string-keyed (like a map)
-(def player (table "name" "hero" "hp" 100 "alive" true))
+(= player (table "name" "hero" "hp" 100 "alive" true))
 
 // integer-indexed (like a list)
-(def items (table 1 "sword" 2 "shield" 3 "potion"))
+(= items (table 1 "sword" 2 "shield" 3 "potion"))
 ```
 
 Access via `.` for string keys:
 
 ```bbl
 (print player.name)     // "hero"
-(set player.hp 80)
+(= player.hp 80)
 ```
 
 Dynamic key access via `get` and `set` methods:
 
 ```bbl
-(def key "hp")
+(= key "hp")
 (print (player.get key))   // 80
 (player.set key 60)
 ```
@@ -161,16 +165,18 @@ Integer-indexed access via `at` (0-based positional):
 
 ### functions
 
-Functions return the value of their last evaluated expression.  There is no explicit `return` keyword.
+Functions are first-class values created with `fn`.  They return the value of their last evaluated expression.  There is no explicit `return` keyword.  Functions support closures, recursion, and higher-order patterns.
 
 ```bbl
-(def greet (fn (name)
+(= greet (fn (name)
     (print "hello " name "\n")
 ))
 (greet "world")
 
-(def double (fn (x) (* x 2)))   // returns (* x 2)
+(= double (fn (x) (* x 2)))   // returns (* x 2)
 ```
+
+See [features/function.md](features/function.md) for the full function specification: closures, capture semantics, recursion, C++ function registration, and performance considerations.
 
 ### closures
 
@@ -182,23 +188,18 @@ A `fn` expression captures free variables from the enclosing scope at the time i
 
 ```bbl
 // value capture
-(def x 10)
-(def f (fn () x))
-(set x 99)
+(= x 10)
+(= f (fn () x))
+(= x 99)
 (f)                  // 10 (captured the old x)
 
 // higher-order function
-(def make-adder (fn (n) (fn (x) (+ x n))))
-(def add5 (make-adder 5))
+(= make-adder (fn (n) (fn (x) (+ x n))))
+(= add5 (make-adder 5))
 (add5 3)             // 8
-
-// shared container
-(def log (table))
-(def record (fn (v) (log.push v)))
-(record 1)
-(record 2)
-(print log.length)   // 2 (closure and outer scope share log)
 ```
+
+See [features/function.md](features/function.md) for recursive functions and the complete capture algorithm.
 
 ### operators
 
@@ -223,8 +224,9 @@ Conditions in `if`, `loop`, and `and`/`or` must evaluate to `bool`.  Non-bool va
 
 | form | purpose |
 |------|--------|
-| `def` | create a new binding in current scope |
-| `set` | rebind existing variable or write to place expression |
+| `=` | assign-or-create: rebind if exists, create if not; also place writes |
+| `def` | create a new binding in current scope (legacy) |
+| `set` | rebind existing variable or place write (legacy) |
 | `loop` | while-loop |
 | `if` | conditional branching |
 | `and` | short-circuit logical AND |
@@ -238,10 +240,10 @@ Conditions in `if`, `loop`, and `and`/`or` must evaluate to `bool`.  Non-bool va
 `loop` and `if` are special forms — their bodies run in the enclosing scope.
 
 ```bbl
-(def i 0)
+(= i 0)
 (loop (< i 10)
     (print i "\n")
-    (set i (+ i 1))   // modifies enclosing scope's i
+    (= i (+ i 1))     // modifies enclosing scope's i
 )
 ```
 
@@ -257,9 +259,9 @@ Conditions in `if`, `loop`, and `and`/`or` must evaluate to `bool`.  Non-bool va
 `if` is a statement — it does not return a value.  To compute a value conditionally, use a function or assign in both branches:
 
 ```bbl
-(def label "other")
-(if (== choice 0) (set label "zero"))
-(if (== choice 1) (set label "one"))
+(= label "other")
+(if (== choice 0) (= label "zero"))
+(if (== choice 1) (= label "one"))
 ```
 
 `loop` is a statement — it does not return a value.
@@ -269,24 +271,24 @@ Conditions in `if`, `loop`, and `and`/`or` must evaluate to `bool`.  Non-bool va
 Use `loop` with `at` and `length`:
 
 ```bbl
-(def i 0)
+(= i 0)
 (loop (< i (verts.length))
-    (def v (verts.at i))
+    (= v (verts.at i))
     (print v.x "\n")
-    (set i (+ i 1))
+    (= i (+ i 1))
 )
 ```
 
 Table iteration via `keys`:
 
 ```bbl
-(def player (table "name" "hero" "hp" 100))
-(def ks (player.keys))
-(def i 0)
+(= player (table "name" "hero" "hp" 100))
+(= ks (player.keys))
+(= i 0)
 (loop (< i (ks.length))
-    (def k (ks.at i))
+    (= k (ks.at i))
     (print k ": " (player.get k) "\n")
-    (set i (+ i 1))
+    (= i (+ i 1))
 )
 ```
 
@@ -295,7 +297,7 @@ Table iteration via `keys`:
 `at` accesses vector and table elements by index.  Writable via `set`:
 
 ```bbl
-(def verts (vector vertex (vertex 0 1 0) (vertex 1 0 0)))
+(= verts (vector vertex (vertex 0 1 0) (vertex 1 0 0)))
 (print (verts.at 0).x)                    // read
 (set (verts.at 0) (vertex 5 5 5))         // write whole element
 ```
@@ -307,14 +309,14 @@ The `.` operator provides field access and method dispatch on typed values.  `v.
 Field read:
 
 ```bbl
-(def v (vertex 1.0 2.0 3.0))
+(= v (vertex 1.0 2.0 3.0))
 (print v.x)
 ```
 
 Field write:
 
 ```bbl
-(set v.x 5.0)
+(= v.x 5.0)
 ```
 
 Method call — `.` looks up a function registered on the value's type:
@@ -327,21 +329,21 @@ See [features/method-resolution.md](features/method-resolution.md) for the full 
 
 ### place expressions
 
-`set` accepts **place expressions** — expressions that identify a writable location.
+`=` and `set` accept **place expressions** — expressions that identify a writable location.
 
 Place writes are **single-level only** — one dot or one `at`, not chained:
 
 | pattern | meaning |
 |---------|---------|
-| `symbol` | rebind variable: `(set x 5)` |
-| `obj.field` | struct field or table string-key: `(set v.x 5)` or `(set player.hp 80)` |
+| `symbol` | assign variable: `(= x 5)` |
+| `obj.field` | struct field or table string-key: `(= v.x 5)` or `(= player.hp 80)` |
 | `(obj.at index)` | container index: `(set (verts.at 0) val)` |
 
 For deeper mutation, use intermediate variables:
 
 ```bbl
-(def v (verts.at 0))
-(set v.x 5.0)
+(= v (verts.at 0))
+(= v.x 5.0)
 (set (verts.at 0) v)
 ```
 
@@ -373,7 +375,7 @@ Two special forms for loading code:
 **From script** — `(execfile "file.bbl")`: creates a fresh isolated scope.  The exec'd file cannot see the caller's variables.  Returns the value of the last evaluated expression in the file.
 
 ```bbl
-(def scene (execfile "scene.bbl"))
+(= scene (execfile "scene.bbl"))
 (print scene.name)
 ```
 
@@ -388,11 +390,11 @@ Two special forms for loading code:
 **From script** — `(exec "(print 42)")`: evaluates the string as BBL code.  Runs in a fresh isolated scope.  Returns the value of the last evaluated expression.
 
 ```bbl
-(def result (exec "(+ 1 2)"))
+(= result (exec "(+ 1 2)"))
 (print result)   // 3
 ```
 
-**From C++** — `bbl.exec("(def x 10)")`: evaluates the string in the existing root scope.  Accumulates like `bbl.execfile()` but takes source code instead of a filename.
+**From C++** — `bbl.exec("(= x 10)")`: evaluates the string in the existing root scope.  Accumulates like `bbl.execfile()` but takes source code instead of a filename.
 
 ## runtime typing
 
@@ -403,7 +405,7 @@ Arithmetic operators inspect operand type tags: `int + int = int`, `float + floa
 Function arguments are untyped — the caller can pass any type.  The function body discovers types at runtime through the operations it performs.
 
 ```bbl
-(def double (fn (x) (* x 2)))
+(= double (fn (x) (* x 2)))
 (double 5)       // 10 (int)
 (double 3.14)    // 6.28 (float)
 (double "hi")    // runtime error: * cannot apply to string
@@ -452,7 +454,7 @@ Interactive mode reads s-expressions and evaluates them immediately.  Multi-line
 ```
 > (print "hello")
 hello
-> (def greet (fn (name)
+> (= greet (fn (name)
 .     (print "hi " name)
 . ))
 > (greet "world")
@@ -496,13 +498,13 @@ The primary use case: dump C++ structs to `.bbl` files, read them back.
 // scene.bbl — a serialized scene
 // vertex and mesh types registered from C++ before exec
 
-(def player-mesh (mesh 1 "hero"))
-(def player-verts (vector vertex
+(= player-mesh (mesh 1 "hero"))
+(= player-verts (vector vertex
     (vertex 0 1 0)
     (vertex 1 0 0)
     (vertex -1 0 0)
 ))
-(def player-texture 0b65536:<65536 bytes of png>)
+(= player-texture 0b65536:<65536 bytes of png>)
 ```
 
 ## open questions
@@ -521,6 +523,7 @@ Design documents linked from this spec:
 | [backlog.md](backlog.md) | deferred features and future work |
 | [features/cpp-api.md](features/cpp-api.md) | C++ embedding API (`BblState`, getters, StructBuilder) |
 | [features/errors.md](features/errors.md) | error types, conditions, backtrace |
+| [features/function.md](features/function.md) | functions, closures, recursion, C++ interop, performance |
 | [features/binary-data.md](features/binary-data.md) | binary blob literals, immediate loading |
 | [features/vector.md](features/vector.md) | typed contiguous vector |
 | [features/table.md](features/table.md) | heterogeneous key-value table |

@@ -757,6 +757,15 @@ BblValue BblState::eval(const AstNode& node, BblScope& scope) {
 
 // Collect free variables from an AST body that are not in the bound set
 
+static bool contains(const std::vector<std::string>& v, const std::string& s) {
+    for (auto& e : v) {
+        if (e == s) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void gatherFreeVars(const AstNode& node,
                            const std::vector<std::string>& bound,
                            std::vector<std::string>& freeVars);
@@ -765,25 +774,27 @@ static void gatherFreeVarsBody(const std::vector<AstNode>& body,
                                std::vector<std::string> bound,
                                std::vector<std::string>& freeVars) {
     for (auto& n : body) {
-        // If it's a def form, add the name to bound AFTER processing value
+        // If it's a def or = form, add the name to bound AFTER processing value
         if (n.type == NodeType::List && !n.children.empty()
             && n.children[0].type == NodeType::Symbol
-            && n.children[0].stringVal == "def" && n.children.size() >= 3) {
-            gatherFreeVars(n.children[2], bound, freeVars);
-            bound.push_back(n.children[1].stringVal);
-        } else {
-            gatherFreeVars(n, bound, freeVars);
+            && n.children.size() >= 3
+            && n.children[1].type == NodeType::Symbol) {
+            auto& bodyOp = n.children[0].stringVal;
+            if (bodyOp == "def" || bodyOp == "=") {
+                // For =, name might reference an outer variable — mark as potential free var
+                if (bodyOp == "=") {
+                    auto& eName = n.children[1].stringVal;
+                    if (!contains(bound, eName) && !contains(freeVars, eName)) {
+                        freeVars.push_back(eName);
+                    }
+                }
+                gatherFreeVars(n.children[2], bound, freeVars);
+                bound.push_back(n.children[1].stringVal);
+                continue;
+            }
         }
+        gatherFreeVars(n, bound, freeVars);
     }
-}
-
-static bool contains(const std::vector<std::string>& v, const std::string& s) {
-    for (auto& e : v) {
-        if (e == s) {
-            return true;
-        }
-    }
-    return false;
 }
 
 static void gatherFreeVars(const AstNode& node,
@@ -814,6 +825,13 @@ static void gatherFreeVars(const AstNode& node,
                 }
                 if (op == "def") {
                     // handled by gatherFreeVarsBody
+                    for (size_t i = 1; i < node.children.size(); i++) {
+                        gatherFreeVars(node.children[i], bound, freeVars);
+                    }
+                    return;
+                }
+                if (op == "=") {
+                    // = is assign-or-create: process all children (name may be free)
                     for (size_t i = 1; i < node.children.size(); i++) {
                         gatherFreeVars(node.children[i], bound, freeVars);
                     }
@@ -860,16 +878,38 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 val = BblValue::makeStruct(copy);
             }
             scope.def(name.stringVal, val);
+
+            // Enable recursive functions: if the value is a fn whose body
+            // references the name being defined (a free variable that wasn't
+            // captured because the def hadn't completed yet), inject self.
+            if (val.type == BBL::Type::Fn && val.fnVal) {
+                auto& defName = name.stringVal;
+                // Check if defName is a free variable of the fn body
+                // but not already in captures
+                bool alreadyCaptured = false;
+                for (auto& [cname, cval] : val.fnVal->captures) {
+                    if (cname == defName) { alreadyCaptured = true; break; }
+                }
+                if (!alreadyCaptured) {
+                    std::vector<std::string> freeVars;
+                    std::vector<std::string> bound = val.fnVal->params;
+                    gatherFreeVarsBody(val.fnVal->body, bound, freeVars);
+                    if (contains(freeVars, defName)) {
+                        val.fnVal->captures.emplace_back(defName, val);
+                    }
+                }
+            }
+
             return BblValue::makeNull();
         }
 
-        if (op == "set") {
+        if (op == "set" || op == "=") {
             if (node.children.size() < 3) {
-                throw BBL::Error{"set requires a name and value"};
+                throw BBL::Error{op + " requires a target and value"};
             }
             auto& target = node.children[1];
+            // Place expression: (= v.x val) or (set v.x val)
             if (target.type == NodeType::DotAccess && target.children.size() == 1) {
-                // Place expression: (set v.x val)
                 BblValue obj = eval(target.children[0], scope);
                 auto& fieldName = target.stringVal;
                 BblValue val = eval(node.children[2], scope);
@@ -895,10 +935,42 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 throw BBL::Error{"cannot set field on " + typeName(obj.type)};
             }
             if (target.type != NodeType::Symbol) {
-                throw BBL::Error{"set: first argument must be a symbol or place expression"};
+                throw BBL::Error{op + ": first argument must be a symbol or place expression"};
             }
             BblValue val = eval(node.children[2], scope);
-            scope.set(target.stringVal, val);
+            if (op == "set") {
+                // set: rebind existing only
+                scope.set(target.stringVal, val);
+            } else {
+                // =: assign-or-create
+                BblValue* existing = scope.lookup(target.stringVal);
+                if (existing) {
+                    scope.set(target.stringVal, val);
+                } else {
+                    if (val.type == BBL::Type::Struct) {
+                        BblStruct* copy = allocStruct(val.structVal->desc);
+                        memcpy(copy->data.data(), val.structVal->data.data(), val.structVal->desc->totalSize);
+                        val = BblValue::makeStruct(copy);
+                    }
+                    scope.def(target.stringVal, val);
+                }
+                // Recursive function self-capture (same as def)
+                if (val.type == BBL::Type::Fn && val.fnVal) {
+                    auto& defName = target.stringVal;
+                    bool alreadyCaptured = false;
+                    for (auto& [cname, cval] : val.fnVal->captures) {
+                        if (cname == defName) { alreadyCaptured = true; break; }
+                    }
+                    if (!alreadyCaptured) {
+                        std::vector<std::string> freeVars;
+                        std::vector<std::string> bound = val.fnVal->params;
+                        gatherFreeVarsBody(val.fnVal->body, bound, freeVars);
+                        if (contains(freeVars, defName)) {
+                            val.fnVal->captures.emplace_back(defName, val);
+                        }
+                    }
+                }
+            }
             return BblValue::makeNull();
         }
 
@@ -999,7 +1071,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             // Filter: only capture names that are special forms or builtins
             // Actually, capture everything that exists in scope
             static const std::vector<std::string> specialForms = {
-                "def", "set", "if", "loop", "and", "or", "fn", "exec", "not"
+                "def", "set", "=", "if", "loop", "and", "or", "fn", "exec", "not"
             };
             for (auto& name : freeVars) {
                 if (contains(specialForms, name)) {

@@ -35,6 +35,7 @@ check strings     "true abc 5"
 check math        "2 7 256"
 check file_io     "hello from bbl"
 check binary_data "5"
+check recursion   "$(printf '1\n1\n120\n3628800\n0\n1\n55\n0\n15')"
 
 # Phase 6: args test (needs extra arguments)
 check_args() {

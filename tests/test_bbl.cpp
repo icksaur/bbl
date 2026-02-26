@@ -1571,6 +1571,159 @@ TEST(test_sandbox_chain) {
     ASSERT_THROW(bbl.exec(R"((execfile "subdir/helper.bbl"))"));
 }
 
+// ========== Recursive Functions ==========
+
+TEST(test_recursive_factorial) {
+    BblState bbl;
+    bbl.exec(R"(
+        (def fact (fn (n)
+            (def result 1)
+            (if (<= n 1)
+                (set result 1)
+                (set result (* n (fact (- n 1))))
+            )
+            result
+        ))
+        (def r (fact 10))
+    )");
+    ASSERT_EQ(bbl.getInt("r"), 3628800LL);
+}
+
+TEST(test_recursive_fibonacci) {
+    BblState bbl;
+    bbl.exec(R"(
+        (def fib (fn (n)
+            (def result 0)
+            (if (<= n 1)
+                (set result n)
+                (set result (+ (fib (- n 1)) (fib (- n 2))))
+            )
+            result
+        ))
+        (def r (fib 10))
+    )");
+    ASSERT_EQ(bbl.getInt("r"), 55LL);
+}
+
+TEST(test_recursive_countdown) {
+    // Recursive function that counts down and returns the base case value
+    BblState bbl;
+    bbl.exec(R"(
+        (def countdown (fn (n)
+            (def result n)
+            (if (> n 0)
+                (set result (countdown (- n 1)))
+            )
+            result
+        ))
+        (def r (countdown 5))
+    )");
+    ASSERT_EQ(bbl.getInt("r"), 0LL);
+}
+
+TEST(test_recursive_self_capture_only) {
+    // Ensure that a non-recursive fn doesn't get a self-capture injected
+    BblState bbl;
+    bbl.exec(R"(
+        (def add1 (fn (x) (+ x 1)))
+        (def r (add1 9))
+    )");
+    ASSERT_EQ(bbl.getInt("r"), 10LL);
+}
+
+// ========== = (assign-or-create) ==========
+
+TEST(test_eq_create_new) {
+    BblState bbl;
+    bbl.exec(R"((= x 42))");
+    ASSERT_EQ(bbl.getInt("x"), 42LL);
+}
+
+TEST(test_eq_rebind_existing) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= x 10)
+        (= x 20)
+    )");
+    ASSERT_EQ(bbl.getInt("x"), 20LL);
+}
+
+TEST(test_eq_place_table) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= t (table "a" 1 "b" 2))
+        (= t.a 99)
+        (= r t.a)
+    )");
+    ASSERT_EQ(bbl.getInt("r"), 99LL);
+}
+
+TEST(test_eq_closure_capture) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= x 10)
+        (= f (fn () x))
+        (= x 99)
+        (= r (f))
+    )");
+    ASSERT_EQ(bbl.getInt("r"), 10LL);
+}
+
+TEST(test_eq_closure_rebind_captured) {
+    // = inside closure rebinds the captured variable, not outer
+    BblState bbl;
+    bbl.exec(R"(
+        (= x 10)
+        (= f (fn ()
+            (= x 20)
+            x
+        ))
+        (= r (f))
+    )");
+    ASSERT_EQ(bbl.getInt("r"), 20LL);
+    // Outer x unchanged
+    ASSERT_EQ(bbl.getInt("x"), 10LL);
+}
+
+TEST(test_eq_higher_order) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= make-adder (fn (n) (fn (x) (+ x n))))
+        (= add5 (make-adder 5))
+        (= r (add5 3))
+    )");
+    ASSERT_EQ(bbl.getInt("r"), 8LL);
+}
+
+TEST(test_eq_recursive_fn) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= fact (fn (n)
+            (= result 1)
+            (if (<= n 1)
+                (= result 1)
+                (= result (* n (fact (- n 1))))
+            )
+            result
+        ))
+        (= r (fact 10))
+    )");
+    ASSERT_EQ(bbl.getInt("r"), 3628800LL);
+}
+
+TEST(test_eq_create_inside_fn) {
+    // = creates a new local when var doesn't exist
+    BblState bbl;
+    bbl.exec(R"(
+        (= f (fn ()
+            (= local_var 42)
+            local_var
+        ))
+        (= r (f))
+    )");
+    ASSERT_EQ(bbl.getInt("r"), 42LL);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -1840,6 +1993,22 @@ int main() {
     RUN(test_sandbox_absolute_path);
     RUN(test_sandbox_parent_traversal);
     RUN(test_sandbox_chain);
+
+    // Recursive functions
+    RUN(test_recursive_factorial);
+    RUN(test_recursive_fibonacci);
+    RUN(test_recursive_countdown);
+    RUN(test_recursive_self_capture_only);
+
+    // = (assign-or-create)
+    RUN(test_eq_create_new);
+    RUN(test_eq_rebind_existing);
+    RUN(test_eq_place_table);
+    RUN(test_eq_closure_capture);
+    RUN(test_eq_closure_rebind_captured);
+    RUN(test_eq_higher_order);
+    RUN(test_eq_recursive_fn);
+    RUN(test_eq_create_inside_fn);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;
