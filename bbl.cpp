@@ -481,7 +481,6 @@ BblBinary* BblState::allocBinary(std::vector<uint8_t> data) {
     auto* b = new BblBinary{std::move(data)};
     allocatedBinaries.push_back(b);
     allocCount++;
-    if (allocCount >= gcThreshold) gc();
     return b;
 }
 
@@ -489,7 +488,6 @@ BblFn* BblState::allocFn() {
     auto* f = new BblFn{};
     allocatedFns.push_back(f);
     allocCount++;
-    if (allocCount >= gcThreshold) gc();
     return f;
 }
 
@@ -497,7 +495,6 @@ BblStruct* BblState::allocStruct(StructDesc* desc) {
     auto* s = new BblStruct{desc, std::vector<uint8_t>(desc->totalSize, 0)};
     allocatedStructs.push_back(s);
     allocCount++;
-    if (allocCount >= gcThreshold) gc();
     return s;
 }
 
@@ -505,7 +502,6 @@ BblVec* BblState::allocVector(const std::string& elemType, BBL::Type elemTypeTag
     auto* v = new BblVec{elemType, elemTypeTag, elemSize, {}};
     allocatedVectors.push_back(v);
     allocCount++;
-    if (allocCount >= gcThreshold) gc();
     return v;
 }
 
@@ -513,7 +509,6 @@ BblTable* BblState::allocTable() {
     auto* t = new BblTable{};
     allocatedTables.push_back(t);
     allocCount++;
-    if (allocCount >= gcThreshold) gc();
     return t;
 }
 
@@ -525,7 +520,6 @@ BblUserData* BblState::allocUserData(const std::string& typeName, void* data) {
     auto* u = new BblUserData{&it->second, data, false};
     allocatedUserDatas.push_back(u);
     allocCount++;
-    if (allocCount >= gcThreshold) gc();
     return u;
 }
 
@@ -588,6 +582,9 @@ static void gcMark(BblValue& val) {
 void BblState::gc() {
     // Mark phase
     gcMarkScope(rootScope);
+    for (auto* scope : activeScopes) {
+        gcMarkScope(*scope);
+    }
     for (auto& arg : callArgs) {
         gcMark(arg);
     }
@@ -926,6 +923,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 throw BBL::Error{"loop requires a condition and body"};
             }
             while (true) {
+                if (allocCount >= gcThreshold) gc();
                 BblValue cond = eval(node.children[1], scope);
                 if (cond.type != BBL::Type::Bool) {
                     throw BBL::Error{"type mismatch: condition must be bool, got " + typeName(cond.type)};
@@ -1435,6 +1433,7 @@ BblValue BblState::callFn(BblFn* fn, const std::vector<BblValue>& args, int call
     // Fresh scope for the call — no parent scope chain for closures
     // Instead, use captures + args
     BblScope callScope;
+    activeScopes.push_back(&callScope);
     // Load captures
     for (auto& [name, val] : fn->captures) {
         callScope.bindings[name] = val;
@@ -1445,9 +1444,15 @@ BblValue BblState::callFn(BblFn* fn, const std::vector<BblValue>& args, int call
     }
 
     BblValue result = BblValue::makeNull();
-    for (auto& node : fn->body) {
-        result = eval(node, callScope);
+    try {
+        for (auto& node : fn->body) {
+            result = eval(node, callScope);
+        }
+    } catch (...) {
+        activeScopes.pop_back();
+        throw;
     }
+    activeScopes.pop_back();
     return result;
 }
 
@@ -1457,6 +1462,7 @@ void BblState::exec(const std::string& source) {
     BblLexer lexer(source.c_str());
     auto nodes = parse(lexer);
     for (auto& node : nodes) {
+        if (allocCount >= gcThreshold) gc();
         eval(node, rootScope);
     }
 }
@@ -1467,6 +1473,7 @@ BblValue BblState::execExpr(const std::string& source) {
     BblValue result;
     result.type = BBL::Type::Null;
     for (auto& node : nodes) {
+        if (allocCount >= gcThreshold) gc();
         result = eval(node, rootScope);
     }
     return result;

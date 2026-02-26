@@ -361,6 +361,7 @@ struct BblState {
     // GC
     size_t allocCount = 0;
     size_t gcThreshold = 256;
+    std::vector<BblScope*> activeScopes;
 
     // C function call interface
     std::vector<BblValue> callArgs;

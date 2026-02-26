@@ -1,0 +1,16 @@
+// table_heavy.bbl — table insert and lookup at scale
+// Measures: BblTable linear scan, GC from table allocations
+(def t (table))
+(def i 0)
+(loop (< i 1000)
+    (t.set i (* i i))
+    (set i (+ i 1))
+)
+// Read back all entries
+(def i 0)
+(def sum 0)
+(loop (< i 1000)
+    (set sum (+ sum (t.get i)))
+    (set i (+ i 1))
+)
+(print sum)

@@ -1,0 +1,9 @@
+// string_intern.bbl — string creation at scale
+// Measures: intern table lookup, string concatenation
+(def i 0)
+(def s "")
+(loop (< i 10000)
+    (set s (+ s "x"))
+    (set i (+ i 1))
+)
+(print (s.length))

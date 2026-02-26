@@ -1,0 +1,10 @@
+// loop_arith.bbl — tight arithmetic loop
+// Measures: eval dispatch, scope lookup, integer arithmetic
+(def n 1000000)
+(def sum 0)
+(def i 0)
+(loop (< i n)
+    (set sum (+ sum i))
+    (set i (+ i 1))
+)
+(print sum)
