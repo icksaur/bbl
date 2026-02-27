@@ -37,7 +37,7 @@ static void printValue(const BblValue& v) {
             fputc('\n', stdout);
             break;
         case BBL::Type::String:
-            fprintf(stdout, "\"%s\"\n", v.stringVal->data);
+            fprintf(stdout, "\"%s\"\n", v.stringVal->data.c_str());
             break;
         case BBL::Type::Fn:
             fputs("<fn>\n", stdout);
