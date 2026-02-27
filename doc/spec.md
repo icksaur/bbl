@@ -449,7 +449,19 @@ Simple mark-and-sweep garbage collector.  See [memory-model.md](memory-model.md)
 
 All strings are interned in a global table on the `BblState`.  Creating a string hashes it and returns the existing instance if found.  This makes string comparison O(1) (pointer equality) and deduplicates storage.
 
-Interned strings live for the **lifetime of `BblState`**.  They are never evicted from the intern table — `~BblState` frees the entire table.  This avoids coupling the intern table to the GC.  For a serialization DSL that runs and exits, this is negligible.
+Strings are GC-managed.  Each `intern()` call that creates a new string increments the allocation counter, triggering GC when the threshold is reached.  During the sweep phase, unreachable strings are removed from the intern table and freed.  This keeps the intern table clean even in loops that produce many temporary strings (e.g. `(+ s "x")` in a loop).
+
+### String methods
+
+String values support 16 methods accessible via both dot-access (`s.upper`) and call form (`(s.at 0)`).  Methods: `length`, `upper`, `lower`, `trim`, `trim-left`, `trim-right`, `at`, `slice`, `find`, `contains`, `starts-with`, `ends-with`, `replace`, `split`, `join`, `pad-left`, `pad-right`.  See [bbl.md](bbl.md) for full signatures.
+
+### Parsing builtins
+
+`int` and `float` builtins convert strings to numeric types.  They reject partial parses and overflow.  `int` truncates floats toward zero.  `float` converts integers exactly.
+
+### Format builtin
+
+`fmt` performs string formatting with `{}` placeholders, `{{`/`}}` for literal braces.  Throws on argument count mismatch.
 
 ## command-line usage
 

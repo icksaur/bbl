@@ -348,22 +348,196 @@ For struct vectors, elements have full dot access:
 
 ## Strings
 
-Strings are interned and immutable.  Concatenate with `+`.
+Strings are interned and immutable.  GC-managed — unreachable strings are swept during garbage collection, keeping the intern table clean.  Concatenate with `+`.
 
 ```bbl
 (= s (+ "hello" " " "world"))
 (print s.length)   // 11
 ```
 
+### Access forms
+
+No-arg methods work as both dot-access properties and call forms.  Methods with arguments require the call form.
+
+```bbl
+// dot-access — no-arg only
+(print "hello".length)       // 5
+(print "hello".upper)        // HELLO
+
+// call form — required for methods with arguments
+(print ("hello".at 0))       // h
+(print ("hello world".slice 0 5))   // hello
+```
+
 ### Methods
 
-| Method | Description |
-|--------|-------------|
-| `length` | byte length of string |
+#### length
 
-### Properties
+Returns the byte length of the string.
 
-Dot access on a string for `length` returns the byte length.  No other methods are available.
+```bbl
+(print "hello".length)   // 5
+(print "".length)         // 0
+```
+
+#### at
+
+`(s.at index)` — returns a single-character string at the given byte index.  Throws on out-of-range (negative or >= length).
+
+```bbl
+(print ("hello".at 0))   // h
+(print ("hello".at 4))   // o
+("hello".at 5)            // throws: index 5 out of bounds (length 5)
+("hello".at -1)           // throws: index -1 out of bounds
+```
+
+#### slice
+
+`(s.slice start [end])` — returns a substring from `start` (inclusive) to `end` (exclusive).  If `end` is omitted, slices to the end of the string.  Both indices are clamped to `[0, length]` — no out-of-bounds errors.
+
+```bbl
+(print ("hello world".slice 0 5))   // hello
+(print ("hello world".slice 6))     // world
+(print ("hello".slice 0 100))       // hello  (end clamped)
+(print ("hello".slice 3 1))         // ""     (start >= end → empty)
+```
+
+#### find
+
+`(s.find needle [start])` — returns the byte index of the first occurrence of `needle`, or `-1` if not found.  Optional `start` sets the search origin (must be >= 0).
+
+```bbl
+(print ("hello world".find "world"))    // 6
+(print ("hello".find "xyz"))            // -1
+(print ("hello".find "l" 3))            // 3
+(print ("hello".find "l" 4))            // -1
+("hello".find "l" -1)                   // throws: start must be >= 0
+```
+
+#### contains
+
+`(s.contains needle)` — returns `true` if `needle` is found anywhere in the string.
+
+```bbl
+(print ("hello world".contains "world"))   // true
+(print ("hello".contains "xyz"))           // false
+```
+
+#### starts-with
+
+`(s.starts-with prefix)` — returns `true` if the string begins with `prefix`.
+
+```bbl
+(print ("hello".starts-with "hel"))   // true
+(print ("hello".starts-with "world")) // false
+```
+
+#### ends-with
+
+`(s.ends-with suffix)` — returns `true` if the string ends with `suffix`.
+
+```bbl
+(print ("hello".ends-with "llo"))     // true
+(print ("hello".ends-with "hel"))     // false
+```
+
+#### upper
+
+Returns a new string with all ASCII characters converted to uppercase.
+
+```bbl
+(print "hello".upper)          // HELLO
+(print ("hello".upper))        // HELLO  (call form)
+```
+
+#### lower
+
+Returns a new string with all ASCII characters converted to lowercase.
+
+```bbl
+(print "HELLO".lower)          // hello
+```
+
+#### trim
+
+Returns a new string with leading and trailing whitespace removed.  Whitespace characters: space, tab, newline, carriage return, form feed, vertical tab.
+
+```bbl
+(print ("  hi  ".trim))        // hi
+(print ("\t\nhello\n".trim))   // hello
+```
+
+#### trim-left
+
+Returns a new string with leading whitespace removed (trailing whitespace preserved).
+
+```bbl
+(print ("  hi  ".trim-left))   // "hi  "
+```
+
+#### trim-right
+
+Returns a new string with trailing whitespace removed (leading whitespace preserved).
+
+```bbl
+(print ("  hi  ".trim-right))  // "  hi"
+```
+
+#### replace
+
+`(s.replace old new)` — returns a new string with all occurrences of `old` replaced by `new`.  Throws on empty search string.
+
+```bbl
+(print ("aXbXc".replace "X" "-"))     // a-b-c
+(print ("hello".replace "l" "L"))     // heLLo
+("abc".replace "" "x")                // throws: search string must not be empty
+```
+
+#### split
+
+`(s.split separator)` — splits the string on `separator` and returns a table with integer keys `0, 1, 2, ...`.  Throws on empty separator.
+
+```bbl
+(= parts ("a,b,c".split ","))
+(print parts.0)    // a
+(print parts.1)    // b
+(print parts.2)    // c
+
+("abc".split "")   // throws: separator must not be empty
+```
+
+#### join
+
+`(separator.join container)` — joins the elements of a table or vector into a single string, separated by the receiver string.  Table elements are joined in integer-key order (`0, 1, ...`).
+
+```bbl
+(= t (table))
+(t.push "x") (t.push "y") (t.push "z")
+(print (",".join t))       // x,y,z
+(print (" - ".join t))     // x - y - z
+
+(= v (vector int 1 2 3))
+(print (",".join v))       // 1,2,3
+```
+
+#### pad-left
+
+`(s.pad-left width [fill])` — left-pads the string to `width` characters.  `fill` defaults to a space.  If the string is already >= `width`, returns unchanged.  Fill must be a single-character string.
+
+```bbl
+(print ((str 42).pad-left 6))        // "    42"
+(print ((str 42).pad-left 6 "0"))    // "000042"
+(print ("hello".pad-left 3))         // "hello"  (already >= width)
+```
+
+#### pad-right
+
+`(s.pad-right width [fill])` — right-pads the string to `width` characters.  `fill` defaults to a space.  If the string is already >= `width`, returns unchanged.  Fill must be a single-character string.
+
+```bbl
+(print ((str 42).pad-right 6))       // "42    "
+(print ((str 42).pad-right 6 "."))   // "42...."
+```
 
 ---
 
@@ -438,6 +612,35 @@ Converts any value to its string representation.  Uses the same formatting as `p
 (= s (str 3.14))    // "3.14"
 (= s (str true))    // "true"
 (= s (str null))    // "null"
+```
+
+### int
+
+Parse a string to an integer, or convert a float (truncates toward zero).  Throws on invalid input, partial parse, or overflow.
+
+```bbl
+(= n (int "42"))     // 42
+(= n (int "-7"))     // -7
+(= n (int 3.9))     // 3
+(= n (int -2.7))    // -2
+```
+
+### float
+
+Parse a string to a float, or convert an integer.  Throws on invalid input, partial parse, or overflow.
+
+```bbl
+(= f (float "3.14"))  // 3.14
+(= f (float 42))      // 42.0
+```
+
+### fmt
+
+Format string with `{}` placeholders.  Each `{}` consumes the next argument.  Use `{{` / `}}` for literal braces.  Throws on argument count mismatch or lone braces.
+
+```bbl
+(= s (fmt "{} + {} = {}" 1 2 3))   // "1 + 2 = 3"
+(= s (fmt "use {{}} for placeholders"))  // "use {} for placeholders"
 ```
 
 ### Math functions

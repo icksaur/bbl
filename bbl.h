@@ -55,6 +55,7 @@ typedef int (*BblCFunction)(BblState* bbl);
 
 struct BblString {
     std::string data;
+    bool marked = false;
 };
 
 struct BblBinary {
@@ -337,7 +338,6 @@ struct AstNode {
     std::vector<uint8_t> binaryData;
     std::vector<AstNode> children;
     int line = 1;
-    mutable BblString* cachedString = nullptr;  // lazy-interned string for StringLiteral nodes
     mutable uint32_t symbolId = 0;                // lazy-resolved symbol ID for Symbol nodes
     mutable int8_t cachedSpecialForm = -1;        // lazy-resolved SpecialForm for List head symbols
 };

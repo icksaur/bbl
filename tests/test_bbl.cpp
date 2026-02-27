@@ -2013,6 +2013,315 @@ TEST(test_int_plus_string_still_errors) {
     ASSERT_THROW(bbl.exec("(+ 1 \"hello\")"));
 }
 
+// ========== GC String Tests ==========
+
+TEST(test_gc_strings_collected) {
+    BblState bbl; BBL::addStdLib(bbl);
+    // Create 1000 unique strings in a loop — intermediates should be collected
+    bbl.exec(R"(
+        (= s "x")
+        (= i 0)
+        (loop (< i 1000)
+            (= s (+ s "x"))
+            (= i (+ i 1))
+        )
+    )");
+    // After the loop, most intermediates should have been GC'd.
+    // The intern table should not have 1000+ entries for discarded strings.
+    size_t stringCount = bbl.allocatedStrings.size();
+    // Allow generous headroom (literals, stdlib strings, etc.), but far less than 1000
+    ASSERT_TRUE(stringCount < 500);
+}
+
+TEST(test_gc_strings_pointer_equality) {
+    BblState bbl; BBL::addStdLib(bbl);
+    // Force GC then verify pointer equality still works
+    bbl.exec(R"(
+        (= x "hello")
+        (= i 0)
+        (loop (< i 500)
+            (= tmp (+ "garbage" (str i)))
+            (= i (+ i 1))
+        )
+        (= result (== x "hello"))
+    )");
+    BblValue r = bbl.get("result");
+    ASSERT_EQ(r.type, BBL::Type::Bool);
+    ASSERT_TRUE(r.boolVal);
+}
+
+// ========== int/float builtins ==========
+
+TEST(test_int_from_string) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (int \"42\"))");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)42);
+}
+
+TEST(test_int_negative_string) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (int \"-7\"))");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)-7);
+}
+
+TEST(test_int_parse_error) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("(int \"abc\")"));
+}
+
+TEST(test_int_partial_parse_error) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("(int \"42abc\")"));
+}
+
+TEST(test_int_leading_whitespace) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (int \" 42\"))");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)42);
+}
+
+TEST(test_int_truncate_float) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (int 3.9))");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)3);
+}
+
+TEST(test_int_truncate_negative_float) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (int -2.7))");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)-2);
+}
+
+TEST(test_float_from_string) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (float \"3.14\"))");
+    ASSERT_NEAR(bbl.getFloat("r"), 3.14, 0.001);
+}
+
+TEST(test_float_partial_parse_error) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("(float \"3.14x\")"));
+}
+
+TEST(test_float_parse_error) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("(float \"bad\")"));
+}
+
+TEST(test_float_from_int) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (float 42))");
+    ASSERT_NEAR(bbl.getFloat("r"), 42.0, 0.001);
+}
+
+// ========== String methods ==========
+
+// at
+TEST(test_string_at) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"hello\".at 0))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("h"));
+}
+
+TEST(test_string_at_oob) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("(\"hello\".at 5)"));
+}
+
+// slice
+TEST(test_string_slice) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"hello world\".slice 0 5))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("hello"));
+}
+
+TEST(test_string_slice_to_end) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"hello world\".slice 6))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("world"));
+}
+
+// find
+TEST(test_string_find) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"hello world\".find \"world\"))");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)6);
+}
+
+TEST(test_string_find_not_found) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"hello\".find \"xyz\"))");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)-1);
+}
+
+TEST(test_string_find_with_start) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"hello\".find \"l\" 3))");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)3);
+}
+
+// contains
+TEST(test_string_contains) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"hello world\".contains \"world\"))");
+    ASSERT_TRUE(bbl.getBool("r"));
+}
+
+// starts-with
+TEST(test_string_starts_with) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"hello\".starts-with \"hel\"))");
+    ASSERT_TRUE(bbl.getBool("r"));
+}
+
+// ends-with
+TEST(test_string_ends_with) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"hello\".ends-with \"llo\"))");
+    ASSERT_TRUE(bbl.getBool("r"));
+}
+
+// split
+TEST(test_string_split) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= t ("a,b,c".split ","))
+        (= r0 (t.get 0))
+        (= r1 (t.get 1))
+        (= r2 (t.get 2))
+    )");
+    ASSERT_EQ(std::string(bbl.getString("r0")), std::string("a"));
+    ASSERT_EQ(std::string(bbl.getString("r1")), std::string("b"));
+    ASSERT_EQ(std::string(bbl.getString("r2")), std::string("c"));
+}
+
+TEST(test_string_split_empty_sep) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("(\"abc\".split \"\")"));
+}
+
+// join
+TEST(test_string_join) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= t (table))
+        (t.push "x")
+        (t.push "y")
+        (= r (",".join t))
+    )");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("x,y"));
+}
+
+// replace
+TEST(test_string_replace) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"aXbXc\".replace \"X\" \"-\"))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("a-b-c"));
+}
+
+TEST(test_string_replace_empty_error) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("(\"abc\".replace \"\" \"x\")"));
+}
+
+// trim
+TEST(test_string_trim) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"  hi  \".trim))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("hi"));
+}
+
+TEST(test_string_trim_left) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"  hi  \".trim-left))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("hi  "));
+}
+
+TEST(test_string_trim_right) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"  hi  \".trim-right))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("  hi"));
+}
+
+// upper/lower
+TEST(test_string_upper) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r \"hello\".upper)");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("HELLO"));
+}
+
+TEST(test_string_lower) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r \"HELLO\".lower)");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("hello"));
+}
+
+// upper/lower call form
+TEST(test_string_upper_call) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"hello\".upper))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("HELLO"));
+}
+
+TEST(test_string_lower_call) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (\"HELLO\".lower))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("hello"));
+}
+
+// pad-left
+TEST(test_string_pad_left) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r ((str 42).pad-left 6))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("    42"));
+}
+
+TEST(test_string_pad_left_fill) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r ((str 42).pad-left 6 \"0\"))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("000042"));
+}
+
+// pad-right
+TEST(test_string_pad_right) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r ((str 42).pad-right 6))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("42    "));
+}
+
+// --- fmt ---
+
+TEST(test_fmt_basic) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (fmt \"{} + {} = {}\" 1 2 3))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("1 + 2 = 3"));
+}
+
+TEST(test_fmt_escaped_braces) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (fmt \"use {{}} for placeholders\"))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("use {} for placeholders"));
+}
+
+TEST(test_fmt_single_arg) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (fmt \"{}\" 42))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("42"));
+}
+
+TEST(test_fmt_no_placeholders) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (fmt \"no args\"))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("no args"));
+}
+
+TEST(test_fmt_arg_count_mismatch) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bool threw = false;
+    try { bbl.exec("(fmt \"{} {}\" 1)"); } catch (...) { threw = true; }
+    ASSERT_TRUE(threw);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -2350,6 +2659,59 @@ int main() {
     RUN(test_string_plus_bool);
     RUN(test_string_plus_mixed);
     RUN(test_int_plus_string_still_errors);
+
+    // GC string collection
+    std::cout << "--- GC Strings ---" << std::endl;
+    RUN(test_gc_strings_collected);
+    RUN(test_gc_strings_pointer_equality);
+
+    // int/float builtins
+    std::cout << "--- int/float builtins ---" << std::endl;
+    RUN(test_int_from_string);
+    RUN(test_int_negative_string);
+    RUN(test_int_parse_error);
+    RUN(test_int_partial_parse_error);
+    RUN(test_int_leading_whitespace);
+    RUN(test_int_truncate_float);
+    RUN(test_int_truncate_negative_float);
+    RUN(test_float_from_string);
+    RUN(test_float_partial_parse_error);
+    RUN(test_float_parse_error);
+    RUN(test_float_from_int);
+
+    // String methods
+    std::cout << "--- String methods ---" << std::endl;
+    RUN(test_string_at);
+    RUN(test_string_at_oob);
+    RUN(test_string_slice);
+    RUN(test_string_slice_to_end);
+    RUN(test_string_find);
+    RUN(test_string_find_not_found);
+    RUN(test_string_find_with_start);
+    RUN(test_string_contains);
+    RUN(test_string_starts_with);
+    RUN(test_string_ends_with);
+    RUN(test_string_split);
+    RUN(test_string_split_empty_sep);
+    RUN(test_string_join);
+    RUN(test_string_replace);
+    RUN(test_string_replace_empty_error);
+    RUN(test_string_trim);
+    RUN(test_string_trim_left);
+    RUN(test_string_trim_right);
+    RUN(test_string_upper);
+    RUN(test_string_lower);
+    RUN(test_string_upper_call);
+    RUN(test_string_lower_call);
+    RUN(test_string_pad_left);
+    RUN(test_string_pad_left_fill);
+    RUN(test_string_pad_right);
+
+    RUN(test_fmt_basic);
+    RUN(test_fmt_escaped_braces);
+    RUN(test_fmt_single_arg);
+    RUN(test_fmt_no_placeholders);
+    RUN(test_fmt_arg_count_mismatch);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

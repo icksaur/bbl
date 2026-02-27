@@ -1,5 +1,6 @@
 #include "bbl.h"
 #include <algorithm>
+#include <cerrno>
 #include <fstream>
 #include <sstream>
 #include <cstring>
@@ -516,6 +517,7 @@ BblString* BblState::intern(const std::string& s) {
     auto* str = new BblString{s};
     allocatedStrings.push_back(str);
     internTable[str->data] = str;
+    allocCount++;
     return str;
 }
 
@@ -621,6 +623,11 @@ static void gcMark(BblValue& val) {
                 val.userdataVal->marked = true;
             }
             break;
+        case BBL::Type::String:
+            if (val.stringVal && !val.stringVal->marked) {
+                val.stringVal->marked = true;
+            }
+            break;
         default:
             break;
     }
@@ -690,10 +697,22 @@ void BblState::gc() {
         allocatedUserDatas.erase(mid, allocatedUserDatas.end());
         for (auto* u : allocatedUserDatas) u->marked = false;
     }
+    // Sweep strings
+    {
+        auto mid = std::partition(allocatedStrings.begin(), allocatedStrings.end(),
+                                  [](BblString* s) { return s->marked; });
+        for (auto it = mid; it != allocatedStrings.end(); ++it) {
+            internTable.erase((*it)->data);
+            delete *it;
+        }
+        allocatedStrings.erase(mid, allocatedStrings.end());
+        for (auto* s : allocatedStrings) s->marked = false;
+    }
     // Adaptive threshold: next GC when allocations double the surviving set
     size_t liveCount = allocatedBinaries.size() + allocatedFns.size()
                      + allocatedStructs.size() + allocatedVectors.size()
-                     + allocatedTables.size() + allocatedUserDatas.size();
+                     + allocatedTables.size() + allocatedUserDatas.size()
+                     + allocatedStrings.size();
     gcThreshold = std::max<size_t>(256, liveCount * 2);
     allocCount = 0;
 }
@@ -717,6 +736,43 @@ std::string typeName(BBL::Type t) {
     return "unknown";
 }
 
+// String no-arg method helper — shared between DotAccess and evalList dispatch
+static BblValue stringNoArgMethod(BblState& bbl, const std::string& data, const std::string& method) {
+    if (method == "length") {
+        return BblValue::makeInt(static_cast<int64_t>(data.size()));
+    }
+    if (method == "upper") {
+        std::string r = data;
+        std::transform(r.begin(), r.end(), r.begin(), ::toupper);
+        return BblValue::makeString(bbl.intern(r));
+    }
+    if (method == "lower") {
+        std::string r = data;
+        std::transform(r.begin(), r.end(), r.begin(), ::tolower);
+        return BblValue::makeString(bbl.intern(r));
+    }
+    if (method == "trim") {
+        const char* ws = " \t\n\r\f\v";
+        size_t start = data.find_first_not_of(ws);
+        if (start == std::string::npos) return BblValue::makeString(bbl.intern(""));
+        size_t end = data.find_last_not_of(ws);
+        return BblValue::makeString(bbl.intern(data.substr(start, end - start + 1)));
+    }
+    if (method == "trim-left") {
+        const char* ws = " \t\n\r\f\v";
+        size_t start = data.find_first_not_of(ws);
+        if (start == std::string::npos) return BblValue::makeString(bbl.intern(""));
+        return BblValue::makeString(bbl.intern(data.substr(start)));
+    }
+    if (method == "trim-right") {
+        const char* ws = " \t\n\r\f\v";
+        size_t end = data.find_last_not_of(ws);
+        if (end == std::string::npos) return BblValue::makeString(bbl.intern(""));
+        return BblValue::makeString(bbl.intern(data.substr(0, end + 1)));
+    }
+    return BblValue{}; // sentinel: type == Null, caller checks
+}
+
 BblValue BblState::eval(const AstNode& node, BblScope& scope) {
     switch (node.type) {
         case NodeType::IntLiteral:
@@ -724,10 +780,7 @@ BblValue BblState::eval(const AstNode& node, BblScope& scope) {
         case NodeType::FloatLiteral:
             return BblValue::makeFloat(node.floatVal);
         case NodeType::StringLiteral:
-            if (!node.cachedString) {
-                node.cachedString = intern(node.stringVal);
-            }
-            return BblValue::makeString(node.cachedString);
+            return BblValue::makeString(intern(node.stringVal));
         case NodeType::BoolLiteral:
             return BblValue::makeBool(node.boolVal);
         case NodeType::NullLiteral:
@@ -773,10 +826,9 @@ BblValue BblState::eval(const AstNode& node, BblScope& scope) {
                 return readField(left.structVal, *fd);
             }
             if (left.type == BBL::Type::String) {
-                if (field == "length") {
-                    return BblValue::makeInt(static_cast<int64_t>(left.stringVal->data.size()));
-                }
-                throw BBL::Error{"string has no method " + field};
+                BblValue r = stringNoArgMethod(*this, left.stringVal->data, field);
+                if (r.type != BBL::Type::Null) return r;
+                throw BBL::Error{"string has no field " + field};
             }
             if (left.type == BBL::Type::Binary) {
                 if (field == "length") {
@@ -1488,9 +1540,200 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
         }
 
         if (obj.type == BBL::Type::String) {
-            if (method == "length") {
-                return BblValue::makeInt(static_cast<int64_t>(obj.stringVal->data.size()));
+            const std::string& data = obj.stringVal->data;
+
+            // No-arg methods (also work in DotAccess)
+            BblValue noarg = stringNoArgMethod(*this, data, method);
+            if (noarg.type != BBL::Type::Null) return noarg;
+
+            // at
+            if (method == "at") {
+                if (node.children.size() < 2) throw BBL::Error{"string.at requires 1 argument"};
+                BblValue idx = eval(node.children[1], scope);
+                if (idx.type != BBL::Type::Int) throw BBL::Error{"string.at: index must be int"};
+                int64_t i = idx.intVal;
+                if (i < 0 || i >= static_cast<int64_t>(data.size())) {
+                    throw BBL::Error{"string.at: index " + std::to_string(i) + " out of bounds (length " + std::to_string(data.size()) + ")"};
+                }
+                return BblValue::makeString(intern(std::string(1, data[static_cast<size_t>(i)])));
             }
+
+            // slice
+            if (method == "slice") {
+                if (node.children.size() < 2) throw BBL::Error{"string.slice requires at least 1 argument"};
+                BblValue startVal = eval(node.children[1], scope);
+                if (startVal.type != BBL::Type::Int) throw BBL::Error{"string.slice: start must be int"};
+                int64_t start = startVal.intVal;
+                int64_t end = static_cast<int64_t>(data.size());
+                if (node.children.size() >= 3) {
+                    BblValue endVal = eval(node.children[2], scope);
+                    if (endVal.type != BBL::Type::Int) throw BBL::Error{"string.slice: end must be int"};
+                    end = endVal.intVal;
+                }
+                // Clamp
+                int64_t len = static_cast<int64_t>(data.size());
+                if (start < 0) start = 0;
+                if (start > len) start = len;
+                if (end < 0) end = 0;
+                if (end > len) end = len;
+                if (start >= end) return BblValue::makeString(intern(""));
+                return BblValue::makeString(intern(data.substr(static_cast<size_t>(start), static_cast<size_t>(end - start))));
+            }
+
+            // find
+            if (method == "find") {
+                if (node.children.size() < 2) throw BBL::Error{"string.find requires at least 1 argument"};
+                BblValue needleVal = eval(node.children[1], scope);
+                if (needleVal.type != BBL::Type::String) throw BBL::Error{"string.find: needle must be string"};
+                int64_t startPos = 0;
+                if (node.children.size() >= 3) {
+                    BblValue sv = eval(node.children[2], scope);
+                    if (sv.type != BBL::Type::Int) throw BBL::Error{"string.find: start must be int"};
+                    startPos = sv.intVal;
+                    if (startPos < 0) throw BBL::Error{"string.find: start must be >= 0"};
+                }
+                size_t pos = data.find(needleVal.stringVal->data, static_cast<size_t>(startPos));
+                return BblValue::makeInt(pos == std::string::npos ? -1 : static_cast<int64_t>(pos));
+            }
+
+            // contains
+            if (method == "contains") {
+                if (node.children.size() < 2) throw BBL::Error{"string.contains requires 1 argument"};
+                BblValue sub = eval(node.children[1], scope);
+                if (sub.type != BBL::Type::String) throw BBL::Error{"string.contains: argument must be string"};
+                return BblValue::makeBool(data.find(sub.stringVal->data) != std::string::npos);
+            }
+
+            // starts-with
+            if (method == "starts-with") {
+                if (node.children.size() < 2) throw BBL::Error{"string.starts-with requires 1 argument"};
+                BblValue prefix = eval(node.children[1], scope);
+                if (prefix.type != BBL::Type::String) throw BBL::Error{"string.starts-with: argument must be string"};
+                const std::string& p = prefix.stringVal->data;
+                return BblValue::makeBool(data.size() >= p.size() && data.compare(0, p.size(), p) == 0);
+            }
+
+            // ends-with
+            if (method == "ends-with") {
+                if (node.children.size() < 2) throw BBL::Error{"string.ends-with requires 1 argument"};
+                BblValue suffix = eval(node.children[1], scope);
+                if (suffix.type != BBL::Type::String) throw BBL::Error{"string.ends-with: argument must be string"};
+                const std::string& s = suffix.stringVal->data;
+                return BblValue::makeBool(data.size() >= s.size() && data.compare(data.size() - s.size(), s.size(), s) == 0);
+            }
+
+            // replace
+            if (method == "replace") {
+                if (node.children.size() < 3) throw BBL::Error{"string.replace requires 2 arguments"};
+                BblValue oldVal = eval(node.children[1], scope);
+                BblValue newVal = eval(node.children[2], scope);
+                if (oldVal.type != BBL::Type::String) throw BBL::Error{"string.replace: first argument must be string"};
+                if (newVal.type != BBL::Type::String) throw BBL::Error{"string.replace: second argument must be string"};
+                const std::string& oldStr = oldVal.stringVal->data;
+                const std::string& newStr = newVal.stringVal->data;
+                if (oldStr.empty()) throw BBL::Error{"string.replace: search string must not be empty"};
+                std::string result = data;
+                size_t pos = 0;
+                while ((pos = result.find(oldStr, pos)) != std::string::npos) {
+                    result.replace(pos, oldStr.size(), newStr);
+                    pos += newStr.size();
+                }
+                return BblValue::makeString(intern(result));
+            }
+
+            // split
+            if (method == "split") {
+                if (node.children.size() < 2) throw BBL::Error{"string.split requires 1 argument"};
+                BblValue sepVal = eval(node.children[1], scope);
+                if (sepVal.type != BBL::Type::String) throw BBL::Error{"string.split: separator must be string"};
+                const std::string& sep = sepVal.stringVal->data;
+                if (sep.empty()) throw BBL::Error{"string.split: separator must not be empty"};
+                BblTable* tbl = allocTable();
+                size_t start = 0;
+                int64_t key = 0;
+                while (true) {
+                    size_t pos = data.find(sep, start);
+                    if (pos == std::string::npos) {
+                        tbl->set(BblValue::makeInt(key), BblValue::makeString(intern(data.substr(start))));
+                        key++;
+                        break;
+                    }
+                    tbl->set(BblValue::makeInt(key), BblValue::makeString(intern(data.substr(start, pos - start))));
+                    key++;
+                    start = pos + sep.size();
+                }
+                tbl->nextIntKey = key;
+                return BblValue::makeTable(tbl);
+            }
+
+            // join
+            if (method == "join") {
+                if (node.children.size() < 2) throw BBL::Error{"string.join requires 1 argument"};
+                BblValue container = eval(node.children[1], scope);
+                std::string result;
+                if (container.type == BBL::Type::Table) {
+                    BblTable* tbl = container.tableVal;
+                    for (int64_t i = 0; i < tbl->nextIntKey; i++) {
+                        if (i > 0) result += data;
+                        BblValue elem = tbl->get(BblValue::makeInt(i));
+                        result += valueToString(elem);
+                    }
+                } else if (container.type == BBL::Type::Vector) {
+                    BblVec* vec = container.vectorVal;
+                    for (size_t i = 0; i < vec->length(); i++) {
+                        if (i > 0) result += data;
+                        result += valueToString(readVecElem(vec, i));
+                    }
+                } else {
+                    throw BBL::Error{"string.join: argument must be table or vector"};
+                }
+                return BblValue::makeString(intern(result));
+            }
+
+            // pad-left
+            if (method == "pad-left") {
+                if (node.children.size() < 2) throw BBL::Error{"string.pad-left requires at least 1 argument"};
+                BblValue widthVal = eval(node.children[1], scope);
+                if (widthVal.type != BBL::Type::Int) throw BBL::Error{"string.pad-left: width must be int"};
+                int64_t width = widthVal.intVal;
+                char fill = ' ';
+                if (node.children.size() >= 3) {
+                    BblValue fillVal = eval(node.children[2], scope);
+                    if (fillVal.type != BBL::Type::String || fillVal.stringVal->data.size() != 1) {
+                        throw BBL::Error{"string.pad-left: fill must be a single-character string"};
+                    }
+                    fill = fillVal.stringVal->data[0];
+                }
+                if (static_cast<int64_t>(data.size()) >= width) {
+                    return BblValue::makeString(obj.stringVal);
+                }
+                std::string result(static_cast<size_t>(width) - data.size(), fill);
+                result += data;
+                return BblValue::makeString(intern(result));
+            }
+
+            // pad-right
+            if (method == "pad-right") {
+                if (node.children.size() < 2) throw BBL::Error{"string.pad-right requires at least 1 argument"};
+                BblValue widthVal = eval(node.children[1], scope);
+                if (widthVal.type != BBL::Type::Int) throw BBL::Error{"string.pad-right: width must be int"};
+                int64_t width = widthVal.intVal;
+                char fill = ' ';
+                if (node.children.size() >= 3) {
+                    BblValue fillVal = eval(node.children[2], scope);
+                    if (fillVal.type != BBL::Type::String || fillVal.stringVal->data.size() != 1) {
+                        throw BBL::Error{"string.pad-right: fill must be a single-character string"};
+                    }
+                    fill = fillVal.stringVal->data[0];
+                }
+                if (static_cast<int64_t>(data.size()) >= width) {
+                    return BblValue::makeString(obj.stringVal);
+                }
+                std::string result = data;
+                result.append(static_cast<size_t>(width) - data.size(), fill);
+                return BblValue::makeString(intern(result));
+            }
+
             throw BBL::Error{"string has no method " + method};
         }
 
@@ -2315,9 +2558,117 @@ static int bblStr(BblState* bbl) {
     return 1;
 }
 
+static int bblInt(BblState* bbl) {
+    if (bbl->argCount() != 1) throw BBL::Error{"int requires 1 argument"};
+    BblValue arg = bbl->getArg(0);
+    switch (arg.type) {
+        case BBL::Type::Int:
+            bbl->pushInt(arg.intVal);
+            return 1;
+        case BBL::Type::Float:
+            bbl->pushInt(static_cast<int64_t>(arg.floatVal));
+            return 1;
+        case BBL::Type::String: {
+            const char* str = arg.stringVal->data.c_str();
+            char* end = nullptr;
+            errno = 0;
+            int64_t val = strtoll(str, &end, 10);
+            if (end == str || *end != '\0') {
+                throw BBL::Error{"int: cannot parse \"" + arg.stringVal->data + "\""};
+            }
+            if (errno == ERANGE) {
+                throw BBL::Error{"int: overflow parsing \"" + arg.stringVal->data + "\""};
+            }
+            bbl->pushInt(val);
+            return 1;
+        }
+        default:
+            throw BBL::Error{"int: cannot convert " + typeName(arg.type) + " to int"};
+    }
+}
+
+static int bblFloat(BblState* bbl) {
+    if (bbl->argCount() != 1) throw BBL::Error{"float requires 1 argument"};
+    BblValue arg = bbl->getArg(0);
+    switch (arg.type) {
+        case BBL::Type::Float:
+            bbl->pushFloat(arg.floatVal);
+            return 1;
+        case BBL::Type::Int:
+            bbl->pushFloat(static_cast<double>(arg.intVal));
+            return 1;
+        case BBL::Type::String: {
+            const char* str = arg.stringVal->data.c_str();
+            char* end = nullptr;
+            errno = 0;
+            double val = strtod(str, &end);
+            if (end == str || *end != '\0') {
+                throw BBL::Error{"float: cannot parse \"" + arg.stringVal->data + "\""};
+            }
+            if (errno == ERANGE) {
+                throw BBL::Error{"float: overflow parsing \"" + arg.stringVal->data + "\""};
+            }
+            bbl->pushFloat(val);
+            return 1;
+        }
+        default:
+            throw BBL::Error{"float: cannot convert " + typeName(arg.type) + " to float"};
+    }
+}
+
+static int bblFmt(BblState* bbl) {
+    if (bbl->argCount() < 1) throw BBL::Error{"fmt requires at least 1 argument (format string)"};
+    BblValue fmtArg = bbl->getArg(0);
+    if (fmtArg.type != BBL::Type::String) throw BBL::Error{"fmt: first argument must be a string"};
+    const std::string& fmt = fmtArg.stringVal->data;
+
+    std::string result;
+    result.reserve(fmt.size() * 2);
+    int argIdx = 1;
+    int argCount = bbl->argCount();
+
+    for (size_t i = 0; i < fmt.size(); i++) {
+        char c = fmt[i];
+        if (c == '{') {
+            if (i + 1 < fmt.size() && fmt[i + 1] == '{') {
+                result += '{';
+                i++;
+            } else if (i + 1 < fmt.size() && fmt[i + 1] == '}') {
+                if (argIdx >= argCount) {
+                    throw BBL::Error{"fmt: not enough arguments for format string"};
+                }
+                result += valueToString(bbl->getArg(argIdx));
+                argIdx++;
+                i++;
+            } else {
+                throw BBL::Error{"fmt: lone '{' in format string"};
+            }
+        } else if (c == '}') {
+            if (i + 1 < fmt.size() && fmt[i + 1] == '}') {
+                result += '}';
+                i++;
+            } else {
+                throw BBL::Error{"fmt: lone '}' in format string"};
+            }
+        } else {
+            result += c;
+        }
+    }
+
+    if (argIdx != argCount) {
+        throw BBL::Error{"fmt: too many arguments for format string"};
+    }
+
+    bbl->pushString(result.c_str());
+    return 1;
+}
+
 void BBL::addPrint(BblState& bbl) {
     bbl.defn("print", bblPrint);
     bbl.defn("str", bblStr);
+    bbl.defn("int", bblInt);
+    bbl.defn("float", bblFloat);
+    bbl.defn("fmt", bblFmt);
 }
 
 // ---------- addFileIo ----------

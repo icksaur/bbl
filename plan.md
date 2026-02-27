@@ -13,94 +13,117 @@ Always follow [code-quality.md](code-quality.md).
 
 ---
 
-## integer dot syntax — `v.0`, `t.0`
+## String Operations
 
-Add integer literal after `.` for positional read/write on vectors and tables.
-See `doc/features/integer-dot-syntax.md` for full spec.
+Full spec: `doc/features/string.md`
 
-### [*] 1. Parser: accept Int token after Dot
+### Phase 1: GC'd strings
 
-In `bbl.cpp` `parseExpr`, the dot-access `while` loop (~line 437):
+[ ] 1.1 In `bbl.h`, add `bool marked = false;` to `struct BblString` (after `std::string data;`).
 
-Current code requires `field.type != TokenType::Symbol` → error.
+[ ] 1.2 In `bbl.cpp` `intern()`, add `allocCount++;` after `internTable[str->data] = str;` (end of the new-string path, consistent with other allocators).
 
-Change: accept both `Symbol` and `Int`.  When `Int`:
-- Set `dot.intVal = field.intVal`
-- Set `dot.stringVal = ""` (sentinel: empty means integer-dot)
-
-When `Symbol` (existing path): behavior unchanged.
-
-### [*] 2. Eval read: handle integer-dot on Vector and Table
-
-In `bbl.cpp` `eval()`, `case NodeType::DotAccess` (~line 743):
-
-Add an early check **before** any existing type branches:
-
+[ ] 1.3 In `bbl.cpp` `gcMark()`, add a `case BBL::Type::String:` before `default: break;`:
 ```cpp
-if (field.empty()) {
-    int64_t idx = node.intVal;
-    if (left.type == BBL::Type::Vector) {
-        return readVecElem(left.vectorVal, static_cast<size_t>(idx));
+case BBL::Type::String:
+    if (val.stringVal && !val.stringVal->marked) {
+        val.stringVal->marked = true;
     }
-    if (left.type == BBL::Type::Table) {
-        return left.tableVal->get(BblValue::makeInt(idx));
+    break;
+```
+
+[ ] 1.4 In `bbl.cpp` `gc()` sweep section, after the userdata sweep block, add string sweep:
+```cpp
+// Sweep strings
+{
+    auto mid = std::partition(allocatedStrings.begin(), allocatedStrings.end(),
+                              [](BblString* s) { return s->marked; });
+    for (auto it = mid; it != allocatedStrings.end(); ++it) {
+        internTable.erase((*it)->data);
+        delete *it;
     }
-    throw BBL::Error{"integer index not supported on " + typeName(left.type)};
+    allocatedStrings.erase(mid, allocatedStrings.end());
+    for (auto* s : allocatedStrings) s->marked = false;
 }
 ```
 
-This must come before the existing `if (left.type == BBL::Type::Vector)` branch (which throws "vector methods must be called").
+[ ] 1.5 In `gc()` liveCount calculation, add `+ allocatedStrings.size()` to the sum.
 
-### [*] 3. Place expression write: handle integer-dot on Vector and Table
+[ ] 1.6 Build and run all tests. All 353 must pass.
 
-In `bbl.cpp` `SpecialForm::Eq`, in the `DotAccess` branch (~line 958):
+[ ] 1.7 Add test `test_gc_strings_collected`: create 1000 strings in a loop, verify `allocatedStrings.size()` doesn't grow unbounded.
 
-Add a check for `fieldName.empty()`:
+[ ] 1.8 Add test `test_gc_strings_pointer_equality`: verify `(== "hello" "hello")` is true after forcing GC.
 
-```cpp
-if (fieldName.empty()) {
-    int64_t idx = target.intVal;
-    if (obj.type == BBL::Type::Vector) {
-        writeVecElem(obj.vectorVal, static_cast<size_t>(idx), val);
-        return BblValue::makeNull();
-    }
-    if (obj.type == BBL::Type::Table) {
-        obj.tableVal->set(BblValue::makeInt(idx), val);
-        return BblValue::makeNull();
-    }
-    throw BBL::Error{"cannot set integer index on " + typeName(obj.type)};
-}
-```
+### Phase 2: Parsing builtins (`int`, `float`)
 
-This must come before the existing `if (obj.type == BBL::Type::Struct)` branch.
+[ ] 2.1 Add `bblInt` C function near `bblStr`:
+- 1 arg required. Int→return unchanged. Float→`static_cast<int64_t>`. String→set `errno=0`, `strtoll` with full-consumption check (`end != start && *end == '\0'`), check `errno != ERANGE`. Other types→throw.
 
-### [*] 4. Add unit tests
+[ ] 2.2 Add `bblFloat` C function:
+- 1 arg required. Float→return unchanged. Int→`static_cast<double>`. String→set `errno=0`, `strtod` with full-consumption check, check `errno != ERANGE`. Other types→throw.
 
-Add to `tests/test_bbl.cpp` after the existing vector set tests:
+[ ] 2.3 Register in `addPrint`: `bbl.defn("int", bblInt);` and `bbl.defn("float", bblFloat);`.
 
-- `test_int_dot_vector_read` — `(= v (vector int 10 20 30)) (= r v.1)` → 20
-- `test_int_dot_vector_write` — `(= v (vector int 10 20 30)) (= v.1 99) (= r v.1)` → 99
-- `test_int_dot_vector_struct_chain` — `(= v (vector vertex (vertex 1 2 3))) (= r v.0.x)` → 1.0
-- `test_int_dot_vector_out_of_bounds` — `(= v (vector int 1)) v.5` → throws
-- `test_int_dot_table_read` — `(= t (table)) (t.push "hello") (= r t.0)` → "hello"
-- `test_int_dot_table_write` — `(= t (table)) (t.push "hello") (= t.0 "world") (= r t.0)` → "world"
-- `test_int_dot_on_int_error` — `(= x 5) x.0` → throws
+[ ] 2.4 Build & test. Add tests for acceptance criteria 4-13 (10 tests). Include `(int -2.7) → -2` negative truncation test.
 
-Add corresponding `RUN()` lines in `main()`.
+### Phase 3: String methods
 
-### [*] 5. Update docs
+#### 3a: No-arg methods
 
-- `doc/features/vector.md`: add integer-dot example to element access section
-- `doc/features/table.md`: add integer-dot section
-- `doc/bbl.md`: add integer-dot examples to Vectors and Tables sections
-- `bbl-bench/doc/bbl.md`: mirror `doc/bbl.md` changes
-- `doc/features/integer-dot-syntax.md`: set status to done
+[ ] 3a.1 Add a static helper `stringNoArgMethod(BblState& bbl, const std::string& data, const std::string& method)` that handles `length`, `upper`, `lower`, `trim`, `trim-left`, `trim-right`. Returns BblValue. Called from both dispatch sites.
 
-### [*] 6. Build and run all tests
+[ ] 3a.2 In DotAccess string block and evalList string dispatch, replace inline `length` with calls to the shared helper.
 
-```
-cmake --build build -j$(nproc) && ./build/bbl_tests
-cd bbl-bench && bash run.sh ../build/bbl
-```
+[ ] 3a.3 Build & test. Tests for criteria 29-33 (both field and call forms).
 
-All tests must pass (existing + new).  All 5 bblbench scripts must pass.
+#### 3b: Access (at, slice)
+
+[ ] 3b.1 In evalList string dispatch, add `at`: 1 int arg, throw if `i < 0 || i >= (int64_t)data.size()`, return `intern(string(1, data[i]))`.
+
+[ ] 3b.2 Add `slice`: 1-2 int args, clamp to bounds, return `intern(data.substr(start, end-start))`.
+
+[ ] 3b.3 Build & test. Tests for criteria 14-17.
+
+#### 3c: Search (find, contains, starts-with, ends-with)
+
+[ ] 3c.1 Add `find`: 1-2 args (needle string, optional start int). If start < 0, throw. Return byte position or -1.
+
+[ ] 3c.2 Add `contains`: 1 string arg. Return bool.
+
+[ ] 3c.3 Add `starts-with`, `ends-with`: 1 string arg each. Return bool.
+
+[ ] 3c.4 Build & test. Tests for criteria 18-23.
+
+#### 3d: Transform (replace, split, join)
+
+[ ] 3d.1 Add `replace`: 2 string args (old, new). Empty old→throw. Loop find+replace, advancing by `new.size()` after each replacement (not by 1). Intern result.
+
+[ ] 3d.2 Add `split`: 1 string arg (sep). Empty sep→throw. Build table with 0-based int keys via `allocTable()`. Set `nextIntKey`.
+
+[ ] 3d.3 Add `join`: 1 arg (table or vector). For tables: iterate `0..tbl->nextIntKey - 1` (contiguous int keys, matching push/at). For vectors: iterate all elements via `readVecElem`. Convert each via `valueToString`. Join with receiver string as separator.
+
+[ ] 3d.4 Build & test. Tests for criteria 24-28.
+
+#### 3e: Padding (pad-left, pad-right)
+
+[ ] 3e.1 Add `pad-left`: 1-2 args (width int, optional fill string default " "). Fill must be 1 char. Prepend.
+
+[ ] 3e.2 Add `pad-right`: same but append.
+
+[ ] 3e.3 Build & test. Tests for criteria 34-36.
+
+### Phase 4: `fmt` builtin
+
+[ ] 4.1 Add `bblFmt` C function: variadic, first arg is format string. Scan for `{}` (consume next arg via `valueToString`), `{{`→`{`, `}}`→`}`. Lone `{` not followed by `}` or `{` is an error. Check all args consumed. Intern result.
+
+[ ] 4.2 Register in `addPrint`: `bbl.defn("fmt", bblFmt);`.
+
+[ ] 4.3 Build & test. Tests for criteria 37-41.
+
+### Phase 5: Documentation & acceptance
+
+[ ] 5.1 Update `doc/bbl.md` with new builtins and methods.
+[ ] 5.2 Update `doc/spec.md` with string GC and new operations.
+[ ] 5.3 Set `doc/features/string.md` status to `done`.
+[ ] 5.4 Build and run all tests one final time.
