@@ -71,7 +71,9 @@ bool BblValue::operator==(const BblValue& o) const {
         case BBL::Type::Float:  return floatVal == o.floatVal;
         case BBL::Type::String: return stringVal == o.stringVal;
         case BBL::Type::Binary: return binaryVal == o.binaryVal;
-        case BBL::Type::Fn:     return fnVal == o.fnVal;
+        case BBL::Type::Fn:
+            if (isCFn != o.isCFn) return false;
+            return isCFn ? (cfnVal == o.cfnVal) : (fnVal == o.fnVal);
         case BBL::Type::Struct:
             return structVal == o.structVal ||
                    (structVal->desc == o.structVal->desc && structVal->data == o.structVal->data);
@@ -1077,8 +1079,8 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 }
                 scope.def(targetId, val);
             }
-            // Recursive function self-capture
-            if (val.type == BBL::Type::Fn && val.fnVal) {
+            // Recursive function self-capture (BBL functions only — C functions have no captures)
+            if (val.type == BBL::Type::Fn && !val.isCFn && val.fnVal) {
                 auto& defName = target.stringVal;
                 uint32_t defId = targetId;
                 bool alreadyCaptured = false;
@@ -2524,7 +2526,7 @@ static std::string valueToString(const BblValue& val) {
             snprintf(buf, sizeof(buf), "<binary %zu bytes>", val.binaryVal->length());
             return buf;
         case BBL::Type::Fn:
-            return "<fn>";
+            return val.isCFn ? "<cfn>" : "<fn>";
         case BBL::Type::Table:
             return "<table length=" + std::to_string(val.tableVal->length()) + ">";
         case BBL::Type::Vector:

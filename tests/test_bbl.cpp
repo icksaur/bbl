@@ -2322,6 +2322,75 @@ TEST(test_fmt_arg_count_mismatch) {
     ASSERT_TRUE(threw);
 }
 
+// ========== C function assignment tests ==========
+
+TEST(test_cfn_assign_and_call) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= s sqrt) (= r (int (s 9)))");
+    ASSERT_EQ(bbl.getInt("r"), 3LL);
+}
+
+TEST(test_cfn_assign_print) {
+    BblState bbl; BBL::addStdLib(bbl);
+    // Just verify no crash — print writes to stdout
+    bbl.exec("(= f print) (f 42)");
+}
+
+TEST(test_cfn_pass_as_argument) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= apply (fn (f x) (f x)))
+        (= r (int (apply sqrt 16)))
+    )");
+    ASSERT_EQ(bbl.getInt("r"), 4LL);
+}
+
+TEST(test_cfn_equality_same) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (== sqrt sqrt))");
+    ASSERT_EQ(bbl.getBool("r"), true);
+}
+
+TEST(test_cfn_equality_different) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (== sqrt print))");
+    ASSERT_EQ(bbl.getBool("r"), false);
+}
+
+TEST(test_cfn_inequality_vs_bbl_fn) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (== sqrt (fn (x) x)))");
+    ASSERT_EQ(bbl.getBool("r"), false);
+}
+
+TEST(test_cfn_tostring) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= s (str sqrt))");
+    ASSERT_EQ(std::string(bbl.getString("s")), std::string("<cfn>"));
+}
+
+TEST(test_cfn_reassignment) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= s sqrt) (= s abs) (= r (int (s -7)))");
+    ASSERT_EQ(bbl.getInt("r"), 7LL);
+}
+
+TEST(test_cfn_in_table) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= t (table "f" sqrt))
+        (= g t.f)
+        (= r (int (g 9)))
+    )");
+    ASSERT_EQ(bbl.getInt("r"), 3LL);
+}
+
+TEST(test_cfn_multiple_aliases) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= a sqrt) (= b sqrt) (= r (== a b))");
+    ASSERT_EQ(bbl.getBool("r"), true);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -2712,6 +2781,19 @@ int main() {
     RUN(test_fmt_single_arg);
     RUN(test_fmt_no_placeholders);
     RUN(test_fmt_arg_count_mismatch);
+
+    // C function assignment
+    std::cout << "--- C function assignment ---" << std::endl;
+    RUN(test_cfn_assign_and_call);
+    RUN(test_cfn_assign_print);
+    RUN(test_cfn_pass_as_argument);
+    RUN(test_cfn_equality_same);
+    RUN(test_cfn_equality_different);
+    RUN(test_cfn_inequality_vs_bbl_fn);
+    RUN(test_cfn_tostring);
+    RUN(test_cfn_reassignment);
+    RUN(test_cfn_in_table);
+    RUN(test_cfn_multiple_aliases);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;
