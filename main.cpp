@@ -130,6 +130,7 @@ static void repl(BblState& bbl) {
 int main(int argc, char* argv[]) {
     BblState bbl;
     BBL::addStdLib(bbl);
+    bbl.allowOpenFilesystem = true;
 
     if (argc < 2) {
         repl(bbl);

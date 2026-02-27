@@ -976,7 +976,7 @@ enum class SpecialForm {
     None, Eq, If, Loop, Each, And, Or, Fn, Exec, ExecFile,
     Vector, Table, Not, Add, Sub, Mul, Div, Mod,
     CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe,
-    Do
+    Do, Band, Bor, Bxor, Bnot, Shl, Shr
 };
 
 static SpecialForm lookupSpecialForm(const std::string& op) {
@@ -992,6 +992,8 @@ static SpecialForm lookupSpecialForm(const std::string& op) {
         {"==", SpecialForm::CmpEq}, {"!=", SpecialForm::CmpNe},
         {"<", SpecialForm::CmpLt}, {">", SpecialForm::CmpGt},
         {"<=", SpecialForm::CmpLe}, {">=", SpecialForm::CmpGe},
+        {"band", SpecialForm::Band}, {"bor", SpecialForm::Bor}, {"bxor", SpecialForm::Bxor},
+        {"bnot", SpecialForm::Bnot}, {"shl", SpecialForm::Shl}, {"shr", SpecialForm::Shr},
     };
     auto it = table.find(op);
     return it != table.end() ? it->second : SpecialForm::None;
@@ -1469,6 +1471,69 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 default: break;
             }
             break;
+        }
+
+        case SpecialForm::Bnot: {
+            if (node.children.size() != 2) {
+                throw BBL::Error{"bnot requires exactly 1 argument"};
+            }
+            BblValue arg = eval(node.children[1], scope);
+            if (arg.type != BBL::Type::Int) {
+                throw BBL::Error{"type mismatch: bnot requires int, got " + typeName(arg.type)};
+            }
+            return BblValue::makeInt(~arg.intVal);
+        }
+
+        case SpecialForm::Band:
+        case SpecialForm::Bor:
+        case SpecialForm::Bxor: {
+            if (node.children.size() < 3) {
+                throw BBL::Error{op + " requires at least 2 arguments"};
+            }
+            BblValue first = eval(node.children[1], scope);
+            if (first.type != BBL::Type::Int) {
+                throw BBL::Error{"type mismatch: " + op + " requires int, got " + typeName(first.type)};
+            }
+            int64_t result = first.intVal;
+            for (size_t i = 2; i < node.children.size(); i++) {
+                BblValue arg = eval(node.children[i], scope);
+                if (arg.type != BBL::Type::Int) {
+                    throw BBL::Error{"type mismatch: " + op + " requires int, got " + typeName(arg.type)};
+                }
+                switch (sf) {
+                    case SpecialForm::Band: result &= arg.intVal; break;
+                    case SpecialForm::Bor:  result |= arg.intVal; break;
+                    case SpecialForm::Bxor: result ^= arg.intVal; break;
+                    default: break;
+                }
+            }
+            return BblValue::makeInt(result);
+        }
+
+        case SpecialForm::Shl:
+        case SpecialForm::Shr: {
+            if (node.children.size() != 3) {
+                throw BBL::Error{op + " requires exactly 2 arguments"};
+            }
+            BblValue left = eval(node.children[1], scope);
+            BblValue right = eval(node.children[2], scope);
+            if (left.type != BBL::Type::Int) {
+                throw BBL::Error{"type mismatch: " + op + " requires int, got " + typeName(left.type)};
+            }
+            if (right.type != BBL::Type::Int) {
+                throw BBL::Error{"type mismatch: " + op + " requires int, got " + typeName(right.type)};
+            }
+            int64_t val = left.intVal;
+            int64_t shift = right.intVal;
+            if (shift < 0) {
+                throw BBL::Error{op + " requires non-negative shift amount"};
+            }
+            if (shift >= 64) {
+                if (sf == SpecialForm::Shr && val < 0) return BblValue::makeInt(int64_t(-1));
+                return BblValue::makeInt(int64_t(0));
+            }
+            if (sf == SpecialForm::Shl) return BblValue::makeInt(val << shift);
+            return BblValue::makeInt(val >> shift);
         }
 
         case SpecialForm::None: {
@@ -1967,17 +2032,22 @@ BblValue BblState::execExpr(const std::string& source) {
 
 void BblState::execfile(const std::string& path) {
     namespace fs = std::filesystem;
+    fs::path fspath(path);
+    if (!allowOpenFilesystem) {
+        if (fspath.is_absolute()) {
+            throw BBL::Error{"execfile: absolute paths not allowed: " + path};
+        }
+        if (path.find("..") != std::string::npos) {
+            throw BBL::Error{"execfile: parent directory traversal not allowed: " + path};
+        }
+    }
     fs::path resolved;
-    if (fs::path(path).is_absolute()) {
-        throw BBL::Error{"execfile: absolute paths not allowed: " + path};
-    }
-    if (path.find("..") != std::string::npos) {
-        throw BBL::Error{"execfile: parent directory traversal not allowed: " + path};
-    }
-    if (scriptDir.empty()) {
-        resolved = fs::path(path);
+    if (fspath.is_absolute()) {
+        resolved = fspath;
+    } else if (scriptDir.empty()) {
+        resolved = fspath;
     } else {
-        resolved = fs::path(scriptDir) / path;
+        resolved = fs::path(scriptDir) / fspath;
     }
     if (!fs::exists(resolved)) {
         // Try BBL_PATH directories
@@ -2560,6 +2630,12 @@ static int bblStr(BblState* bbl) {
     return 1;
 }
 
+static int bblTypeof(BblState* bbl) {
+    if (bbl->argCount() != 1) throw BBL::Error{"typeof requires 1 argument"};
+    bbl->pushString(typeName(bbl->getArg(0).type).c_str());
+    return 1;
+}
+
 static int bblInt(BblState* bbl) {
     if (bbl->argCount() != 1) throw BBL::Error{"int requires 1 argument"};
     BblValue arg = bbl->getArg(0);
@@ -2668,6 +2744,7 @@ static int bblFmt(BblState* bbl) {
 void BBL::addPrint(BblState& bbl) {
     bbl.defn("print", bblPrint);
     bbl.defn("str", bblStr);
+    bbl.defn("typeof", bblTypeof);
     bbl.defn("int", bblInt);
     bbl.defn("float", bblFloat);
     bbl.defn("fmt", bblFmt);
@@ -2682,17 +2759,22 @@ static int bblFilebytes(BblState* bbl) {
     const char* path = bbl->getStringArg(0);
     namespace fs = std::filesystem;
     std::string pathStr(path);
-    if (fs::path(pathStr).is_absolute()) {
-        throw BBL::Error{"filebytes: absolute paths not allowed: " + pathStr};
-    }
-    if (pathStr.find("..") != std::string::npos) {
-        throw BBL::Error{"filebytes: parent directory traversal not allowed: " + pathStr};
+    fs::path fp(pathStr);
+    if (!bbl->allowOpenFilesystem) {
+        if (fp.is_absolute()) {
+            throw BBL::Error{"filebytes: absolute paths not allowed: " + pathStr};
+        }
+        if (pathStr.find("..") != std::string::npos) {
+            throw BBL::Error{"filebytes: parent directory traversal not allowed: " + pathStr};
+        }
     }
     fs::path resolved;
-    if (bbl->scriptDir.empty()) {
-        resolved = fs::path(pathStr);
+    if (fp.is_absolute()) {
+        resolved = fp;
+    } else if (bbl->scriptDir.empty()) {
+        resolved = fp;
     } else {
-        resolved = fs::path(bbl->scriptDir) / pathStr;
+        resolved = fs::path(bbl->scriptDir) / fp;
     }
     std::ifstream file(resolved, std::ios::binary);
     if (!file.is_open()) {

@@ -2391,6 +2391,295 @@ TEST(test_cfn_multiple_aliases) {
     ASSERT_EQ(bbl.getBool("r"), true);
 }
 
+// ========== typeof tests ==========
+
+TEST(test_typeof_int) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (typeof 42))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("int"));
+}
+
+TEST(test_typeof_float) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (typeof 3.14))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("float"));
+}
+
+TEST(test_typeof_string) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (typeof \"hello\"))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("string"));
+}
+
+TEST(test_typeof_bool) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (typeof true))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("bool"));
+}
+
+TEST(test_typeof_null) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (typeof null))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("null"));
+}
+
+TEST(test_typeof_cfn) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (typeof sqrt))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("fn"));
+}
+
+TEST(test_typeof_bbl_fn) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (typeof (fn (x) x)))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("fn"));
+}
+
+TEST(test_typeof_table) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (typeof (table)))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("table"));
+}
+
+TEST(test_typeof_vector) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (typeof (vector int)))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("vector"));
+}
+
+TEST(test_typeof_binary) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (typeof 0b4:test))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("binary"));
+}
+
+TEST(test_typeof_expression) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= r (typeof (+ 1 2)))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("int"));
+}
+
+TEST(test_typeof_arity_error) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("(typeof)"));
+    ASSERT_THROW(bbl.exec("(typeof 1 2)"));
+}
+
+TEST(test_typeof_struct) {
+    BblState bbl; BBL::addStdLib(bbl);
+    addVertex(bbl);
+    bbl.exec("(= r (typeof (vertex 1.0 2.0 3.0)))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("struct"));
+}
+
+TEST(test_typeof_userdata) {
+    BblState bbl; BBL::addStdLib(bbl);
+    BBL::TypeBuilder tb("Counter");
+    tb.method("get", [](BblState*) -> int { return 0; });
+    bbl.registerType(tb);
+    int val = 0;
+    auto* ud = bbl.allocUserData("Counter", &val);
+    bbl.set("c", BblValue::makeUserData(ud));
+    bbl.exec("(= r (typeof c))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("userdata"));
+}
+
+// ---------- bitwise ----------
+
+TEST(test_band_basic) {
+    BblState bbl;
+    bbl.exec("(= x (band 255 15))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)15);
+}
+
+TEST(test_bor_basic) {
+    BblState bbl;
+    bbl.exec("(= x (bor 15 240))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)255);
+}
+
+TEST(test_bxor_basic) {
+    BblState bbl;
+    bbl.exec("(= x (bxor 255 15))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)240);
+}
+
+TEST(test_bnot_zero) {
+    BblState bbl;
+    bbl.exec("(= x (bnot 0))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)-1);
+}
+
+TEST(test_bnot_neg1) {
+    BblState bbl;
+    bbl.exec("(= x (bnot -1))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)0);
+}
+
+TEST(test_shl_basic) {
+    BblState bbl;
+    bbl.exec("(= x (shl 1 8))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)256);
+}
+
+TEST(test_shr_basic) {
+    BblState bbl;
+    bbl.exec("(= x (shr 256 4))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)16);
+}
+
+TEST(test_band_variadic) {
+    BblState bbl;
+    bbl.exec("(= x (band 7 6 5))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)4);
+}
+
+TEST(test_bor_variadic) {
+    BblState bbl;
+    bbl.exec("(= x (bor 1 2 4))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)7);
+}
+
+TEST(test_bxor_variadic) {
+    BblState bbl;
+    bbl.exec("(= x (bxor 15 9 6))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)0);
+}
+
+TEST(test_shr_arithmetic) {
+    BblState bbl;
+    bbl.exec("(= x (shr -1 1))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)-1);
+}
+
+TEST(test_shr_large_neg) {
+    BblState bbl;
+    bbl.exec("(= x (shr -1 64))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)-1);
+}
+
+TEST(test_shl_large) {
+    BblState bbl;
+    bbl.exec("(= x (shl 1 64))");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)0);
+}
+
+TEST(test_bitwise_float_err) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(= x (band 1.0 2))"));
+}
+
+TEST(test_bitwise_string_err) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(= x (bor \"x\" 1))"));
+}
+
+TEST(test_band_arity_err) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(band 1)"));
+}
+
+TEST(test_bnot_arity_err) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(bnot 1 2)"));
+}
+
+TEST(test_shl_arity_err) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(shl 1)"));
+}
+
+TEST(test_shl_neg_shift) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(shl 1 -1)"));
+}
+
+TEST(test_shr_neg_shift) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(shr 1 -1)"));
+}
+
+TEST(test_bnot_float_err) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(bnot 1.0)"));
+}
+
+// ---------- open filesystem ----------
+
+TEST(test_open_fs_default_off) {
+    BblState bbl;
+    ASSERT_FALSE(bbl.allowOpenFilesystem);
+}
+
+TEST(test_execfile_abs_blocked) {
+    BblState bbl;
+    ASSERT_THROW(bbl.execfile("/tmp/nonexistent.bbl"));
+}
+
+TEST(test_execfile_dotdot_blocked) {
+    BblState bbl;
+    ASSERT_THROW(bbl.execfile("../escape.bbl"));
+}
+
+TEST(test_filebytes_abs_blocked) {
+    BblState bbl; BBL::addFileIo(bbl);
+    ASSERT_THROW(bbl.exec("(filebytes \"/tmp/nonexistent.bin\")"));
+}
+
+TEST(test_filebytes_dotdot_blocked) {
+    BblState bbl; BBL::addFileIo(bbl);
+    ASSERT_THROW(bbl.exec("(filebytes \"../escape.bin\")"));
+}
+
+TEST(test_execfile_abs_open) {
+    namespace fs = std::filesystem;
+    std::string path = "/tmp/bbl_test_open_fs.bbl";
+    { std::ofstream f(path); f << "(= openfs_result 42)"; }
+    BblState bbl;
+    bbl.allowOpenFilesystem = true;
+    bbl.execfile(path);
+    ASSERT_EQ(bbl.getInt("openfs_result"), (int64_t)42);
+    fs::remove(path);
+}
+
+TEST(test_execfile_dotdot_open) {
+    namespace fs = std::filesystem;
+    // Create a file in /tmp, set scriptDir to a child, use .. to reach it
+    fs::create_directories("/tmp/bbl_test_openfs/child");
+    std::string target = "/tmp/bbl_test_openfs/target.bbl";
+    { std::ofstream f(target); f << "(= dotdot_result 99)"; }
+    BblState bbl;
+    bbl.allowOpenFilesystem = true;
+    bbl.scriptDir = "/tmp/bbl_test_openfs/child";
+    bbl.exec("(execfile \"../target.bbl\")");
+    ASSERT_EQ(bbl.getInt("dotdot_result"), (int64_t)99);
+    fs::remove_all("/tmp/bbl_test_openfs");
+}
+
+TEST(test_filebytes_abs_open) {
+    namespace fs = std::filesystem;
+    std::string path = "/tmp/bbl_test_open_fb.bin";
+    { std::ofstream f(path, std::ios::binary); f << "hello"; }
+    BblState bbl; BBL::addFileIo(bbl);
+    bbl.allowOpenFilesystem = true;
+    bbl.exec("(= data (filebytes \"/tmp/bbl_test_open_fb.bin\"))");
+    ASSERT_EQ(bbl.getType("data"), BBL::Type::Binary);
+    fs::remove(path);
+}
+
+TEST(test_filebytes_dotdot_open) {
+    namespace fs = std::filesystem;
+    fs::create_directories("/tmp/bbl_test_openfs2/child");
+    std::string target = "/tmp/bbl_test_openfs2/target.bin";
+    { std::ofstream f(target, std::ios::binary); f << "data"; }
+    BblState bbl; BBL::addFileIo(bbl);
+    bbl.allowOpenFilesystem = true;
+    bbl.scriptDir = "/tmp/bbl_test_openfs2/child";
+    bbl.exec("(= data (filebytes \"../target.bin\"))");
+    ASSERT_EQ(bbl.getType("data"), BBL::Type::Binary);
+    fs::remove_all("/tmp/bbl_test_openfs2");
+}
+
 // ========== Main ==========
 
 int main() {
@@ -2794,6 +3083,59 @@ int main() {
     RUN(test_cfn_reassignment);
     RUN(test_cfn_in_table);
     RUN(test_cfn_multiple_aliases);
+
+    // typeof
+    std::cout << "--- typeof ---" << std::endl;
+    RUN(test_typeof_int);
+    RUN(test_typeof_float);
+    RUN(test_typeof_string);
+    RUN(test_typeof_bool);
+    RUN(test_typeof_null);
+    RUN(test_typeof_cfn);
+    RUN(test_typeof_bbl_fn);
+    RUN(test_typeof_table);
+    RUN(test_typeof_vector);
+    RUN(test_typeof_binary);
+    RUN(test_typeof_expression);
+    RUN(test_typeof_arity_error);
+    RUN(test_typeof_struct);
+    RUN(test_typeof_userdata);
+
+    // bitwise
+    std::cout << "--- bitwise ---" << std::endl;
+    RUN(test_band_basic);
+    RUN(test_bor_basic);
+    RUN(test_bxor_basic);
+    RUN(test_bnot_zero);
+    RUN(test_bnot_neg1);
+    RUN(test_shl_basic);
+    RUN(test_shr_basic);
+    RUN(test_band_variadic);
+    RUN(test_bor_variadic);
+    RUN(test_bxor_variadic);
+    RUN(test_shr_arithmetic);
+    RUN(test_shr_large_neg);
+    RUN(test_shl_large);
+    RUN(test_bitwise_float_err);
+    RUN(test_bitwise_string_err);
+    RUN(test_band_arity_err);
+    RUN(test_bnot_arity_err);
+    RUN(test_shl_arity_err);
+    RUN(test_shl_neg_shift);
+    RUN(test_shr_neg_shift);
+    RUN(test_bnot_float_err);
+
+    // open filesystem
+    std::cout << "--- open filesystem ---" << std::endl;
+    RUN(test_open_fs_default_off);
+    RUN(test_execfile_abs_blocked);
+    RUN(test_execfile_dotdot_blocked);
+    RUN(test_filebytes_abs_blocked);
+    RUN(test_filebytes_dotdot_blocked);
+    RUN(test_execfile_abs_open);
+    RUN(test_execfile_dotdot_open);
+    RUN(test_filebytes_abs_open);
+    RUN(test_filebytes_dotdot_open);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

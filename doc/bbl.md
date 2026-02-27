@@ -84,6 +84,39 @@ String concatenation — when the left operand is a string, non-string operands 
 
 ---
 
+## Bitwise
+
+Integer-only bitwise operators.  Float operands are a type error.
+
+| Op | Args | Description |
+|----|------|-------------|
+| `band` | 2+ | bitwise AND |
+| `bor`  | 2+ | bitwise OR |
+| `bxor` | 2+ | bitwise XOR |
+| `bnot` | 1   | bitwise NOT (complement) |
+| `shl`  | 2   | shift left |
+| `shr`  | 2   | arithmetic shift right |
+
+`band`, `bor`, `bxor` are variadic — they fold left-to-right over 2 or more arguments.
+
+```bbl
+(band 255 15)       // 15
+(bor 1 2 4)         // 7
+(bxor 255 15)       // 240
+(bnot 0)            // -1
+(shl 1 8)           // 256
+(shr 256 4)         // 16
+
+// combine flags
+(= flags (bor 1 4))
+(if (!= (band flags 1) 0)
+    (print "flag 0 set\n"))
+```
+
+Shift amount must be non-negative.  Shifting by ≥ 64 returns 0 for `shl`, and -1 or 0 for `shr` depending on the sign of the left operand (arithmetic shift).
+
+---
+
 ## Comparison
 
 All comparisons return a `Bool`.
@@ -589,6 +622,8 @@ Execute a `.bbl` file.  The file runs in the current scope.
 (execfile "setup.bbl")
 ```
 
+**Path sandboxing**: by default, `execfile` and `filebytes` only allow relative paths without `..`.  The C++ host can set `bbl.allowOpenFilesystem = true` to allow absolute paths and parent traversal.  The `bbl` binary interpreter enables this by default.
+
 ---
 
 ## Standard Library
@@ -613,6 +648,23 @@ Converts any value to its string representation.  Uses the same formatting as `p
 (= s (str true))    // "true"
 (= s (str null))    // "null"
 ```
+
+### typeof
+
+Returns the type name of any value as a string.  Takes exactly one argument.
+
+```bbl
+(typeof 42)          // "int"
+(typeof 3.14)        // "float"
+(typeof "hello")     // "string"
+(typeof true)        // "bool"
+(typeof null)        // "null"
+(typeof sqrt)        // "fn"
+(typeof (table))     // "table"
+(typeof (vector int)) // "vector"
+```
+
+Type name strings: `"int"`, `"float"`, `"string"`, `"bool"`, `"null"`, `"binary"`, `"fn"`, `"vector"`, `"table"`, `"struct"`, `"userdata"`.  Both BBL and C functions return `"fn"`.
 
 ### int
 

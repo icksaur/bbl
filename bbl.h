@@ -383,6 +383,7 @@ struct BblState {
     std::vector<Frame> callStack;
     std::string currentFile;
     std::string scriptDir;
+    bool allowOpenFilesystem = false;
 
     // Print capture (for testing)
     std::string* printCapture = nullptr;

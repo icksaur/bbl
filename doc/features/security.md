@@ -67,12 +67,18 @@ Each `execfile` narrows the sandbox.  A script in `subdir/` cannot escape back t
 
 ## C++ API path resolution
 
-`bbl.execfile()` and C++ calls to `filebytes` use different resolution:
+`bbl.execfile()` and C++ calls to `filebytes` use the same sandbox checks as script-level calls.  By default, the sandbox is enforced for all callers — including C++.
 
-- **`bbl.execfile("file.bbl")`** — resolves relative to the process's current working directory (or a configurable base path on `BblState`).  No sandbox restriction — the C++ host is trusted.
-- **`bbl.exec("code string")`** — evaluates the string.  Any `filebytes` or `execfile` calls within it resolve relative to CWD / configured base path.  No sandbox restriction.
+To allow absolute paths and `..` traversal, the C++ host sets:
 
-The sandbox rules apply only to script-level `execfile` and `filebytes` — not to C++ API calls.  The C++ host has full filesystem access by definition.
+```cpp
+bbl.allowOpenFilesystem = true;
+```
+
+This disables the sandbox checks for both `execfile` and `filebytes`.  Path resolution is unchanged — relative paths still resolve against `scriptDir`.
+
+- **Default: `false`** — sandbox enforced.  Absolute paths and `..` are rejected.
+- **`bbl` binary interpreter** sets `allowOpenFilesystem = true` by default, so scripts run from the command line have full filesystem access.
 
 ## `fopen` — no sandboxing
 
@@ -86,12 +92,12 @@ The sandbox rules apply only to script-level `execfile` and `filebytes` — not 
 
 | operation | sandbox | access |
 |-----------|---------|--------|
-| `execfile` (from script) | yes | script dir + children, chains down |
-| `filebytes` (from script) | yes | script dir + children |
+| `execfile` (from script) | yes (unless `allowOpenFilesystem`) | script dir + children, chains down |
+| `filebytes` (from script) | yes (unless `allowOpenFilesystem`) | script dir + children |
 | `exec` (from script) | inherits | same sandbox as caller |
 | `fopen` (from `addFileIo`) | no | unrestricted (opt-in) |
-| `bbl.execfile()` (C++ API) | no | host is trusted |
-| `bbl.exec()` (C++ API) | no | host is trusted |
+| `bbl.execfile()` (C++ API) | yes (unless `allowOpenFilesystem`) | same rules as script |
+| `bbl.exec()` (C++ API) | inherits | same sandbox as caller |
 
 ## open questions
 
