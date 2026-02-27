@@ -206,7 +206,7 @@ struct BblValue {
 
 struct BblTable {
     std::vector<std::pair<BblValue, BblValue>> entries;
-    int64_t nextIntKey = 1;
+    int64_t nextIntKey = 0;
     bool marked = false;
 
     size_t length() const { return entries.size(); }

@@ -23,13 +23,15 @@ Allowed element types: numeric types (`int`, `float`), `bool`, and registered st
 
 ## element access
 
-### by index — `at` method
+### by index — `at`, `set`, and integer dot syntax
 
-`at` returns the element at a given index.  Writable via place expressions (single-level):
+`at` reads the element at a given index.  `set` writes.  Integer dot syntax (`v.0`) is sugar for both:
 
 ```bbl
 (print (verts.at 0).x)                    // read field of element 0
-(= (verts.at 0) (vertex 5 5 5))         // overwrite element 0
+(print verts.0.x)                         // same — integer dot syntax
+(verts.set 0 (vertex 5 5 5))             // overwrite element 0
+(= verts.0 (vertex 5 5 5))               // same — integer dot place expression
 ```
 
 Out-of-bounds index → runtime error.
@@ -55,7 +57,8 @@ The variable receives a copy (value type) of each element.  Mutating the local c
 | `pop` | `(verts.pop)` | remove and return last element.  Error if empty. |
 | `clear` | `(verts.clear)` | remove all elements, length becomes 0 |
 | `length` | `(verts.length)` | number of elements |
-| `at` | `(verts.at i)` | element at index (readable and writable via place expression) |
+| `at` | `(verts.at i)` | read element at index |
+| `set` | `(verts.set i val)` | write element at index (must match declared type) |
 
 ## memory layout
 

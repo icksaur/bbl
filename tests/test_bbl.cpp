@@ -589,6 +589,100 @@ TEST(test_loop_non_bool_condition) {
     ASSERT_THROW(bbl.exec("(loop 1 (= x 0))"));
 }
 
+// ========== Each Tests ==========
+
+TEST(test_each_vector_basic) {
+    BblState bbl;
+    BBL::addPrint(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec("(= v (vector int 10 20 30)) (each i v (print (v.at i) \" \"))");
+    ASSERT_EQ(out, std::string("10 20 30 "));
+}
+
+TEST(test_each_table_basic) {
+    BblState bbl;
+    BBL::addPrint(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec("(= t (table)) (t.push \"a\") (t.push \"b\") (t.push \"c\") (each i t (print (t.at i) \" \"))");
+    ASSERT_EQ(out, std::string("a b c "));
+}
+
+TEST(test_each_empty) {
+    BblState bbl;
+    bbl.exec("(= v (vector int)) (each i v (= x 999))");
+    ASSERT_EQ(bbl.getInt("i"), (int64_t)0);
+}
+
+TEST(test_each_index_survives) {
+    BblState bbl;
+    bbl.exec("(= v (vector int 10 20 30)) (each i v (= x 0))");
+    ASSERT_EQ(bbl.getInt("i"), (int64_t)3);
+}
+
+TEST(test_each_type_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(= x 42) (each i x (print i))"));
+}
+
+TEST(test_each_non_symbol_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(= v (vector int 1)) (each 42 v (print \"x\"))"));
+}
+
+TEST(test_each_missing_args) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(each i)"));
+}
+
+TEST(test_each_closure_capture) {
+    BblState bbl;
+    bbl.exec(
+        "(= data (vector int 10 20 30))"
+        "(= fns (table))"
+        "(each i data"
+        "    (fns.push (fn () i)))"
+        "(= r0 ((fns.at 0)))"
+        "(= r1 ((fns.at 1)))"
+        "(= r2 ((fns.at 2)))"
+    );
+    ASSERT_EQ(bbl.getInt("r0"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("r1"), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("r2"), (int64_t)2);
+}
+
+TEST(test_each_nested) {
+    BblState bbl;
+    bbl.exec(
+        "(= v1 (vector int 1 2))"
+        "(= v2 (vector int 10 20 30))"
+        "(= sum 0)"
+        "(each i v1"
+        "    (each j v2"
+        "        (= sum (+ sum (+ (v1.at i) (v2.at j))))))"
+    );
+    // v1 has 2 elements (1,2), v2 has 3 (10,20,30)
+    // Each pair: (1+10)+(1+20)+(1+30)+(2+10)+(2+20)+(2+30) = 11+21+31+12+22+32 = 129
+    ASSERT_EQ(bbl.getInt("sum"), (int64_t)129);
+}
+
+TEST(test_each_returns_null) {
+    BblState bbl;
+    bbl.exec("(= v (vector int 1 2 3)) (= x (each i v 1))");
+    ASSERT_EQ(bbl.getType("x"), BBL::Type::Null);
+}
+
+TEST(test_each_inside_closure) {
+    BblState bbl;
+    bbl.exec(
+        "(= data (vector int 1 2 3))"
+        "(= f (fn () (= sum 0) (each i data (= sum (+ sum (data.at i)))) sum))"
+        "(= r (f))"
+    );
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)6);
+}
+
 // ========== Function Tests ==========
 
 TEST(test_fn_basic) {
@@ -1057,6 +1151,77 @@ TEST(test_vector_get_data_cpp) {
     ASSERT_NEAR(data[0].y, 2.0f, 0.001f);
     ASSERT_NEAR(data[0].z, 3.0f, 0.001f);
     ASSERT_NEAR(data[1].x, 4.0f, 0.001f);
+}
+
+TEST(test_vector_set_int) {
+    BblState bbl;
+    bbl.exec("(= v (vector int 10 20 30)) (v.set 1 99) (= r (v.at 1))");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)99);
+}
+
+TEST(test_vector_set_struct) {
+    BblState bbl;
+    addVertex(bbl);
+    bbl.exec("(= v (vector vertex (vertex 1 2 3) (vertex 4 5 6)))"
+             "(v.set 0 (vertex 7 8 9))"
+             "(= r (v.at 0).x)");
+    ASSERT_NEAR(bbl.getFloat("r"), 7.0f, 0.001f);
+}
+
+TEST(test_vector_set_out_of_bounds) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(= v (vector int 1 2)) (v.set 5 99)"));
+}
+
+TEST(test_vector_set_preserves_others) {
+    BblState bbl;
+    bbl.exec("(= v (vector int 10 20 30)) (v.set 1 99)"
+             "(= a (v.at 0)) (= b (v.at 2))");
+    ASSERT_EQ(bbl.getInt("a"), (int64_t)10);
+    ASSERT_EQ(bbl.getInt("b"), (int64_t)30);
+}
+
+// ========== Integer Dot Syntax ==========
+
+TEST(test_int_dot_vector_read) {
+    BblState bbl;
+    bbl.exec("(= v (vector int 10 20 30)) (= r v.1)");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)20);
+}
+
+TEST(test_int_dot_vector_write) {
+    BblState bbl;
+    bbl.exec("(= v (vector int 10 20 30)) (= v.1 99) (= r v.1)");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)99);
+}
+
+TEST(test_int_dot_vector_struct_chain) {
+    BblState bbl;
+    addVertex(bbl);
+    bbl.exec("(= v (vector vertex (vertex 1 2 3))) (= r v.0.x)");
+    ASSERT_NEAR(bbl.getFloat("r"), 1.0f, 0.001f);
+}
+
+TEST(test_int_dot_vector_out_of_bounds) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(= v (vector int 1)) v.5"));
+}
+
+TEST(test_int_dot_table_read) {
+    BblState bbl;
+    bbl.exec(R"((= t (table)) (t.push "hello") (= r t.0))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("hello"));
+}
+
+TEST(test_int_dot_table_write) {
+    BblState bbl;
+    bbl.exec(R"((= t (table)) (t.push "hello") (= t.0 "world") (= r t.0))");
+    ASSERT_EQ(std::string(bbl.getString("r")), std::string("world"));
+}
+
+TEST(test_int_dot_on_int_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(= x 5) x.0"));
 }
 
 TEST(test_dot_on_int_error) {
@@ -1959,6 +2124,20 @@ int main() {
     RUN(test_loop_statement_returns_null);
     RUN(test_loop_non_bool_condition);
 
+    // Each
+    std::cout << "--- Each ---" << std::endl;
+    RUN(test_each_vector_basic);
+    RUN(test_each_table_basic);
+    RUN(test_each_empty);
+    RUN(test_each_index_survives);
+    RUN(test_each_type_error);
+    RUN(test_each_non_symbol_error);
+    RUN(test_each_missing_args);
+    RUN(test_each_closure_capture);
+    RUN(test_each_nested);
+    RUN(test_each_returns_null);
+    RUN(test_each_inside_closure);
+
     // Functions
     std::cout << "--- Functions ---" << std::endl;
     RUN(test_fn_basic);
@@ -2045,6 +2224,17 @@ int main() {
     RUN(test_vector_out_of_bounds);
     RUN(test_vector_pop_empty);
     RUN(test_vector_get_data_cpp);
+    RUN(test_vector_set_int);
+    RUN(test_vector_set_struct);
+    RUN(test_vector_set_out_of_bounds);
+    RUN(test_vector_set_preserves_others);
+    RUN(test_int_dot_vector_read);
+    RUN(test_int_dot_vector_write);
+    RUN(test_int_dot_vector_struct_chain);
+    RUN(test_int_dot_vector_out_of_bounds);
+    RUN(test_int_dot_table_read);
+    RUN(test_int_dot_table_write);
+    RUN(test_int_dot_on_int_error);
     RUN(test_dot_on_int_error);
     RUN(test_string_length_method);
 

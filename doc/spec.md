@@ -225,6 +225,7 @@ Conditions in `if`, `loop`, and `and`/`or` must evaluate to `bool`.  Non-bool va
 | `=` | assign-or-create: rebind if exists, create if not; also place writes |
 | `do` | evaluate multiple expressions sequentially, return last value |
 | `loop` | while-loop |
+| `each` | index iteration over vector or table |
 | `if` | conditional branching |
 | `and` | short-circuit logical AND |
 | `or` | short-circuit logical OR |
@@ -234,7 +235,7 @@ Conditions in `if`, `loop`, and `and`/`or` must evaluate to `bool`.  Non-bool va
 
 ### control flow
 
-`loop`, `if`, and `do` are special forms — their bodies run in the enclosing scope.
+`loop`, `if`, `each`, and `do` are special forms — their bodies run in the enclosing scope.
 
 `do` evaluates multiple expressions sequentially and returns the value of the last one:
 
@@ -266,7 +267,17 @@ Conditions in `if`, `loop`, and `and`/`or` must evaluate to `bool`.  Non-bool va
 
 ### iteration
 
-Use `loop` with `at` and `length`:
+`each` iterates over a vector or table, binding an index variable from 0 to length-1:
+
+```bbl
+(each i verts
+    (= v (verts.at i))
+    (print v.x "\n"))
+```
+
+The container is evaluated once.  `each` is a statement (returns `null`).  After the loop, the index variable equals the container length.
+
+For non-standard iteration (custom start, step, or condition), use `loop`:
 
 ```bbl
 (= i 0)
@@ -282,22 +293,22 @@ Table iteration via `keys`:
 ```bbl
 (= player (table "name" "hero" "hp" 100))
 (= ks (player.keys))
-(= i 0)
-(loop (< i (ks.length))
+(each i ks
     (= k (ks.at i))
-    (print k ": " (player.get k) "\n")
-    (= i (+ i 1))
-)
+    (print k ": " (player.get k) "\n"))
+```
 ```
 
 ### vector index access
 
-`at` accesses vector and table elements by index.  Writable via `set`:
+`at` reads vector and table elements by index.  `set` writes.  Integer dot syntax (`v.0`) is sugar for both:
 
 ```bbl
 (= verts (vector vertex (vertex 0 1 0) (vertex 1 0 0)))
-(print (verts.at 0).x)                    // read
-(= (verts.at 0) (vertex 5 5 5))         // write whole element
+(print (verts.at 0).x)                    // read via method
+(print verts.0.x)                         // read via integer dot
+(verts.set 0 (vertex 5 5 5))             // write via method
+(= verts.0 (vertex 5 5 5))               // write via integer dot
 ```
 
 ### member access — the `.` operator
@@ -335,14 +346,14 @@ Place writes are **single-level only** — one dot or one `at`, not chained:
 |---------|---------|
 | `symbol` | assign variable: `(= x 5)` |
 | `obj.field` | struct field or table string-key: `(= v.x 5)` or `(= player.hp 80)` |
-| `(obj.at index)` | container index: `(= (verts.at 0) val)` |
+| `obj.N` | integer dot — vector or table integer-key: `(= v.0 val)` or `(= t.0 val)` |
 
 For deeper mutation, use intermediate variables:
 
 ```bbl
-(= v (verts.at 0))
+(= v verts.0)
 (= v.x 5.0)
-(= (verts.at 0) v)
+(= verts.0 v)
 ```
 
 ### method dispatch

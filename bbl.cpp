@@ -227,7 +227,7 @@ Token BblLexer::readNumber() {
     while (pos < len && (peek() >= '0' && peek() <= '9')) {
         pos++;
     }
-    if (pos < len && peek() == '.') {
+    if (pos < len && peek() == '.' && pos + 1 < len && src[pos + 1] >= '0' && src[pos + 1] <= '9') {
         isFloat = true;
         pos++;
         while (pos < len && (peek() >= '0' && peek() <= '9')) {
@@ -436,14 +436,18 @@ static AstNode parseExpr(BblLexer& lexer, Token& tok) {
         Token next = lexer.nextToken();
         if (next.type == TokenType::Dot) {
             Token field = lexer.nextToken();
-            if (field.type != TokenType::Symbol) {
-                throw BBL::Error{"parse error: expected field name after '.' at line " + std::to_string(field.line)};
-            }
             AstNode dot;
             dot.type = NodeType::DotAccess;
-            dot.stringVal = std::move(field.stringVal);
-            dot.children.push_back(std::move(lhs));
             dot.line = next.line;
+            if (field.type == TokenType::Symbol) {
+                dot.stringVal = std::move(field.stringVal);
+            } else if (field.type == TokenType::Int) {
+                dot.stringVal = "";           // sentinel: integer-dot
+                dot.intVal = field.intVal;
+            } else {
+                throw BBL::Error{"parse error: expected field name or integer after '.' at line " + std::to_string(field.line)};
+            }
+            dot.children.push_back(std::move(lhs));
             lhs = std::move(dot);
         } else {
             // Put the token back by storing it for the caller
@@ -742,8 +746,19 @@ BblValue BblState::eval(const AstNode& node, BblScope& scope) {
             return evalList(node, scope);
         case NodeType::DotAccess: {
             // DotAccess: children[0] = left, stringVal = field/method name
+            // stringVal empty → integer-dot (index in intVal)
             BblValue left = eval(node.children[0], scope);
             auto& field = node.stringVal;
+            if (field.empty()) {
+                int64_t idx = node.intVal;
+                if (left.type == BBL::Type::Vector) {
+                    return readVecElem(left.vectorVal, static_cast<size_t>(idx));
+                }
+                if (left.type == BBL::Type::Table) {
+                    return left.tableVal->get(BblValue::makeInt(idx));
+                }
+                throw BBL::Error{"integer index not supported on " + typeName(left.type)};
+            }
             if (left.type == BBL::Type::Struct) {
                 FieldDesc* fd = nullptr;
                 for (auto& f : left.structVal->desc->fields) {
@@ -870,6 +885,23 @@ static void gatherFreeVars(const AstNode& node,
                     }
                     return;
                 }
+                if (op == "each") {
+                    // (each idx container body...)
+                    // Container is evaluated before the index binding exists
+                    if (node.children.size() >= 3) {
+                        gatherFreeVars(node.children[2], bound, freeVars);
+                    }
+                    // Note: use gatherFreeVars (not gatherFreeVarsBody) because each runs
+                    // in the enclosing scope — body assignments must remain capturable.
+                    std::vector<std::string> inner = bound;
+                    if (node.children.size() >= 2 && node.children[1].type == NodeType::Symbol) {
+                        inner.push_back(node.children[1].stringVal);
+                    }
+                    for (size_t i = 3; i < node.children.size(); i++) {
+                        gatherFreeVars(node.children[i], inner, freeVars);
+                    }
+                    return;
+                }
             }
             for (auto& c : node.children) {
                 gatherFreeVars(c, bound, freeVars);
@@ -887,7 +919,7 @@ static void gatherFreeVars(const AstNode& node,
 
 // Special form dispatch: enum + static hash map for O(1) lookup
 enum class SpecialForm {
-    None, Eq, If, Loop, And, Or, Fn, Exec, ExecFile,
+    None, Eq, If, Loop, Each, And, Or, Fn, Exec, ExecFile,
     Vector, Table, Not, Add, Sub, Mul, Div, Mod,
     CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe,
     Do
@@ -896,7 +928,7 @@ enum class SpecialForm {
 static SpecialForm lookupSpecialForm(const std::string& op) {
     static const std::unordered_map<std::string, SpecialForm> table = {
         {"=", SpecialForm::Eq},
-        {"if", SpecialForm::If}, {"loop", SpecialForm::Loop},
+        {"if", SpecialForm::If}, {"loop", SpecialForm::Loop}, {"each", SpecialForm::Each},
         {"and", SpecialForm::And}, {"or", SpecialForm::Or}, {"fn", SpecialForm::Fn},
         {"exec", SpecialForm::Exec}, {"execfile", SpecialForm::ExecFile},
         {"vector", SpecialForm::Vector}, {"table", SpecialForm::Table},
@@ -942,6 +974,18 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 BblValue obj = eval(target.children[0], scope);
                 auto& fieldName = target.stringVal;
                 BblValue val = eval(node.children[2], scope);
+                if (fieldName.empty()) {
+                    int64_t idx = target.intVal;
+                    if (obj.type == BBL::Type::Vector) {
+                        writeVecElem(obj.vectorVal, static_cast<size_t>(idx), val);
+                        return BblValue::makeNull();
+                    }
+                    if (obj.type == BBL::Type::Table) {
+                        obj.tableVal->set(BblValue::makeInt(idx), val);
+                        return BblValue::makeNull();
+                    }
+                    throw BBL::Error{"cannot set integer index on " + typeName(obj.type)};
+                }
                 if (obj.type == BBL::Type::Struct) {
                     FieldDesc* fd = nullptr;
                     for (auto& f : obj.structVal->desc->fields) {
@@ -1043,6 +1087,45 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             }
             return BblValue::makeNull();
         }
+        case SpecialForm::Each: {
+            // (each i container body...)
+            if (node.children.size() < 4) {
+                throw BBL::Error{"each requires an index variable, container, and body"};
+            }
+            auto& idxNode = node.children[1];
+            if (idxNode.type != NodeType::Symbol) {
+                throw BBL::Error{"each: first argument must be a symbol (index variable)"};
+            }
+            uint32_t idxId = resolveSymbol(idxNode.stringVal);
+            BblValue container = eval(node.children[2], scope);
+            int64_t len = 0;
+            if (container.type == BBL::Type::Vector) {
+                len = static_cast<int64_t>(container.vectorVal->length());
+            } else if (container.type == BBL::Type::Table) {
+                len = static_cast<int64_t>(container.tableVal->length());
+            } else {
+                throw BBL::Error{"each: container must be a vector or table, got " + typeName(container.type)};
+            }
+            // Bind index variable (assign-or-create)
+            BblValue* existing = scope.lookup(idxId);
+            if (existing) {
+                *existing = BblValue::makeInt(0);
+            } else {
+                scope.def(idxId, BblValue::makeInt(0));
+            }
+            for (int64_t idx = 0; idx < len; idx++) {
+                if (allocCount >= gcThreshold) gc();
+                BblValue* slot = scope.lookup(idxId);
+                *slot = BblValue::makeInt(idx);
+                for (size_t i = 3; i < node.children.size(); i++) {
+                    eval(node.children[i], scope);
+                }
+            }
+            // After loop: index = len
+            BblValue* slot = scope.lookup(idxId);
+            *slot = BblValue::makeInt(len);
+            return BblValue::makeNull();
+        }
         case SpecialForm::And: {
             if (node.children.size() != 3) {
                 throw BBL::Error{"and requires exactly 2 arguments"};
@@ -1103,7 +1186,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             // Filter: only capture names that are special forms or builtins
             // Actually, capture everything that exists in scope
             static const std::vector<std::string> specialForms = {
-                "=", "if", "loop", "and", "or", "fn", "exec", "not", "do"
+                "=", "if", "loop", "each", "and", "or", "fn", "exec", "not", "do"
             };
             for (auto& name : freeVars) {
                 if (contains(specialForms, name)) {
@@ -1389,6 +1472,18 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 }
                 return readVecElem(vec, static_cast<size_t>(idx.intVal));
             }
+            if (method == "set") {
+                if (node.children.size() < 3) {
+                    throw BBL::Error{"vector.set requires an index and a value"};
+                }
+                BblValue idx = eval(node.children[1], scope);
+                if (idx.type != BBL::Type::Int) {
+                    throw BBL::Error{"vector.set: index must be int"};
+                }
+                BblValue val = eval(node.children[2], scope);
+                writeVecElem(vec, static_cast<size_t>(idx.intVal), val);
+                return BblValue::makeNull();
+            }
             throw BBL::Error{"vector has no method " + method};
         }
 
@@ -1444,7 +1539,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             }
             if (method == "keys") {
                 BblTable* result = allocTable();
-                int64_t idx = 1;
+                int64_t idx = 0;
                 for (auto& [k, v] : tbl->entries) {
                     result->set(BblValue::makeInt(idx), k);
                     idx++;
@@ -2099,9 +2194,11 @@ void BblState::writeVecElem(BblVec* vec, size_t i, const BblValue& val) {
     if (i >= vec->length()) {
         throw BBL::Error{"vector index " + std::to_string(i) + " out of bounds"};
     }
-    uint8_t* p = vec->at(i);
-    packValue(vec, val);
-    memcpy(p, vec->data.data() + vec->data.size() - vec->elemSize, vec->elemSize);
+    size_t off = i * vec->elemSize;          // save offset, not pointer
+    packValue(vec, val);                     // may realloc vec->data
+    uint8_t* dst = vec->data.data() + off;
+    uint8_t* src = vec->data.data() + vec->data.size() - vec->elemSize;
+    memcpy(dst, src, vec->elemSize);
     vec->data.resize(vec->data.size() - vec->elemSize);
 }
 

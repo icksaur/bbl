@@ -101,7 +101,7 @@ Add a built-in `str` that converts any value to its string representation (same 
 
 ## Pain Point 3: No `for`/`range` loop
 
-**Severity: Medium-High**
+**Severity: Medium-High** *(partially addressed by `each`)*
 
 Every counted loop requires 3 lines of boilerplate:
 
@@ -114,18 +114,18 @@ Every counted loop requires 3 lines of boilerplate:
 
 This is the most common pattern in every script.  The counter init and increment are ceremony that adds noise and creates off-by-one opportunities.
 
-**Will weaker models hit this?**  Not directly — they'll adapt.  But the noise makes scripts harder to read and debug, increasing the chance of subtle errors in the increment placement.
+**Partial fix: `each` special form (implemented)**
 
-**Suggested fix: `for` special form**
+`each` eliminates the boilerplate for the most common case — iterating over all elements of a vector or table:
 
 ```bbl
-(for i 0 10
-    (print i "\n"))
+(each i data
+    (print (data.at i) "\n"))
 ```
 
-Desugars to: bind `i` = start, loop while `i` < end, increment after body.
+This covers ~80% of iteration patterns.  The remaining cases (custom start, step, or condition) still require `loop`.  A general `for i start end` form remains in the backlog for numeric ranges not tied to a container.
 
-**Complexity estimate:** ~25 lines.  New `SpecialForm::For` case — create binding, loop with auto-increment.  Very low risk.
+**Will weaker models hit this?**  Not directly — they'll adapt.  But the noise makes scripts harder to read and debug, increasing the chance of subtle errors in the increment placement.
 
 ---
 
@@ -238,7 +238,7 @@ Add methods to strings, same dispatch mechanism as tables/vectors:
 |--------|------------------------|-------------|
 | 1_file_gen | 70–80% | int-to-str conversion required; multi-statement if needed for padding logic |
 | 2_primes | 60–70% | Must extract sieve inner loop into helper fn due to single-statement if |
-| 3_sort | 50–60% | Short-circuit `and` in loop condition; table 1-based indexing; shift-right extraction |
+| 3_sort | 50–60% | Short-circuit `and` in loop condition; table 0-based indexing; shift-right extraction |
 | 4_collatz | 30–40% | If/else is naturally single-statement here (just assignment); table-for-shared-state is the trap |
 | 5_closure | 40–50% | HOF patterns are natural in Lisp; `count-if` with if-inside-reduce is tricky |
 

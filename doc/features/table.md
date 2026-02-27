@@ -44,12 +44,13 @@ If the identifier matches a table method name (see methods below), the method ta
 
 ## integer-indexed access
 
-`at` provides 0-based positional access to integer-keyed entries:
+`at` provides 0-based positional access to integer-keyed entries.  Integer dot syntax (`t.0`) is sugar for `get`/`set` with integer keys:
 
 ```bbl
 (= items (table 1 "sword" 2 "shield" 3 "potion"))
 (print (items.at 0))        // "sword" (first integer key)
-(print (items.at 2))        // "potion" (third integer key)
+(print items.0)             // same — integer dot syntax
+(= items.0 "axe")          // write via integer dot place expression
 ```
 
 ## methods
@@ -62,7 +63,7 @@ If the identifier matches a table method name (see methods below), the method ta
 | `has` | `(t.has key)` | returns `bool` — whether the key exists. |
 | `keys` | `(t.keys)` | returns a table of all keys (integer-indexed). |
 | `length` | `(t.length)` | number of key-value pairs. |
-| `push` | `(t.push val)` | append value with the next integer key (auto-incrementing). |
+| `push` | `(t.push val)` | append value with the next integer key (0-based, auto-incrementing).  First push assigns key 0. |
 | `pop` | `(t.pop)` | remove and return the value at the highest integer key.  Error if no integer keys. |
 | `at` | `(t.at i)` | access integer-keyed entry by 0-based position among integer keys.  0 = first integer key, 1 = second, etc. |
 

@@ -172,6 +172,37 @@ Repeats body while condition is `true`.  Condition must be a `Bool`.  `loop` is 
 // sum = 45, i = 10
 ```
 
+### each
+
+```bbl
+(each index-var container body...)
+```
+
+Iterates over a vector or table, binding `index-var` to 0, 1, ..., length-1.  Access elements via `(container.at index-var)`.  The container is evaluated once.  `each` is a statement (returns `null`).
+
+After the loop completes, the index variable remains in scope with value = container length.
+
+```bbl
+(= v (vector int 10 20 30))
+(each i v
+    (print (v.at i) "\n"))
+// prints: 10\n20\n30\n — i is now 3
+```
+
+Works on tables too:
+
+```bbl
+(= t (table))
+(t.push "a") (t.push "b") (t.push "c")
+(each i t
+    (print (t.at i) " "))
+// prints: a b c
+```
+
+`each` replaces the common 3-line boilerplate of `(= i 0)` / `(loop (< i len) ...)` / `(= i (+ i 1))`.
+
+For non-standard iteration patterns (e.g., starting at 1, iterating to `len - 2`, custom step), use `loop` instead.
+
 ---
 
 ## Functions
@@ -235,6 +266,15 @@ Ordered key-value maps.  Keys can be any value type (strings and ints are most c
 (= player.hp 80)      // write to string key via dot
 ```
 
+Integer dot syntax reads/writes integer keys:
+
+```bbl
+(= items (table))
+(items.push "sword")
+(print items.0)        // "sword" — integer dot
+(= items.0 "axe")     // write via integer dot
+```
+
 ### Constructor
 
 ```bbl
@@ -251,7 +291,7 @@ Ordered key-value maps.  Keys can be any value type (strings and ints are most c
 | `delete` | remove a key | `(player.delete "alive")` |
 | `has` | check if key exists | `(player.has "name")` → `true` |
 | `keys` | table of all keys | `(player.keys)` |
-| `push` | append with auto-int key | `(t.push "item")` |
+| `push` | append with auto-int key (0-based) | `(t.push "item")` |
 | `pop` | remove & return last int-keyed entry | `(t.pop)` |
 | `at` | access by 0-based position among int keys | `(t.at 0)` |
 
@@ -272,6 +312,7 @@ Typed, homogeneous contiguous arrays.  The type is specified at creation.
 (print (v.length))   // 3
 (v.push 40)
 (print (v.at 0))     // 10
+(print v.0)          // 10 — integer dot syntax
 (= last (v.pop))     // 40
 ```
 
@@ -291,13 +332,16 @@ Types: `int`, `float`, `bool`, or any registered struct name.
 | `push` | append an element |
 | `pop` | remove & return last element |
 | `clear` | remove all elements |
-| `at` | access by 0-based index |
+| `at` | read by 0-based index |
+| `set` | write by 0-based index — `(v.set 0 newval)` |
 
 For struct vectors, elements have full dot access:
 
 ```bbl
 (= verts (vector vertex (vertex 0 1 0) (vertex 1 0 0)))
 (print (verts.at 0).x)
+(print verts.0.x)          // same — integer dot chains with field access
+(= verts.0 (vertex 5 5 5)) // integer dot write
 ```
 
 ---
@@ -462,7 +506,7 @@ UserData types are registered from C++ and exposed in scripts.  They behave like
 
 - **Root scope**: the outermost scope of a script.
 - **Function scope**: each `fn` call creates a fresh scope.  Parameters are bound in this scope.
-- **Shared scope**: `if`, `loop`, and body expressions run in the enclosing scope (no new scope is created).
+- **Shared scope**: `if`, `loop`, `each`, and body expressions run in the enclosing scope (no new scope is created).
 - **Captures**: free variables in a `fn` body are captured by value at `fn` evaluation time.  Value types are snapshotted; GC types are shared references.
 
 ---
@@ -474,6 +518,7 @@ UserData types are registered from C++ and exposed in scripts.  They behave like
 | `=` | assignment | assign-or-create a variable; place write on struct/table fields |
 | `if` | control | conditional — `(if cond then [else])` |
 | `loop` | control | while-loop — `(loop cond body...)` |
+| `each` | control | index iteration — `(each i container body...)` |
 | `fn` | function | anonymous function — `(fn (params...) body...)` |
 | `and` | logic | short-circuit AND |
 | `or` | logic | short-circuit OR |
@@ -514,8 +559,12 @@ UserData types are registered from C++ and exposed in scripts.  They behave like
     (memo.set n result)
     result))
 
+(= results (vector int))
 (= i 0)
 (loop (< i 20)
-    (print "fib(" i ") = " (fib i))
+    (results.push (fib i))
     (= i (+ i 1)))
+
+(each i results
+    (print "fib(" i ") = " (results.at i) "\n"))
 ```
