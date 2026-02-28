@@ -11,6 +11,30 @@
 
 ---
 
+## install
+
+### from source (any distro)
+
+```sh
+git clone https://github.com/carlviedmern/bbl
+cd bbl
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+sudo cmake --install build          # installs to /usr/local/bin
+```
+
+To choose a different prefix: `cmake -B build -DCMAKE_INSTALL_PREFIX=/usr ...`
+
+### Arch Linux
+
+From the repo directory:
+
+```sh
+makepkg -si
+```
+
+---
+
 ## usage
 
 Run a script:

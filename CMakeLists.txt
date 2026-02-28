@@ -10,6 +10,8 @@ target_include_directories(bbl_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_executable(bbl main.cpp)
 target_link_libraries(bbl PRIVATE bbl_lib)
 
+install(TARGETS bbl RUNTIME DESTINATION bin)
+
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     add_executable(bbl_tests tests/test_bbl.cpp)
     target_link_libraries(bbl_tests PRIVATE bbl_lib)
