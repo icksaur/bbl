@@ -3368,6 +3368,97 @@ TEST(test_colon_on_int_error) {
     ASSERT_THROW(bbl.exec("(= x 42) (x:length)"));
 }
 
+// ========== Shebang ==========
+
+TEST(test_shebang_skipped) {
+    BblState bbl;
+    bbl.exec("#!/usr/bin/env bbl\n(= x 42)");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)42);
+}
+
+TEST(test_shebang_only_at_start) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec("(= x 1)\n#!/usr/bin/env bbl"));
+}
+
+TEST(test_shebang_empty_after) {
+    BblState bbl;
+    bbl.exec("#!/usr/bin/env bbl\n");
+    // no crash, no error
+    passed++;
+}
+
+TEST(test_shebang_preserves_line_numbers) {
+    // Shebang line is line 1.  Code on line 2 should still work.
+    BblState bbl;
+    bbl.exec("#!/usr/bin/env bbl\n\n(= x 99)");
+    ASSERT_EQ(bbl.getInt("x"), (int64_t)99);
+}
+
+// ========== read-line ==========
+
+TEST(test_file_read_line) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.allowOpenFilesystem = true;
+    bbl.exec(R"(
+        (= f (fopen "/tmp/bbl_test_readline.txt" "w"))
+        (f:write "aaa\nbbb\nccc\n")
+        (f:close)
+        (= f2 (fopen "/tmp/bbl_test_readline.txt" "r"))
+        (= a (f2:read-line))
+        (= b (f2:read-line))
+        (= c (f2:read-line))
+        (= d (f2:read-line))
+        (f2:close)
+    )");
+    ASSERT_EQ(std::string(bbl.getString("a")), std::string("aaa"));
+    ASSERT_EQ(std::string(bbl.getString("b")), std::string("bbb"));
+    ASSERT_EQ(std::string(bbl.getString("c")), std::string("ccc"));
+    ASSERT_EQ(bbl.getType("d"), BBL::Type::Null);
+}
+
+TEST(test_file_read_line_empty_lines) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.allowOpenFilesystem = true;
+    bbl.exec(R"(
+        (= f (fopen "/tmp/bbl_test_readline2.txt" "w"))
+        (f:write "a\n\nb\n")
+        (f:close)
+        (= f2 (fopen "/tmp/bbl_test_readline2.txt" "r"))
+        (= first (f2:read-line))
+        (= second (f2:read-line))
+        (= third (f2:read-line))
+        (= fourth (f2:read-line))
+        (f2:close)
+    )");
+    ASSERT_EQ(std::string(bbl.getString("first")), std::string("a"));
+    ASSERT_EQ(std::string(bbl.getString("second")), std::string(""));
+    ASSERT_EQ(std::string(bbl.getString("third")), std::string("b"));
+    ASSERT_EQ(bbl.getType("fourth"), BBL::Type::Null);
+}
+
+// ========== Standard streams ==========
+
+TEST(test_std_streams_exist) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    ASSERT_EQ(bbl.getType("stdin"), BBL::Type::UserData);
+    ASSERT_EQ(bbl.getType("stdout"), BBL::Type::UserData);
+    ASSERT_EQ(bbl.getType("stderr"), BBL::Type::UserData);
+}
+
+TEST(test_std_stream_close_noop) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    // closing stdin should not crash
+    bbl.exec("(stdin:close)");
+    // stdout should still be usable after close attempt
+    bbl.exec("(stdout:flush)");
+    passed++;
+}
+
 // ========== Main ==========
 
 int main() {
@@ -3912,6 +4003,23 @@ int main() {
     RUN(test_table_self_passing_missing_key_error);
     RUN(test_colon_on_struct_error);
     RUN(test_colon_on_int_error);
+
+    // shebang
+    std::cout << "--- shebang ---" << std::endl;
+    RUN(test_shebang_skipped);
+    RUN(test_shebang_only_at_start);
+    RUN(test_shebang_empty_after);
+    RUN(test_shebang_preserves_line_numbers);
+
+    // read-line
+    std::cout << "--- read-line ---" << std::endl;
+    RUN(test_file_read_line);
+    RUN(test_file_read_line_empty_lines);
+
+    // standard streams
+    std::cout << "--- standard streams ---" << std::endl;
+    RUN(test_std_streams_exist);
+    RUN(test_std_stream_close_noop);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

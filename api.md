@@ -522,7 +522,7 @@ BBL::addStdLib(bbl);    // registers all modules below
 // or pick individually:
 BBL::addPrint(bbl);     // print function
 BBL::addMath(bbl);      // math functions + constants
-BBL::addFileIo(bbl);    // fopen, filebytes, File type
+BBL::addFileIo(bbl);    // fopen, filebytes, File type, stdin/stdout/stderr globals
 ```
 
 ### Print Capture

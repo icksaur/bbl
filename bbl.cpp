@@ -166,6 +166,11 @@ char BblLexer::advance() {
 }
 
 void BblLexer::skipWhitespaceAndComments() {
+    if (pos == 0 && pos + 1 < len && src[0] == '#' && src[1] == '!') {
+        while (pos < len && peek() != '\n') {
+            advance();
+        }
+    }
     while (pos < len) {
         char c = peek();
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
@@ -3063,11 +3068,33 @@ static int bblFileWriteBytes(BblState* bbl) {
     return 0;
 }
 
+static int bblFileReadLine(BblState* bbl) {
+    BblValue self = bbl->getArg(0);
+    if (self.type != BBL::Type::UserData) throw BBL::Error{"File.read-line: expected File object"};
+    FILE* fp = static_cast<FILE*>(self.userdataVal->data);
+    if (!fp) throw BBL::Error{"File.read-line: file is closed"};
+    std::string result;
+    char buf[4096];
+    if (!fgets(buf, sizeof(buf), fp)) {
+        bbl->pushNull();
+        return 0;
+    }
+    result = buf;
+    while (!result.empty() && result.back() != '\n' && !feof(fp)) {
+        if (!fgets(buf, sizeof(buf), fp)) break;
+        result += buf;
+    }
+    if (!result.empty() && result.back() == '\n') result.pop_back();
+    if (!result.empty() && result.back() == '\r') result.pop_back();
+    bbl->pushString(result.c_str());
+    return 0;
+}
+
 static int bblFileClose(BblState* bbl) {
     BblValue self = bbl->getArg(0);
     if (self.type != BBL::Type::UserData) throw BBL::Error{"File.close: expected File object"};
     FILE* fp = static_cast<FILE*>(self.userdataVal->data);
-    if (fp) {
+    if (fp && fp != stdin && fp != stdout && fp != stderr) {
         fclose(fp);
         self.userdataVal->data = nullptr;
     }
@@ -3084,7 +3111,7 @@ static int bblFileFlush(BblState* bbl) {
 
 static void fileDestructor(void* ptr) {
     FILE* fp = static_cast<FILE*>(ptr);
-    if (fp) fclose(fp);
+    if (fp && fp != stdin && fp != stdout && fp != stderr) fclose(fp);
 }
 
 void BBL::addFileIo(BblState& bbl) {
@@ -3092,6 +3119,7 @@ void BBL::addFileIo(BblState& bbl) {
     BBL::TypeBuilder fb("File");
     fb.method("read", bblFileRead)
       .method("read-bytes", bblFileReadBytes)
+      .method("read-line", bblFileReadLine)
       .method("write", bblFileWrite)
       .method("write-bytes", bblFileWriteBytes)
       .method("close", bblFileClose)
@@ -3100,6 +3128,9 @@ void BBL::addFileIo(BblState& bbl) {
     bbl.registerType(fb);
     bbl.defn("filebytes", bblFilebytes);
     bbl.defn("fopen", bblFopen);
+    bbl.set("stdin", BblValue::makeUserData(bbl.allocUserData("File", static_cast<void*>(stdin))));
+    bbl.set("stdout", BblValue::makeUserData(bbl.allocUserData("File", static_cast<void*>(stdout))));
+    bbl.set("stderr", BblValue::makeUserData(bbl.allocUserData("File", static_cast<void*>(stderr))));
 }
 
 // ---------- addMath ----------

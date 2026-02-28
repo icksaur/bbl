@@ -691,6 +691,7 @@ Constants: `pi`, `e`.
 | `(fopen path [mode])`      | Open file, returns File userdata         |
 | `(filebytes path)`         | Read entire file into binary             |
 | `(f:read)`                 | Read file as string                      |
+| `(f:read-line)`            | Read one line (strips newline), null at EOF |
 | `(f:read-bytes n)`         | Read n bytes as binary                   |
 | `(f:write str)`            | Write string                             |
 | `(f:write-bytes blob)`     | Write binary data                        |
@@ -698,6 +699,30 @@ Constants: `pi`, `e`.
 | `(f:flush)`                | Flush buffers                            |
 
 File modes: `"r"`, `"w"`, `"a"`, `"rb"`, `"wb"`, etc. (standard C fopen modes).
+
+### Standard Streams
+
+Three pre-opened File globals are available when `addFileIo()` (or `addStdLib()`) is called:
+
+| Global   | Description                              |
+|----------|------------------------------------------|
+| `stdin`  | Standard input (File wrapping C stdin)   |
+| `stdout` | Standard output (File wrapping C stdout) |
+| `stderr` | Standard error (File wrapping C stderr)  |
+
+They support all File methods.  `close` on a standard stream is a safe no-op.
+
+```bbl
+// line-by-line stdin processing
+(= line (stdin:read-line))
+(loop (!= line null)
+    (print "line: " line "\n")
+    (= line (stdin:read-line)))
+
+// explicit output
+(stdout:write "to stdout\n")
+(stderr:write "error message\n")
+```
 
 ---
 
@@ -715,6 +740,22 @@ bbl [options] [script [args...]]
 | `bbl -e "(+ 1 2)"`        | Evaluate expression                      |
 | `bbl -v`                   | Version                                  |
 | `bbl -h`                   | Help                                     |
+
+### Shebang
+
+BBL scripts can start with a `#!` line for direct execution:
+
+```bbl
+#!/usr/bin/env bbl
+(print "hello from script\n")
+```
+
+```sh
+chmod +x hello.bbl
+./hello.bbl
+```
+
+The shebang line is silently skipped by the lexer.  Only recognized at position 0 — `#` anywhere else is a syntax error.
 
 ### Script Arguments
 
@@ -781,7 +822,7 @@ Default: zero filesystem access.  Capabilities are opt-in:
 | No stdlib       | Pure computation only                              |
 | `addPrint()`    | stdout only                                        |
 | `addMath()`     | No filesystem                                      |
-| `addFileIo()`   | `fopen`, `filebytes` with sandbox rules            |
+| `addFileIo()`   | `fopen`, `filebytes`, `stdin`/`stdout`/`stderr` globals |
 | `defn()`        | Whatever the host function exposes                 |
 
 Path rules for `execfile` and `filebytes` from script:
