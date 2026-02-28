@@ -1,13 +1,44 @@
 # Basic Binary Lisp
 
-## Agent Guide
-- Read `plan.md` for current work
-- Read `bbl.md` for complete language reference
-- Read `api.md` for C++ embedding API
-- Read `implementation.md` for internals, performance, and code style
-- Build: `cmake -B build && cmake --build build`
-- Test: `./build/bbl_tests`
-- Do not start backlog items without asking
+Basic Binary Lisp is a scripting language designed for serializing C++ data structures and binary blobs.  Prefix math, no infix operators.  Embeddable via a Lua-style C++ API.  Simple tracing GC.
+
+---
+
+## examples
+
+```bbl
+(= world "world")
+(= hello (fn ()
+    (print "Hello, " world "!\n")
+))
+(hello)
+```
+
+```bbl
+// vertex registered from C++ via StructBuilder
+(= tri (vector vertex (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
+(print (tri:at 0).x)
+```
+
+```bbl
+(= texture 0b65536:<65536 bytes of png data>)
+```
+
+## usage
+
+Run a script:
+
+```sh
+bbl script.bbl
+```
+
+Interactive mode:
+
+```sh
+bbl
+```
+
+The REPL reads s-expressions and evaluates them.  Multi-line input is automatic — an open `(` without a matching `)` continues to the next line.
 
 ---
 
@@ -35,25 +66,13 @@ makepkg -si
 
 ---
 
-## usage
+## full documentation
 
-Run a script:
+[bbl language](bbl.md)
 
-```sh
-bbl script.bbl
-```
+[C++ API](api.md)
 
-Interactive mode:
-
-```sh
-bbl
-```
-
-The REPL reads s-expressions and evaluates them.  Multi-line input is automatic — an open `(` without a matching `)` continues to the next line.
-
----
-
-Basic Binary Lisp is a scripting language designed for serializing C++ data structures and binary blobs.  Prefix math, no infix operators.  Embeddable via a Lua-style C++ API.  Simple tracing GC.
+[implementation notes](implementation.md)
 
 ## data types
 
@@ -71,26 +90,6 @@ GC-managed types (shared on assignment):
 - `vector` (contiguous typed storage)
 - `table` (heterogeneous key-value container)
 - `userdata` (opaque `void*` with type descriptor)
-
-## examples
-
-```bbl
-(= world "world")
-(= hello (fn ()
-    (print "Hello, " world "!\n")
-))
-(hello)
-```
-
-```bbl
-// vertex registered from C++ via StructBuilder
-(= tri (vector vertex (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
-(print (tri:at 0).x)
-```
-
-```bbl
-(= texture 0b65536:<65536 bytes of png data>)
-```
 
 ## control flow
 
