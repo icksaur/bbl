@@ -1402,14 +1402,16 @@ TEST(test_string_neq) {
     ASSERT_FALSE(bbl.getBool("r"));
 }
 
-TEST(test_string_lt_type_error) {
+TEST(test_string_lt_basic) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec(R"((< "a" "b"))"));
+    bbl.exec(R"((= r (< "a" "b")))");
+    ASSERT_TRUE(bbl.getBool("r"));
 }
 
-TEST(test_string_gt_type_error) {
+TEST(test_string_gt_basic) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec(R"((> "a" "b"))"));
+    bbl.exec(R"((= r (> "a" "b")))");
+    ASSERT_FALSE(bbl.getBool("r"));
 }
 
 TEST(test_string_concat_multi) {
@@ -1625,6 +1627,7 @@ TEST(test_math_pow) {
 TEST(test_file_write_read) {
     BblState bbl;
     BBL::addStdLib(bbl);
+    bbl.allowOpenFilesystem = true;
     bbl.exec(R"(
         (= f (fopen "/tmp/bbl_test_io.txt" "w"))
         (f.write "hello bbl")
@@ -1639,6 +1642,7 @@ TEST(test_file_write_read) {
 TEST(test_file_read_bytes) {
     BblState bbl;
     BBL::addStdLib(bbl);
+    bbl.allowOpenFilesystem = true;
     bbl.exec(R"(
         (= f (fopen "/tmp/bbl_test_io2.txt" "w"))
         (f.write "abcde")
@@ -2680,6 +2684,537 @@ TEST(test_filebytes_dotdot_open) {
     fs::remove_all("/tmp/bbl_test_openfs2");
 }
 
+// ========== Phase 5: with ==========
+
+static int destructionCount = 0;
+static std::vector<int> destructionOrder;
+
+static void countingDestructor(void* ptr) {
+    destructionCount++;
+    (void)ptr;
+}
+
+static void orderTrackingDestructor(void* ptr) {
+    int* id = static_cast<int*>(ptr);
+    destructionOrder.push_back(*id);
+}
+
+static int makeCounterForWith(BblState* bbl) {
+    static int val = 0;
+    val = 42;
+    bbl->pushUserData("Counter", &val);
+    return 0;
+}
+
+TEST(test_with_basic_destructor) {
+    BblState bbl;
+    BBL::TypeBuilder tb("Counter");
+    tb.method("value", udGetVal)
+      .destructor(countingDestructor);
+    bbl.registerType(tb);
+    bbl.defn("make-counter", makeCounterForWith);
+    destructionCount = 0;
+    bbl.exec(R"(
+        (with c (make-counter) (c.value))
+    )");
+    ASSERT_EQ(destructionCount, 1);
+}
+
+TEST(test_with_return_value) {
+    BblState bbl;
+    BBL::TypeBuilder tb("Counter");
+    tb.method("value", udGetVal)
+      .destructor(countingDestructor);
+    bbl.registerType(tb);
+    bbl.defn("make-counter", makeCounterForWith);
+    destructionCount = 0;
+    bbl.exec(R"(
+        (= result (with c (make-counter) (c.value)))
+    )");
+    ASSERT_EQ(bbl.getInt("result"), (int64_t)42);
+    ASSERT_EQ(destructionCount, 1);
+}
+
+TEST(test_with_destructor_on_throw) {
+    BblState bbl;
+    BBL::TypeBuilder tb("Counter");
+    tb.method("value", udGetVal)
+      .destructor(countingDestructor);
+    bbl.registerType(tb);
+    bbl.defn("make-counter", makeCounterForWith);
+    destructionCount = 0;
+    bool threw = false;
+    try {
+        bbl.exec(R"(
+            (with c (make-counter) (c.nonexistent))
+        )");
+    } catch (...) {
+        threw = true;
+    }
+    ASSERT_TRUE(threw);
+    ASSERT_EQ(destructionCount, 1);
+}
+
+TEST(test_with_scoped_binding) {
+    BblState bbl;
+    BBL::TypeBuilder tb("Counter");
+    tb.method("value", udGetVal)
+      .destructor(countingDestructor);
+    bbl.registerType(tb);
+    bbl.defn("make-counter", makeCounterForWith);
+    destructionCount = 0;
+    ASSERT_THROW(bbl.exec(R"(
+        (with c (make-counter) (c.value))
+        (= x c)
+    )"));
+    ASSERT_EQ(destructionCount, 1);
+}
+
+TEST(test_with_no_double_free_gc) {
+    BblState bbl;
+    BBL::TypeBuilder tb("Counter");
+    tb.method("value", udGetVal)
+      .destructor(countingDestructor);
+    bbl.registerType(tb);
+    bbl.defn("make-counter", makeCounterForWith);
+    destructionCount = 0;
+    bbl.exec(R"(
+        (with c (make-counter) (c.value))
+    )");
+    ASSERT_EQ(destructionCount, 1);
+    bbl.gc();
+    ASSERT_EQ(destructionCount, 1);
+}
+
+TEST(test_with_non_userdata_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"((with f 42 (print f)))"));
+}
+
+TEST(test_with_missing_args) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"((with f))"));
+}
+
+TEST(test_with_no_destructor) {
+    BblState bbl;
+    BBL::TypeBuilder tb("Plain");
+    tb.method("value", udGetVal);
+    bbl.registerType(tb);
+    static int val = 99;
+    auto* ud = bbl.allocUserData("Plain", &val);
+    bbl.set("obj", BblValue::makeUserData(ud));
+    bbl.exec(R"(
+        (= result (with o obj (o.value)))
+    )");
+    ASSERT_EQ(bbl.getInt("result"), (int64_t)99);
+}
+
+TEST(test_with_nested) {
+    BblState bbl;
+    static int id1 = 1, id2 = 2;
+    BBL::TypeBuilder tb("Tracked");
+    tb.destructor(orderTrackingDestructor);
+    bbl.registerType(tb);
+
+    static int makeId = 0;
+    auto makeTracked = [](BblState* b) -> int {
+        makeId++;
+        int* p = (makeId == 1) ? &id1 : &id2;
+        b->pushUserData("Tracked", p);
+        return 0;
+    };
+    bbl.defn("make-tracked", +makeTracked);
+
+    destructionOrder.clear();
+    makeId = 0;
+    bbl.exec(R"(
+        (with a (make-tracked)
+            (with b (make-tracked)
+                (= x 1)))
+    )");
+    ASSERT_EQ(destructionOrder.size(), (size_t)2);
+    ASSERT_EQ(destructionOrder[0], 2);  // inner (b) destroyed first
+    ASSERT_EQ(destructionOrder[1], 1);  // outer (a) destroyed second
+}
+
+TEST(test_with_explicit_close_no_double_free) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.allowOpenFilesystem = true;
+    destructionCount = 0;
+    // Use a real file — fclose inside with body, then with exits and destructor sees null
+    bbl.exec(R"(
+        (with f (fopen "/tmp/bbl_test_with_close.txt" "w")
+            (f.write "test")
+            (f.close))
+    )");
+    // No crash = success (destructor saw null data, skipped)
+    namespace fs = std::filesystem;
+    fs::remove("/tmp/bbl_test_with_close.txt");
+}
+
+TEST(test_with_file_io) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.allowOpenFilesystem = true;
+    bbl.exec(R"(
+        (with f (fopen "/tmp/bbl_test_with_io.txt" "w")
+            (f.write "hello with"))
+    )");
+    bbl.exec(R"(
+        (= contents (with f (fopen "/tmp/bbl_test_with_io.txt" "r")
+            (f.read)))
+    )");
+    ASSERT_EQ(std::string(bbl.getString("contents")), std::string("hello with"));
+    namespace fs = std::filesystem;
+    fs::remove("/tmp/bbl_test_with_io.txt");
+}
+
+// ========== String Ordering ==========
+
+TEST(test_string_lt) {
+    BblState bbl;
+    bbl.exec(R"((= r (< "a" "b")))");
+    ASSERT_TRUE(bbl.getBool("r"));
+}
+
+TEST(test_string_gt) {
+    BblState bbl;
+    bbl.exec(R"((= r (> "z" "a")))");
+    ASSERT_TRUE(bbl.getBool("r"));
+}
+
+TEST(test_string_le_equal) {
+    BblState bbl;
+    bbl.exec(R"((= r (<= "abc" "abc")))");
+    ASSERT_TRUE(bbl.getBool("r"));
+}
+
+TEST(test_string_ge_less) {
+    BblState bbl;
+    bbl.exec(R"((= r (>= "abc" "abd")))");
+    ASSERT_FALSE(bbl.getBool("r"));
+}
+
+TEST(test_string_lt_case) {
+    // Uppercase < lowercase in ASCII
+    BblState bbl;
+    bbl.exec(R"((= r (< "A" "a")))");
+    ASSERT_TRUE(bbl.getBool("r"));
+}
+
+TEST(test_string_ordering_cross_type_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"((< "a" 1))"));
+}
+
+TEST(test_string_le_prefix) {
+    BblState bbl;
+    bbl.exec(R"((= r (<= "ab" "abc")))");
+    ASSERT_TRUE(bbl.getBool("r"));
+}
+
+TEST(test_string_gt_empty) {
+    BblState bbl;
+    bbl.exec(R"((= r (> "a" "")))");
+    ASSERT_TRUE(bbl.getBool("r"));
+}
+
+// ========== Break / Continue ==========
+
+TEST(test_break_basic) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= x 0)
+        (loop true
+            (break)
+            (= x 1))
+    )");
+    ASSERT_EQ(bbl.getInt("x"), 0);
+}
+
+TEST(test_break_with_condition) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= sum 0)
+        (= i 0)
+        (loop (< i 10)
+            (if (== i 5) (break))
+            (= sum (+ sum i))
+            (= i (+ i 1)))
+    )");
+    ASSERT_EQ(bbl.getInt("sum"), 10); // 0+1+2+3+4
+}
+
+TEST(test_continue_basic) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= sum 0)
+        (= i 0)
+        (loop (< i 5)
+            (= i (+ i 1))
+            (if (== i 3) (continue))
+            (= sum (+ sum i)))
+    )");
+    ASSERT_EQ(bbl.getInt("sum"), 12); // 1+2+4+5, skip 3
+}
+
+TEST(test_break_in_each) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= sum 0)
+        (= v (vector int 10 20 30 40))
+        (each i v
+            (if (== i 2) (break))
+            (= sum (+ sum (v.at i))))
+    )");
+    ASSERT_EQ(bbl.getInt("sum"), 30); // 10+20
+}
+
+TEST(test_continue_in_each) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= sum 0)
+        (= v (vector int 10 20 30 40))
+        (each i v
+            (if (== i 1) (continue))
+            (= sum (+ sum (v.at i))))
+    )");
+    ASSERT_EQ(bbl.getInt("sum"), 80); // 10+30+40, skip 20
+}
+
+TEST(test_break_outside_loop_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"((break))"));
+}
+
+TEST(test_continue_outside_loop_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"((continue))"));
+}
+
+TEST(test_break_arity_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"((loop true (break 42)))"));
+}
+
+TEST(test_break_in_nested_do) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= x 0)
+        (loop true
+            (do
+                (= x (+ x 1))
+                (break)))
+    )");
+    ASSERT_EQ(bbl.getInt("x"), 1);
+}
+
+TEST(test_break_in_nested_if) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= count 0)
+        (= i 0)
+        (loop (< i 100)
+            (= i (+ i 1))
+            (if (== i 3)
+                (break)
+                (= count (+ count 1))))
+    )");
+    ASSERT_EQ(bbl.getInt("count"), 2);
+}
+
+TEST(test_break_does_not_cross_fn) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"(
+        (= f (fn () (break)))
+        (loop true (f))
+    )"));
+}
+
+// ========== Vector resize / reserve ==========
+
+TEST(test_vec_resize_grow) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= v (vector int))
+        (v.resize 5)
+        (= len (v.length))
+    )");
+    ASSERT_EQ(bbl.getInt("len"), 5);
+}
+
+TEST(test_vec_resize_zero_fill) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= v (vector int))
+        (v.resize 3)
+        (= val (v.at 0))
+    )");
+    ASSERT_EQ(bbl.getInt("val"), 0);
+}
+
+TEST(test_vec_resize_shrink) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= v (vector int 1 2 3 4 5))
+        (v.resize 2)
+        (= len (v.length))
+    )");
+    ASSERT_EQ(bbl.getInt("len"), 2);
+}
+
+TEST(test_vec_reserve_no_length_change) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= v (vector int))
+        (v.reserve 1000)
+        (= len (v.length))
+    )");
+    ASSERT_EQ(bbl.getInt("len"), 0);
+}
+
+TEST(test_vec_resize_negative_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"(
+        (= v (vector int))
+        (v.resize -1)
+    )"));
+}
+
+TEST(test_vec_resize_type_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"(
+        (= v (vector int))
+        (v.resize "a")
+    )"));
+}
+
+TEST(test_vec_reserve_negative_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"(
+        (= v (vector int))
+        (v.reserve -1)
+    )"));
+}
+
+TEST(test_vec_resize_then_set) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= v (vector int))
+        (v.resize 3)
+        (v.set 2 42)
+        (= val (v.at 2))
+    )");
+    ASSERT_EQ(bbl.getInt("val"), 42);
+}
+
+// ========== Try / Catch ==========
+
+TEST(test_try_catch_basic) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= result (try
+            (/ 1 0)
+            (catch e e)))
+    )");
+    ASSERT_EQ(std::string(bbl.getString("result")), std::string("division by zero"));
+}
+
+TEST(test_try_no_error) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= result (try
+            (+ 1 2)
+            (catch e "error")))
+    )");
+    ASSERT_EQ(bbl.getInt("result"), 3);
+}
+
+TEST(test_try_catch_handler_body) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= result (try
+            (/ 1 0)
+            (catch e (+ "caught: " e))))
+    )");
+    ASSERT_EQ(std::string(bbl.getString("result")), std::string("caught: division by zero"));
+}
+
+TEST(test_try_missing_catch_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"((try (+ 1 2)))"));
+}
+
+TEST(test_try_no_body_error) {
+    BblState bbl;
+    ASSERT_THROW(bbl.exec(R"((try (catch e)))"));
+}
+
+TEST(test_try_nested) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= result (try
+            (try
+                (/ 1 0)
+                (catch e (+ "inner: " e)))
+            (catch e (+ "outer: " e))))
+    )");
+    ASSERT_EQ(std::string(bbl.getString("result")), std::string("inner: division by zero"));
+}
+
+TEST(test_try_catch_scope) {
+    // Error variable should not leak out of catch scope
+    BblState bbl;
+    bbl.exec(R"(
+        (try
+            (/ 1 0)
+            (catch myerr myerr))
+    )");
+    ASSERT_THROW(bbl.exec(R"(myerr)"));
+}
+
+TEST(test_try_multi_body) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= x 0)
+        (try
+            (= x 1)
+            (= x (+ x 1))
+            (/ 1 0)
+            (= x 99)
+            (catch e "ok"))
+    )");
+    ASSERT_EQ(bbl.getInt("x"), 2);
+}
+
+TEST(test_try_catch_multi_handler) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= a 0)
+        (= b 0)
+        (try
+            (/ 1 0)
+            (catch e
+                (= a 1)
+                (= b 2)))
+    )");
+    ASSERT_EQ(bbl.getInt("a"), 1);
+    ASSERT_EQ(bbl.getInt("b"), 2);
+}
+
+TEST(test_try_type_error) {
+    BblState bbl;
+    bbl.exec(R"(
+        (= result (try
+            (+ 1 "a")
+            (catch e e)))
+    )");
+    // Should catch the type error
+    ASSERT_EQ(std::string(bbl.getString("result")).empty(), false);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -2929,8 +3464,8 @@ int main() {
     std::cout << "--- String Comparison ---" << std::endl;
     RUN(test_string_eq_interned);
     RUN(test_string_neq);
-    RUN(test_string_lt_type_error);
-    RUN(test_string_gt_type_error);
+    RUN(test_string_lt_basic);
+    RUN(test_string_gt_basic);
     RUN(test_string_concat_multi);
 
     // Phase 5: Binary C++ API
@@ -3136,6 +3671,69 @@ int main() {
     RUN(test_execfile_dotdot_open);
     RUN(test_filebytes_abs_open);
     RUN(test_filebytes_dotdot_open);
+
+    // with
+    std::cout << "--- with ---" << std::endl;
+    RUN(test_with_basic_destructor);
+    RUN(test_with_return_value);
+    RUN(test_with_destructor_on_throw);
+    RUN(test_with_scoped_binding);
+    RUN(test_with_no_double_free_gc);
+    RUN(test_with_non_userdata_error);
+    RUN(test_with_missing_args);
+    RUN(test_with_no_destructor);
+    RUN(test_with_nested);
+    RUN(test_with_explicit_close_no_double_free);
+    RUN(test_with_file_io);
+
+    // string ordering
+    std::cout << "--- string ordering ---" << std::endl;
+    RUN(test_string_lt);
+    RUN(test_string_gt);
+    RUN(test_string_le_equal);
+    RUN(test_string_ge_less);
+    RUN(test_string_lt_case);
+    RUN(test_string_ordering_cross_type_error);
+    RUN(test_string_le_prefix);
+    RUN(test_string_gt_empty);
+
+    // break / continue
+    std::cout << "--- break / continue ---" << std::endl;
+    RUN(test_break_basic);
+    RUN(test_break_with_condition);
+    RUN(test_continue_basic);
+    RUN(test_break_in_each);
+    RUN(test_continue_in_each);
+    RUN(test_break_outside_loop_error);
+    RUN(test_continue_outside_loop_error);
+    RUN(test_break_arity_error);
+    RUN(test_break_in_nested_do);
+    RUN(test_break_in_nested_if);
+    RUN(test_break_does_not_cross_fn);
+
+    // vector resize / reserve
+    std::cout << "--- vector resize / reserve ---" << std::endl;
+    RUN(test_vec_resize_grow);
+    RUN(test_vec_resize_zero_fill);
+    RUN(test_vec_resize_shrink);
+    RUN(test_vec_reserve_no_length_change);
+    RUN(test_vec_resize_negative_error);
+    RUN(test_vec_resize_type_error);
+    RUN(test_vec_reserve_negative_error);
+    RUN(test_vec_resize_then_set);
+
+    // try / catch
+    std::cout << "--- try / catch ---" << std::endl;
+    RUN(test_try_catch_basic);
+    RUN(test_try_no_error);
+    RUN(test_try_catch_handler_body);
+    RUN(test_try_missing_catch_error);
+    RUN(test_try_no_body_error);
+    RUN(test_try_nested);
+    RUN(test_try_catch_scope);
+    RUN(test_try_multi_body);
+    RUN(test_try_catch_multi_handler);
+    RUN(test_try_type_error);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

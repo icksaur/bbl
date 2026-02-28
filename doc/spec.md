@@ -20,7 +20,7 @@ Serialize complex C++ data structures including binary blobs.  Embeddable script
 - infix math (use prefix: `(+ a b)` — avoids ambiguity with hyphenated identifiers like `my-var`)
 - strong typing in function args
 - macros
-- deterministic destruction (use explicit `close` for resources)
+- ~~deterministic destruction~~ — provided by `with` special form (see `doc/features/userdata.md`)
 
 ## types
 

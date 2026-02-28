@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -381,9 +382,16 @@ struct BblState {
 
     // Backtrace
     std::vector<Frame> callStack;
+    size_t maxCallDepth = 512;
     std::string currentFile;
     std::string scriptDir;
     bool allowOpenFilesystem = false;
+
+    // Flow control (break/continue state flag)
+    static constexpr uint8_t FlowNone = 0;
+    static constexpr uint8_t FlowBreak = 1;
+    static constexpr uint8_t FlowContinue = 2;
+    uint8_t flowSignal = FlowNone;
 
     // Print capture (for testing)
     std::string* printCapture = nullptr;
@@ -412,6 +420,7 @@ struct BblState {
     void exec(const std::string& source);
     BblValue execExpr(const std::string& source);
     void execfile(const std::string& path);
+    std::filesystem::path resolveSandboxPath(const std::string& path, const char* context);
     void defn(const std::string& name, BblCFunction fn);
     void registerStruct(const BBL::StructBuilder& builder);
     void registerType(const BBL::TypeBuilder& builder);
@@ -484,6 +493,14 @@ struct BblState {
     BblValue eval(const AstNode& node, BblScope& scope);
     BblValue evalList(const AstNode& node, BblScope& scope);
     BblValue callFn(BblFn* fn, const BblValue* args, size_t argc, int callLine);
+
+    // Method dispatch (extracted from evalList)
+    BblValue evalVectorMethod(BblVec* vec, const std::string& method,
+                              const AstNode& node, BblScope& scope);
+    BblValue evalStringMethod(BblString* strObj, const std::string& method,
+                              const BblValue& obj, const AstNode& node, BblScope& scope);
+    BblValue evalTableMethod(BblTable* tbl, const std::string& method,
+                             const AstNode& node, BblScope& scope);
 
     void printBacktrace(const std::string& what);
 };

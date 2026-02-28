@@ -236,6 +236,29 @@ Works on tables too:
 
 For non-standard iteration patterns (e.g., starting at 1, iterating to `len - 2`, custom step), use `loop` instead.
 
+### with
+
+Scoped resource cleanup.  Binds a userdata value and runs the body.  The type's destructor runs when the body exits (normally or via exception).
+
+```bbl
+(with f (fopen "data.txt" "w")
+    (f.write "hello"))
+// f is closed here — destructor runs automatically
+```
+
+`with` creates a new scope — the binding is not visible after the block.  Returns the last body expression.
+
+Nested `with` blocks clean up in LIFO order (inner first):
+
+```bbl
+(with src (fopen "in.txt" "r")
+    (with dst (fopen "out.txt" "w")
+        (dst.write (src.read))))
+// dst closed, then src closed
+```
+
+Only userdata values are accepted.  Non-userdata produces a runtime error.
+
 ---
 
 ## Functions
@@ -796,6 +819,7 @@ UserData types are registered from C++ and exposed in scripts.  They behave like
 | `true` | literal | boolean true |
 | `false` | literal | boolean false |
 | `null` | literal | null value |
+| `with` | resource | scoped resource cleanup — `(with name init body...)` |
 
 ---
 
