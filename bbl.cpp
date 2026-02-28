@@ -922,6 +922,10 @@ static void gatherFreeVars(const AstNode& node,
                     }
                     return;
                 }
+                if (op == "struct") {
+                    // struct children are declarative (type/field symbols), not variable references
+                    return;
+                }
             }
             for (auto& c : node.children) {
                 gatherFreeVars(c, bound, freeVars);
@@ -947,7 +951,8 @@ enum class SpecialForm {
     None, Eq, If, Loop, Each, And, Or, Fn, Exec, ExecFile,
     Vector, Table, Not, Add, Sub, Mul, Div, Mod,
     CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe,
-    Do, Band, Bor, Bxor, Bnot, Shl, Shr, With, Break, Continue, Try
+    Do, Band, Bor, Bxor, Bnot, Shl, Shr, With, Break, Continue, Try,
+    Struct, Sizeof
 };
 
 static SpecialForm lookupSpecialForm(const std::string& op) {
@@ -968,6 +973,7 @@ static SpecialForm lookupSpecialForm(const std::string& op) {
         {"with", SpecialForm::With},
         {"break", SpecialForm::Break}, {"continue", SpecialForm::Continue},
         {"try", SpecialForm::Try},
+        {"struct", SpecialForm::Struct}, {"sizeof", SpecialForm::Sizeof},
     };
     auto it = table.find(op);
     return it != table.end() ? it->second : SpecialForm::None;
@@ -1627,6 +1633,93 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             }
             cleanup();
             return result;
+        }
+
+        case SpecialForm::Struct: {
+            // (struct Name type1 field1 type2 field2 ...)
+            if (node.children.size() < 4 || node.children.size() % 2 != 0) {
+                throw BBL::Error{"struct: expected (struct Name type field ...)"};
+            }
+            if (node.children[1].type != NodeType::Symbol) {
+                throw BBL::Error{"struct: name must be a symbol"};
+            }
+            auto& sname = node.children[1].stringVal;
+            if (structDescs.find(sname) != structDescs.end()) {
+                throw BBL::Error{"struct " + sname + " already defined"};
+            }
+            // Primitive type lookup table
+            struct TypeInfo { CType ct; size_t size; };
+            static const std::unordered_map<std::string, TypeInfo> typeTable = {
+                {"bool",    {CType::Bool,    1}},
+                {"int8",    {CType::Int8,    1}},
+                {"uint8",   {CType::Uint8,   1}},
+                {"int16",   {CType::Int16,   2}},
+                {"uint16",  {CType::Uint16,  2}},
+                {"int32",   {CType::Int32,   4}},
+                {"uint32",  {CType::Uint32,  4}},
+                {"int64",   {CType::Int64,   8}},
+                {"uint64",  {CType::Uint64,  8}},
+                {"float32", {CType::Float32, 4}},
+                {"float64", {CType::Float64, 8}},
+            };
+            StructDesc desc;
+            desc.name = sname;
+            size_t offset = 0;
+            std::vector<std::string> fieldNames;
+            for (size_t i = 2; i < node.children.size(); i += 2) {
+                if (node.children[i].type != NodeType::Symbol) {
+                    throw BBL::Error{"struct " + sname + ": expected type symbol at position " + std::to_string(i)};
+                }
+                if (node.children[i+1].type != NodeType::Symbol) {
+                    throw BBL::Error{"struct " + sname + ": expected field name symbol at position " + std::to_string(i+1)};
+                }
+                auto& typeSym = node.children[i].stringVal;
+                auto& fieldName = node.children[i+1].stringVal;
+                // Check duplicate field names
+                for (auto& fn : fieldNames) {
+                    if (fn == fieldName) {
+                        throw BBL::Error{"struct " + sname + ": duplicate field name " + fieldName};
+                    }
+                }
+                fieldNames.push_back(fieldName);
+                auto tit = typeTable.find(typeSym);
+                if (tit != typeTable.end()) {
+                    desc.fields.push_back(FieldDesc{fieldName, offset, tit->second.size, tit->second.ct, ""});
+                    offset += tit->second.size;
+                } else {
+                    // Check for nested struct type
+                    auto sit = structDescs.find(typeSym);
+                    if (sit != structDescs.end()) {
+                        desc.fields.push_back(FieldDesc{fieldName, offset, sit->second.totalSize, CType::Struct, typeSym});
+                        offset += sit->second.totalSize;
+                    } else {
+                        throw BBL::Error{"struct " + sname + ": unknown type " + typeSym};
+                    }
+                }
+            }
+            desc.totalSize = offset;
+            structDescs[sname] = std::move(desc);
+            return BblValue::makeNull();
+        }
+
+        case SpecialForm::Sizeof: {
+            // (sizeof Name) or (sizeof expr)
+            if (node.children.size() != 2) {
+                throw BBL::Error{"sizeof: expected exactly 1 argument"};
+            }
+            // Check raw AST symbol first (before evaluating)
+            if (node.children[1].type == NodeType::Symbol) {
+                auto sit = structDescs.find(node.children[1].stringVal);
+                if (sit != structDescs.end()) {
+                    return BblValue::makeInt(static_cast<int64_t>(sit->second.totalSize));
+                }
+            }
+            // Fall through: evaluate and check if struct value
+            BblValue val = eval(node.children[1], scope);
+            if (val.type == BBL::Type::Struct) {
+                return BblValue::makeInt(static_cast<int64_t>(val.structVal->desc->totalSize));
+            }
+            throw BBL::Error{"sizeof: argument must be a struct type name or struct value"};
         }
 
         case SpecialForm::None: {
@@ -2572,6 +2665,26 @@ void BblState::registerType(const BBL::TypeBuilder& builder) {
 BblValue BblState::readField(BblStruct* s, const FieldDesc& fd) {
     const uint8_t* p = s->data.data() + fd.offset;
     switch (fd.ctype) {
+        case CType::Int8: {
+            int8_t v;
+            memcpy(&v, p, 1);
+            return BblValue::makeInt(static_cast<int64_t>(v));
+        }
+        case CType::Uint8: {
+            uint8_t v;
+            memcpy(&v, p, 1);
+            return BblValue::makeInt(static_cast<int64_t>(v));
+        }
+        case CType::Int16: {
+            int16_t v;
+            memcpy(&v, p, 2);
+            return BblValue::makeInt(static_cast<int64_t>(v));
+        }
+        case CType::Uint16: {
+            uint16_t v;
+            memcpy(&v, p, 2);
+            return BblValue::makeInt(static_cast<int64_t>(v));
+        }
         case CType::Float32: {
             float v;
             memcpy(&v, p, sizeof(float));
@@ -2587,10 +2700,20 @@ BblValue BblState::readField(BblStruct* s, const FieldDesc& fd) {
             memcpy(&v, p, sizeof(int32_t));
             return BblValue::makeInt(static_cast<int64_t>(v));
         }
+        case CType::Uint32: {
+            uint32_t v;
+            memcpy(&v, p, sizeof(uint32_t));
+            return BblValue::makeInt(static_cast<int64_t>(v));
+        }
         case CType::Int64: {
             int64_t v;
             memcpy(&v, p, sizeof(int64_t));
             return BblValue::makeInt(v);
+        }
+        case CType::Uint64: {
+            uint64_t v;
+            memcpy(&v, p, sizeof(uint64_t));
+            return BblValue::makeInt(static_cast<int64_t>(v));
         }
         case CType::Bool: {
             return BblValue::makeBool(*p != 0);
@@ -2611,6 +2734,38 @@ BblValue BblState::readField(BblStruct* s, const FieldDesc& fd) {
 void BblState::writeField(BblStruct* s, const FieldDesc& fd, const BblValue& val) {
     uint8_t* p = s->data.data() + fd.offset;
     switch (fd.ctype) {
+        case CType::Int8: {
+            if (val.type != BBL::Type::Int) {
+                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type)};
+            }
+            int8_t v = static_cast<int8_t>(val.intVal);
+            memcpy(p, &v, 1);
+            return;
+        }
+        case CType::Uint8: {
+            if (val.type != BBL::Type::Int) {
+                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type)};
+            }
+            uint8_t v = static_cast<uint8_t>(val.intVal);
+            memcpy(p, &v, 1);
+            return;
+        }
+        case CType::Int16: {
+            if (val.type != BBL::Type::Int) {
+                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type)};
+            }
+            int16_t v = static_cast<int16_t>(val.intVal);
+            memcpy(p, &v, 2);
+            return;
+        }
+        case CType::Uint16: {
+            if (val.type != BBL::Type::Int) {
+                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type)};
+            }
+            uint16_t v = static_cast<uint16_t>(val.intVal);
+            memcpy(p, &v, 2);
+            return;
+        }
         case CType::Float32: {
             if (val.type == BBL::Type::Float) {
                 float v = static_cast<float>(val.floatVal);
@@ -2642,11 +2797,27 @@ void BblState::writeField(BblStruct* s, const FieldDesc& fd, const BblValue& val
             memcpy(p, &v, sizeof(int32_t));
             return;
         }
+        case CType::Uint32: {
+            if (val.type != BBL::Type::Int) {
+                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type)};
+            }
+            uint32_t v = static_cast<uint32_t>(val.intVal);
+            memcpy(p, &v, sizeof(uint32_t));
+            return;
+        }
         case CType::Int64: {
             if (val.type != BBL::Type::Int) {
                 throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type)};
             }
             memcpy(p, &val.intVal, sizeof(int64_t));
+            return;
+        }
+        case CType::Uint64: {
+            if (val.type != BBL::Type::Int) {
+                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type)};
+            }
+            uint64_t v = static_cast<uint64_t>(val.intVal);
+            memcpy(p, &v, sizeof(uint64_t));
             return;
         }
         case CType::Bool: {
@@ -3432,9 +3603,9 @@ static int bblOs_spawnDetached(BblState* bbl) {
         if (pid2 > 0) _exit(0); // first child exits immediately
         // Grandchild: detach session and redirect streams
         setsid();
-        freopen("/dev/null", "r", stdin);
-        freopen("/dev/null", "w", stdout);
-        freopen("/dev/null", "w", stderr);
+        (void)freopen("/dev/null", "r", stdin);
+        (void)freopen("/dev/null", "w", stdout);
+        (void)freopen("/dev/null", "w", stderr);
         execl("/bin/sh", "sh", "-c", cmd, nullptr);
         _exit(127);
     }

@@ -281,7 +281,7 @@ After registration, `vertex` becomes a callable constructor in script:
 
 ### Supported Field Types
 
-`field<T>()` supports: `float`, `double`, `int32_t`, `int64_t`, `bool`.
+`field<T>()` supports: `float`, `double`, `int8_t`, `uint8_t`, `int16_t`, `uint16_t`, `int32_t`, `uint32_t`, `int64_t`, `uint64_t`, `bool`.
 
 ### Nested Structs
 

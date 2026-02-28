@@ -69,7 +69,7 @@ struct BblFn;
 
 // ---------- Struct/Vector support ----------
 
-enum class CType { Int32, Int64, Float32, Float64, Bool, Struct };
+enum class CType { Int8, Uint8, Int16, Uint16, Int32, Uint32, Int64, Uint64, Float32, Float64, Bool, Struct };
 
 struct FieldDesc {
     std::string name;
@@ -152,6 +152,24 @@ template<> inline StructBuilder& StructBuilder::field<int64_t>(const std::string
 }
 template<> inline StructBuilder& StructBuilder::field<bool>(const std::string& fname, size_t offset) {
     addField(fname, offset, 1, CType::Bool); return *this;
+}
+template<> inline StructBuilder& StructBuilder::field<int8_t>(const std::string& fname, size_t offset) {
+    addField(fname, offset, sizeof(int8_t), CType::Int8); return *this;
+}
+template<> inline StructBuilder& StructBuilder::field<uint8_t>(const std::string& fname, size_t offset) {
+    addField(fname, offset, sizeof(uint8_t), CType::Uint8); return *this;
+}
+template<> inline StructBuilder& StructBuilder::field<int16_t>(const std::string& fname, size_t offset) {
+    addField(fname, offset, sizeof(int16_t), CType::Int16); return *this;
+}
+template<> inline StructBuilder& StructBuilder::field<uint16_t>(const std::string& fname, size_t offset) {
+    addField(fname, offset, sizeof(uint16_t), CType::Uint16); return *this;
+}
+template<> inline StructBuilder& StructBuilder::field<uint32_t>(const std::string& fname, size_t offset) {
+    addField(fname, offset, sizeof(uint32_t), CType::Uint32); return *this;
+}
+template<> inline StructBuilder& StructBuilder::field<uint64_t>(const std::string& fname, size_t offset) {
+    addField(fname, offset, sizeof(uint64_t), CType::Uint64); return *this;
 }
 
 class TypeBuilder {

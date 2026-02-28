@@ -1,6 +1,6 @@
 # Basic Binary Lisp
 
-Basic Binary Lisp is a scripting language designed for serializing C++ data structures and binary blobs.  Prefix math, no infix operators.  Embeddable via a Lua-style C++ API.  Simple tracing GC.
+Basic Binary Lisp is a scripting language designed for serializing C++ data structures and binary blobs.  It has many similarities to Lua and a C++ API.
 
 ---
 

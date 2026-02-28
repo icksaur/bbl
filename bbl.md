@@ -31,7 +31,7 @@ Copied on assignment.  No heap allocation, no GC involvement.
 | `float`  | `3.14`, `-0.5`         | 64-bit IEEE double                         |
 | `bool`   | `true`, `false`        | Keywords                                   |
 | `null`   | `null`                 | Keyword                                    |
-| `struct` | `(vertex 1.0 2.0 3.0)` | C++-registered, POD binary layout          |
+| `struct` | `(vertex 1.0 2.0 3.0)` | Script-defined or C++-registered, POD binary layout |
 
 ### GC-Managed Types
 
@@ -524,11 +524,31 @@ printf ')\n' >> scene.bbl
 
 ## Structs
 
-Value types with C++-compatible binary layout, registered exclusively from C++.
-POD only -- fields must be numeric types, `bool`, or other registered structs.
-No strings, containers, functions, or binaries in fields.
+Value types with fixed binary layout.  POD only -- fields must be numeric types,
+`bool`, or other registered structs.  No strings, containers, functions, or
+binaries in fields.
 
-### Usage in Script
+### Script-Defined Structs
+
+```bbl
+(struct Pixel uint8 r uint8 g uint8 b uint8 a)
+(= p (Pixel 255 128 0 200))
+(print p.r)                    // 255
+(= p.r 0)                     // field write via dot
+```
+
+Field types: `bool`, `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`,
+`int64`, `uint64`, `float32`, `float64`.  Other struct names are also valid
+(nested structs).
+
+Layout is packed -- fields are placed sequentially with no padding.  `sizeof`
+returns the total byte size:
+
+```bbl
+(print (sizeof Pixel))         // 4
+```
+
+### C++-Registered Structs
 
 ```bbl
 // vertex registered from C++ via StructBuilder
@@ -540,8 +560,9 @@ No strings, containers, functions, or binaries in fields.
 ### Nested Structs
 
 ```bbl
-// triangle has fields a, b, c of type vertex
-(= tri (triangle (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
+(struct Vertex float32 x float32 y float32 z)
+(struct Triangle Vertex a Vertex b Vertex c)
+(= tri (Triangle (Vertex 0 1 0) (Vertex 1 0 0) (Vertex -1 0 0)))
 (print tri.a.x)                // chained reads allowed
 ```
 
@@ -550,7 +571,8 @@ Chained writes are NOT allowed -- use an intermediate variable.
 ### Properties
 
 - Copy semantics (assignment copies bytes, no GC)
-- C++-identical binary layout (sizeof, offsetof, alignment)
+- Script-defined structs use packed layout (no alignment padding)
+- C++-registered structs use C layout (sizeof, offsetof, alignment)
 - No member functions (use free functions)
 - Type descriptors are global on `BblState`, never freed during execution
 
@@ -924,6 +946,8 @@ CLI binary).
 | `try`       | error handling | Try block with catch                           |
 | `catch`     | error handling | Error handler (inside try)                     |
 | `with`      | resource mgmt  | Scoped userdata with deterministic destructor  |
+| `struct`    | data           | Define a struct type                           |
+| `sizeof`    | data           | Return byte size of struct type or instance    |
 | `exec`      | evaluation     | Evaluate string as code                        |
 | `execfile`  | evaluation     | Execute file                                   |
 | `and`       | logic          | Short-circuit logical AND                      |

@@ -3637,6 +3637,201 @@ TEST(test_os_spawn_detached) {
     ASSERT_TRUE(bbl.getInt("pid") > 0);
 }
 
+// ========== Script-Defined Structs ==========
+
+TEST(test_script_struct_basic) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(struct Pixel uint8 r uint8 g uint8 b uint8 a)");
+    bbl.exec("(= p (Pixel 255 128 0 200))");
+    ASSERT_EQ(bbl.getType("p"), BBL::Type::Struct);
+    bbl.exec("(= r p.r) (= g p.g) (= b p.b) (= a p.a)");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)255);
+    ASSERT_EQ(bbl.getInt("g"), (int64_t)128);
+    ASSERT_EQ(bbl.getInt("b"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("a"), (int64_t)200);
+}
+
+TEST(test_script_struct_all_types) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(
+        "(struct AllTypes"
+        " bool b"
+        " int8 i8"
+        " uint8 u8"
+        " int16 i16"
+        " uint16 u16"
+        " int32 i32"
+        " uint32 u32"
+        " int64 i64"
+        " uint64 u64"
+        " float32 f32"
+        " float64 f64)"
+    );
+    bbl.exec(
+        "(= s (AllTypes true -1 200 -300 60000 -100000 3000000000 -9999999 12345678 1.5 2.5))"
+    );
+    bbl.exec("(= vb s.b)");
+    ASSERT_EQ(bbl.get("vb").boolVal, true);
+    bbl.exec("(= vi8 s.i8)");
+    ASSERT_EQ(bbl.getInt("vi8"), (int64_t)-1);
+    bbl.exec("(= vu8 s.u8)");
+    ASSERT_EQ(bbl.getInt("vu8"), (int64_t)200);
+    bbl.exec("(= vi16 s.i16)");
+    ASSERT_EQ(bbl.getInt("vi16"), (int64_t)-300);
+    bbl.exec("(= vu16 s.u16)");
+    ASSERT_EQ(bbl.getInt("vu16"), (int64_t)60000);
+    bbl.exec("(= vi32 s.i32)");
+    ASSERT_EQ(bbl.getInt("vi32"), (int64_t)-100000);
+    bbl.exec("(= vu32 s.u32)");
+    ASSERT_EQ(bbl.getInt("vu32"), (int64_t)3000000000);
+    bbl.exec("(= vi64 s.i64)");
+    ASSERT_EQ(bbl.getInt("vi64"), (int64_t)-9999999);
+    bbl.exec("(= vu64 s.u64)");
+    ASSERT_EQ(bbl.getInt("vu64"), (int64_t)12345678);
+    bbl.exec("(= vf32 s.f32)");
+    ASSERT_NEAR(bbl.getFloat("vf32"), 1.5, 0.001);
+    bbl.exec("(= vf64 s.f64)");
+    ASSERT_NEAR(bbl.getFloat("vf64"), 2.5, 0.001);
+}
+
+TEST(test_script_struct_write) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(struct Point int32 x int32 y)");
+    bbl.exec("(= p (Point 10 20)) (= p.x 99) (= rx p.x) (= ry p.y)");
+    ASSERT_EQ(bbl.getInt("rx"), (int64_t)99);
+    ASSERT_EQ(bbl.getInt("ry"), (int64_t)20);
+}
+
+TEST(test_script_struct_nested) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(struct Vec2 float32 x float32 y)");
+    bbl.exec("(struct Rect Vec2 min Vec2 max)");
+    bbl.exec("(= r (Rect (Vec2 1 2) (Vec2 3 4)))");
+    bbl.exec("(= mx r.min.x) (= my r.min.y) (= xx r.max.x) (= xy r.max.y)");
+    ASSERT_NEAR(bbl.getFloat("mx"), 1.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("my"), 2.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("xx"), 3.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("xy"), 4.0, 0.001);
+}
+
+TEST(test_script_struct_vector) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(struct V2 float32 x float32 y)");
+    bbl.exec("(= v (vector V2 (V2 1 2) (V2 3 4) (V2 5 6)))");
+    bbl.exec("(= n (v:length))");
+    ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
+    bbl.exec("(= x0 (v:at 0).x) (= y2 (v:at 2).y)");
+    ASSERT_NEAR(bbl.getFloat("x0"), 1.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("y2"), 6.0, 0.001);
+}
+
+TEST(test_script_struct_sizeof) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(struct Pixel uint8 r uint8 g uint8 b uint8 a)");
+    bbl.exec("(= sz1 (sizeof Pixel))");
+    ASSERT_EQ(bbl.getInt("sz1"), (int64_t)4);
+    bbl.exec("(= p (Pixel 1 2 3 4)) (= sz2 (sizeof p))");
+    ASSERT_EQ(bbl.getInt("sz2"), (int64_t)4);
+    // Larger struct
+    bbl.exec("(struct Big float64 a float64 b int32 c)");
+    bbl.exec("(= sz3 (sizeof Big))");
+    ASSERT_EQ(bbl.getInt("sz3"), (int64_t)20);
+}
+
+TEST(test_script_struct_packed_layout) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    // float32(4) + uint8(1) + float64(8) = 13 bytes, no padding
+    bbl.exec("(struct Packed float32 a uint8 b float64 c)");
+    bbl.exec("(= sz (sizeof Packed))");
+    ASSERT_EQ(bbl.getInt("sz"), (int64_t)13);
+    bbl.exec("(= p (Packed 1.0 42 3.14)) (= pa p.a) (= pb p.b) (= pc p.c)");
+    ASSERT_NEAR(bbl.getFloat("pa"), 1.0, 0.001);
+    ASSERT_EQ(bbl.getInt("pb"), (int64_t)42);
+    ASSERT_NEAR(bbl.getFloat("pc"), 3.14, 0.001);
+}
+
+TEST(test_script_struct_overflow) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    // 256 in uint8 wraps to 0, 300 wraps to 44
+    bbl.exec("(struct Wrap uint8 v)");
+    bbl.exec("(= w (Wrap 256)) (= v1 w.v)");
+    ASSERT_EQ(bbl.getInt("v1"), (int64_t)0);
+    bbl.exec("(= w2 (Wrap 300)) (= v2 w2.v)");
+    ASSERT_EQ(bbl.getInt("v2"), (int64_t)44);
+}
+
+TEST(test_script_struct_errors) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    // Missing field (odd args)
+    ASSERT_THROW(bbl.exec("(struct Bad uint8)"));
+    // Unknown type
+    ASSERT_THROW(bbl.exec("(struct Bad2 foobar x)"));
+    // Duplicate field name
+    ASSERT_THROW(bbl.exec("(struct Bad3 uint8 x uint8 x)"));
+    // Redefinition
+    bbl.exec("(struct Good uint8 a)");
+    ASSERT_THROW(bbl.exec("(struct Good uint8 b)"));
+    // Wrong arg count on construct
+    ASSERT_THROW(bbl.exec("(Good 1 2)"));
+    // Nested struct: undefined type
+    ASSERT_THROW(bbl.exec("(struct Bad4 Nonexistent a)"));
+    // sizeof non-struct
+    ASSERT_THROW(bbl.exec("(sizeof 42)"));
+    // sizeof arity
+    ASSERT_THROW(bbl.exec("(sizeof)"));
+}
+
+TEST(test_structbuilder_new_types) {
+    // Test C++ StructBuilder with new integer type specializations
+    struct TestPacked {
+        uint8_t a;
+        int8_t b;
+        uint16_t c;
+        int16_t d;
+        uint32_t e;
+        uint64_t f;
+    };
+    BblState bbl;
+    BBL::StructBuilder builder("TestPacked", sizeof(TestPacked));
+    builder.field<uint8_t>("a", offsetof(TestPacked, a));
+    builder.field<int8_t>("b", offsetof(TestPacked, b));
+    builder.field<uint16_t>("c", offsetof(TestPacked, c));
+    builder.field<int16_t>("d", offsetof(TestPacked, d));
+    builder.field<uint32_t>("e", offsetof(TestPacked, e));
+    builder.field<uint64_t>("f", offsetof(TestPacked, f));
+    bbl.registerStruct(builder);
+    bbl.exec("(= s (TestPacked 255 -1 65535 -1000 4000000000 999))");
+    bbl.exec("(= va s.a) (= vb s.b) (= vc s.c) (= vd s.d) (= ve s.e) (= vf s.f)");
+    ASSERT_EQ(bbl.getInt("va"), (int64_t)255);
+    ASSERT_EQ(bbl.getInt("vb"), (int64_t)-1);
+    ASSERT_EQ(bbl.getInt("vc"), (int64_t)65535);
+    ASSERT_EQ(bbl.getInt("vd"), (int64_t)-1000);
+    ASSERT_EQ(bbl.getInt("ve"), (int64_t)4000000000);
+    ASSERT_EQ(bbl.getInt("vf"), (int64_t)999);
+}
+
+TEST(test_script_struct_closure) {
+    // Verify gatherFreeVars doesn't capture struct's declarative children
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(
+        "(struct Pt float32 x float32 y)"
+        "(= make-pt (fn (a b) (Pt a b)))"
+        "(= p (make-pt 5 10))"
+        "(= rx p.x)"
+    );
+    ASSERT_NEAR(bbl.getFloat("rx"), 5.0, 0.001);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -4220,6 +4415,20 @@ int main() {
     RUN(test_os_spawn);
     RUN(test_os_spawn_readline);
     RUN(test_os_spawn_detached);
+
+    // script-defined structs
+    std::cout << "--- script-defined structs ---" << std::endl;
+    RUN(test_script_struct_basic);
+    RUN(test_script_struct_all_types);
+    RUN(test_script_struct_write);
+    RUN(test_script_struct_nested);
+    RUN(test_script_struct_vector);
+    RUN(test_script_struct_sizeof);
+    RUN(test_script_struct_packed_layout);
+    RUN(test_script_struct_overflow);
+    RUN(test_script_struct_errors);
+    RUN(test_structbuilder_new_types);
+    RUN(test_script_struct_closure);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

@@ -5,3 +5,5 @@ build_rel/
 plan.md
 spec.md
 backlog.md
+pkg/
+*.zst
