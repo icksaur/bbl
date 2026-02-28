@@ -68,11 +68,9 @@ makepkg -si
 
 ## full documentation
 
-[bbl language](bbl.md)
-
-[C++ API](api.md)
-
-[implementation notes](implementation.md)
+- [bbl language](bbl.md)
+- [C++ API](api.md)
+- [implementation notes](implementation.md)
 
 ## data types
 

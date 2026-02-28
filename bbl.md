@@ -1,8 +1,7 @@
 # BBL Language Reference
 
 BBL (Basic Binary Lisp) is a scripting language for serializing C++ data structures
-and binary blobs.  Prefix s-expression syntax, no infix operators.  Embeddable via a
-Lua-style C++ API.  Simple tracing GC.
+and binary blobs.  Prefix s-expression syntax.
 
 ---
 
