@@ -2,12 +2,9 @@
 
 ## Agent Guide
 - Read `plan.md` for current work
-- Read `doc/spec.md` for language specification and architecture
-- Read `doc/memory-model.md` for scope and lifetime design
-- Read `doc/structs.md` for struct design (C++-only, POD)
-- Read `code-quality.md` before making changes
-- Feature designs go in `doc/features/`
-- Deferred work and bugs go in `doc/backlog.md`
+- Read `bbl.md` for complete language reference
+- Read `api.md` for C++ embedding API
+- Read `implementation.md` for internals, performance, and code style
 - Build: `cmake -B build && cmake --build build`
 - Test: `./build/bbl_tests`
 - Do not start backlog items without asking
@@ -64,7 +61,7 @@ GC-managed types (shared on assignment):
 ```bbl
 // vertex registered from C++ via StructBuilder
 (= tri (vector vertex (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))
-(print (tri.at 0).x)
+(print (tri:at 0).x)
 ```
 
 ```bbl
@@ -101,7 +98,7 @@ Heterogeneous key-value container.  String and integer keys.
 (= player.hp 80)
 
 (= items (table 1 "sword" 2 "shield" 3 "potion"))
-(print (items.at 1))
+(print (items:at 1))
 ```
 
 ## closures

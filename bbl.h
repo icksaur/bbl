@@ -249,7 +249,7 @@ struct BblFn {
 enum class TokenType {
     LParen, RParen,
     Int, Float, String, Symbol,
-    Bool, Null, Dot,
+    Bool, Null, Dot, Colon,
     Binary,
     Eof,
 };
@@ -265,6 +265,7 @@ inline std::ostream& operator<<(std::ostream& os, TokenType t) {
         case TokenType::Bool:    return os << "Bool";
         case TokenType::Null:    return os << "Null";
         case TokenType::Dot:     return os << "Dot";
+        case TokenType::Colon:   return os << "Colon";
         case TokenType::Binary:  return os << "Binary";
         case TokenType::Eof:     return os << "Eof";
     }
@@ -313,6 +314,7 @@ enum class NodeType {
     Symbol,
     List,
     DotAccess,
+    ColonAccess,
 };
 
 inline std::ostream& operator<<(std::ostream& os, NodeType t) {
@@ -326,6 +328,7 @@ inline std::ostream& operator<<(std::ostream& os, NodeType t) {
         case NodeType::Symbol:        return os << "Symbol";
         case NodeType::List:          return os << "List";
         case NodeType::DotAccess:     return os << "DotAccess";
+        case NodeType::ColonAccess:   return os << "ColonAccess";
     }
     return os << "Unknown";
 }

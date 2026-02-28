@@ -371,6 +371,11 @@ Token BblLexer::nextToken() {
         return {TokenType::Dot, 0, 0, false, "", {}, line};
     }
 
+    if (c == ':') {
+        advance();
+        return {TokenType::Colon, 0, 0, false, "", {}, line};
+    }
+
     if (isSymbolStart(c)) {
         return readSymbolOrKeyword();
     }
@@ -452,6 +457,17 @@ static AstNode parseExpr(BblLexer& lexer, Token& tok) {
             }
             dot.children.push_back(std::move(lhs));
             lhs = std::move(dot);
+        } else if (next.type == TokenType::Colon) {
+            Token field = lexer.nextToken();
+            if (field.type != TokenType::Symbol) {
+                throw BBL::Error{"parse error: expected method name after ':' at line " + std::to_string(field.line)};
+            }
+            AstNode colon;
+            colon.type = NodeType::ColonAccess;
+            colon.line = next.line;
+            colon.stringVal = std::move(field.stringVal);
+            colon.children.push_back(std::move(lhs));
+            lhs = std::move(colon);
         } else {
             // Put the token back by storing it for the caller
             // We need a way to "unread" — restructure: we consume the dot chain
@@ -763,8 +779,9 @@ BblValue BblState::eval(const AstNode& node, BblScope& scope) {
         case NodeType::List:
             return evalList(node, scope);
         case NodeType::DotAccess: {
-            // DotAccess: children[0] = left, stringVal = field/method name
+            // DotAccess: children[0] = left, stringVal = field name
             // stringVal empty → integer-dot (index in intVal)
+            // Dot is data-only: struct fields, table keys, integer indices
             BblValue left = eval(node.children[0], scope);
             auto& field = node.stringVal;
             if (field.empty()) {
@@ -790,41 +807,15 @@ BblValue BblState::eval(const AstNode& node, BblScope& scope) {
                 }
                 return readField(left.structVal, *fd);
             }
-            if (left.type == BBL::Type::String) {
-                BblValue r = stringNoArgMethod(*this, left.stringVal->data, field);
-                if (r.type != BBL::Type::Null) return r;
-                throw BBL::Error{"string has no field " + field};
-            }
-            if (left.type == BBL::Type::Binary) {
-                if (field == "length") {
-                    return BblValue::makeInt(static_cast<int64_t>(left.binaryVal->length()));
-                }
-                throw BBL::Error{"binary has no method " + field};
-            }
-            if (left.type == BBL::Type::Vector) {
-                throw BBL::Error{"vector methods must be called, not accessed as fields"};
-            }
             if (left.type == BBL::Type::Table) {
-                // Method-first: check fixed method names
-                static const std::vector<std::string> tableMethods = {
-                    "get", "set", "delete", "has", "keys", "length", "push", "pop", "at"
-                };
-                bool isMethod = false;
-                for (auto& m : tableMethods) {
-                    if (field == m) { isMethod = true; break; }
-                }
-                if (isMethod) {
-                    throw BBL::Error{"table methods must be called, not accessed as fields"};
-                }
-                // String-key fallback
+                // Dot on table is always key lookup — no method-first resolution
                 BblValue key = BblValue::makeString(intern(field));
                 return left.tableVal->get(key);
             }
-            if (left.type == BBL::Type::UserData) {
-                throw BBL::Error{"userdata methods must be called, not accessed as fields"};
-            }
-            throw BBL::Error{typeName(left.type) + " has no fields or methods"};
+            throw BBL::Error{typeName(left.type) + " has no fields"};
         }
+        case NodeType::ColonAccess:
+            throw BBL::Error{"colon method access must be called: (" + node.stringVal + " ...)"};
     }
     throw BBL::Error{"internal: unknown node type"};
 }
@@ -925,6 +916,11 @@ static void gatherFreeVars(const AstNode& node,
             }
             break;
         case NodeType::DotAccess:
+            for (auto& c : node.children) {
+                gatherFreeVars(c, bound, freeVars);
+            }
+            break;
+        case NodeType::ColonAccess:
             for (auto& c : node.children) {
                 gatherFreeVars(c, bound, freeVars);
             }
@@ -1085,9 +1081,9 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 throw BBL::Error{"type mismatch: condition must be bool, got " + typeName(cond.type)};
             }
             if (cond.boolVal) {
-                eval(node.children[2], scope);
+                return eval(node.children[2], scope);
             } else if (node.children.size() >= 4) {
-                eval(node.children[3], scope);
+                return eval(node.children[3], scope);
             }
             return BblValue::makeNull();
         }
@@ -1636,8 +1632,8 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
         } // end switch(sf)
     }
 
-    // DotAccess call: (obj.method args...)
-    if (head.type == NodeType::DotAccess && head.children.size() >= 1) {
+    // ColonAccess call: (obj:method args...)
+    if (head.type == NodeType::ColonAccess && head.children.size() >= 1) {
         BblValue obj = eval(head.children[0], scope);
         auto& method = head.stringVal;
 
@@ -1657,7 +1653,43 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
         }
 
         if (obj.type == BBL::Type::Table) {
-            return evalTableMethod(obj.tableVal, method, node, scope);
+            // Check built-in table methods first
+            static const std::vector<std::string> builtinMethods = {
+                "get", "set", "delete", "has", "keys", "length", "push", "pop", "at"
+            };
+            bool isBuiltin = false;
+            for (auto& m : builtinMethods) {
+                if (method == m) { isBuiltin = true; break; }
+            }
+            if (isBuiltin) {
+                return evalTableMethod(obj.tableVal, method, node, scope);
+            }
+            // Lua-style self-passing sugar: look up method as key, call with table as first arg
+            BblValue funcVal = obj.tableVal->get(BblValue::makeString(intern(method)));
+            if (funcVal.type != BBL::Type::Fn) {
+                throw BBL::Error{"table has no method " + method + " and key '" + method + "' is not a function"};
+            }
+            // Evaluate call arguments
+            std::vector<BblValue> selfArgs;
+            selfArgs.push_back(obj);  // self
+            for (size_t i = 1; i < node.children.size(); i++) {
+                selfArgs.push_back(eval(node.children[i], scope));
+            }
+            if (funcVal.isCFn) {
+                callArgs = std::move(selfArgs);
+                hasReturn = false;
+                returnValue = BblValue::makeNull();
+                callStack.push_back(Frame{currentFile, node.line, method});
+                int rc = funcVal.cfnVal(this);
+                callStack.pop_back();
+                BblValue ret = hasReturn ? returnValue : BblValue::makeNull();
+                callArgs.clear();
+                hasReturn = false;
+                returnValue = BblValue::makeNull();
+                (void)rc;
+                return ret;
+            }
+            return callFn(funcVal.fnVal, selfArgs.data(), selfArgs.size(), node.line);
         }
 
         if (obj.type == BBL::Type::UserData) {
@@ -1675,7 +1707,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             callArgs = std::move(args);
             hasReturn = false;
             returnValue = BblValue::makeNull();
-            callStack.push_back(Frame{currentFile, node.line, ud->desc->name + "." + method});
+            callStack.push_back(Frame{currentFile, node.line, ud->desc->name + ":" + method});
             int rc = mit->second(this);
             callStack.pop_back();
             BblValue ret = hasReturn ? returnValue : BblValue::makeNull();
