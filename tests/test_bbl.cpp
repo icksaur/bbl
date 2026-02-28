@@ -3459,6 +3459,184 @@ TEST(test_std_stream_close_noop) {
     passed++;
 }
 
+// ========== OS Library Tests ==========
+
+TEST(test_os_getenv) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= h (getenv \"HOME\"))");
+    ASSERT_EQ(bbl.get("h").type, BBL::Type::String);
+    bbl.exec("(= n (getenv \"BBL_NONEXISTENT_VAR_XYZ\"))");
+    ASSERT_EQ(bbl.get("n").type, BBL::Type::Null);
+}
+
+TEST(test_os_setenv_getenv) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(setenv \"BBL_TEST_VAR\" \"hello\")");
+    bbl.exec("(= v (getenv \"BBL_TEST_VAR\"))");
+    ASSERT_EQ(std::string(bbl.getString("v")), std::string("hello"));
+    bbl.exec("(unsetenv \"BBL_TEST_VAR\")");
+    bbl.exec("(= v2 (getenv \"BBL_TEST_VAR\"))");
+    ASSERT_EQ(bbl.get("v2").type, BBL::Type::Null);
+}
+
+TEST(test_os_time) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= t (time))");
+    ASSERT_TRUE(bbl.getInt("t") > 1700000000);
+}
+
+TEST(test_os_clock) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= c (clock))");
+    ASSERT_TRUE(bbl.getFloat("c") >= 0.0);
+}
+
+TEST(test_os_sleep) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(sleep 0.001)");
+    passed++;
+}
+
+TEST(test_os_execute) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= r (execute \"true\"))");
+    ASSERT_EQ(bbl.getInt("r"), (int64_t)0);
+}
+
+TEST(test_os_getcwd) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= d (getcwd))");
+    ASSERT_EQ(bbl.get("d").type, BBL::Type::String);
+    ASSERT_TRUE(std::string(bbl.getString("d")).size() > 0);
+}
+
+TEST(test_os_getpid) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= p (getpid))");
+    ASSERT_TRUE(bbl.getInt("p") > 0);
+}
+
+TEST(test_os_chdir_getcwd) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= orig (getcwd))");
+    bbl.exec("(chdir \"/tmp\")");
+    bbl.exec("(= now (getcwd))");
+    std::string now = bbl.getString("now");
+    ASSERT_TRUE(now.find("/tmp") != std::string::npos);
+    // chdir back
+    std::string orig = bbl.getString("orig");
+    bbl.exec("(chdir \"" + orig + "\")");
+}
+
+TEST(test_os_mkdir_remove) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= ok (mkdir \"/tmp/bbl_test_mkdir_12345\"))");
+    ASSERT_EQ(bbl.getBool("ok"), true);
+    bbl.exec("(= ok2 (remove \"/tmp/bbl_test_mkdir_12345\"))");
+    ASSERT_EQ(bbl.getBool("ok2"), true);
+}
+
+TEST(test_os_rename) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= src (tmpname))");
+    std::string src = bbl.getString("src");
+    std::string dst = src + ".renamed";
+    bbl.exec("(= r (rename \"" + src + "\" \"" + dst + "\"))");
+    ASSERT_EQ(bbl.getBool("r"), true);
+    ::remove(dst.c_str());
+}
+
+TEST(test_os_tmpname) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= t (tmpname))");
+    ASSERT_EQ(bbl.get("t").type, BBL::Type::String);
+    std::string path = bbl.getString("t");
+    ASSERT_TRUE(path.size() > 0);
+    ::remove(path.c_str());
+}
+
+TEST(test_os_date) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= d (date))");
+    std::string d = bbl.getString("d");
+    // Check that the date contains the current year
+    time_t now = time(nullptr);
+    struct tm* tm = localtime(&now);
+    std::string year = std::to_string(1900 + tm->tm_year);
+    ASSERT_TRUE(d.find(year) != std::string::npos);
+}
+
+TEST(test_os_difftime) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= t (time)) (= d (difftime t t))");
+    ASSERT_NEAR(bbl.getFloat("d"), 0.0, 0.001);
+}
+
+TEST(test_os_stat) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= s (stat \"/tmp\"))");
+    ASSERT_EQ(bbl.get("s").type, BBL::Type::Table);
+    bbl.exec("(= isdir s.is-dir)");
+    ASSERT_EQ(bbl.getBool("isdir"), true);
+    bbl.exec("(= n (stat \"/nonexistent_xyz_bbl_test\"))");
+    ASSERT_EQ(bbl.get("n").type, BBL::Type::Null);
+}
+
+TEST(test_os_glob) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= g (glob \"/tmp/*\"))");
+    ASSERT_EQ(bbl.get("g").type, BBL::Type::Table);
+    bbl.exec("(= t (typeof (glob \"/tmp/*\")))");
+    ASSERT_EQ(std::string(bbl.getString("t")), std::string("table"));
+}
+
+TEST(test_os_spawn) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= p (spawn \"echo hello\")) (= out (p:read)) (= code (p:wait))");
+    std::string out = bbl.getString("out");
+    ASSERT_TRUE(out.find("hello") != std::string::npos);
+    ASSERT_EQ(bbl.getInt("code"), (int64_t)0);
+    // read after wait should return empty string, not crash
+    bbl.exec("(= out2 (p:read))");
+    ASSERT_EQ(std::string(bbl.getString("out2")), std::string(""));
+    // double wait should return -1
+    bbl.exec("(= code2 (p:wait))");
+    ASSERT_EQ(bbl.getInt("code2"), (int64_t)-1);
+}
+
+TEST(test_os_spawn_readline) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= p (spawn \"printf 'a\\nb\\n'\")) (= a (p:read-line)) (= b (p:read-line)) (= c (p:read-line)) (p:wait)");
+    ASSERT_EQ(std::string(bbl.getString("a")), std::string("a"));
+    ASSERT_EQ(std::string(bbl.getString("b")), std::string("b"));
+    ASSERT_EQ(bbl.get("c").type, BBL::Type::Null);
+}
+
+TEST(test_os_spawn_detached) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec("(= pid (spawn-detached \"sleep 0\"))");
+    ASSERT_TRUE(bbl.getInt("pid") > 0);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -4020,6 +4198,28 @@ int main() {
     std::cout << "--- standard streams ---" << std::endl;
     RUN(test_std_streams_exist);
     RUN(test_std_stream_close_noop);
+
+    // os library
+    std::cout << "--- os library ---" << std::endl;
+    RUN(test_os_getenv);
+    RUN(test_os_setenv_getenv);
+    RUN(test_os_time);
+    RUN(test_os_clock);
+    RUN(test_os_sleep);
+    RUN(test_os_execute);
+    RUN(test_os_getcwd);
+    RUN(test_os_getpid);
+    RUN(test_os_chdir_getcwd);
+    RUN(test_os_mkdir_remove);
+    RUN(test_os_rename);
+    RUN(test_os_tmpname);
+    RUN(test_os_date);
+    RUN(test_os_difftime);
+    RUN(test_os_stat);
+    RUN(test_os_glob);
+    RUN(test_os_spawn);
+    RUN(test_os_spawn_readline);
+    RUN(test_os_spawn_detached);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

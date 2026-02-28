@@ -523,7 +523,13 @@ BBL::addStdLib(bbl);    // registers all modules below
 BBL::addPrint(bbl);     // print function
 BBL::addMath(bbl);      // math functions + constants
 BBL::addFileIo(bbl);    // fopen, filebytes, File type, stdin/stdout/stderr globals
+BBL::addOs(bbl);        // OS functions: getenv, time, spawn, stat, glob, etc.
 ```
+
+`addOs` registers the Process userdata type (methods: `read`, `read-line`,
+`wait`) and all os functions.  It is **not safe** for untrusted code — it
+provides process execution, filesystem mutation, environment mutation, and
+`exit`.  Omit it for sandboxed environments.
 
 ### Print Capture
 

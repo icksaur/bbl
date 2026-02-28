@@ -9,6 +9,13 @@
 #include <cinttypes>
 #include <cstdio>
 #include <filesystem>
+#include <ctime>
+#include <cstdlib>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <glob.h>
 
 // ---------- BblValue ----------
 
@@ -2490,6 +2497,11 @@ void BblState::pushNull() {
     hasReturn = true;
 }
 
+void BblState::pushTable(BblTable* tbl) {
+    returnValue = BblValue::makeTable(tbl);
+    hasReturn = true;
+}
+
 void BblState::pushBinary(const uint8_t* ptr, size_t size) {
     std::vector<uint8_t> data(ptr, ptr + size);
     returnValue = BblValue::makeBinary(allocBinary(std::move(data)));
@@ -3211,8 +3223,263 @@ void BBL::addMath(BblState& bbl) {
     bbl.setFloat("e", 2.71828182845904523536);
 }
 
+// ---------- addOs ----------
+
+struct BblProcess { FILE* pipe; bool waited; };
+
+static void processDestructor(void* data) {
+    auto* proc = static_cast<BblProcess*>(data);
+    if (!proc->waited && proc->pipe) pclose(proc->pipe);
+    delete proc;
+}
+
+static int bblOs_getenv(BblState* bbl) {
+    const char* name = bbl->getStringArg(0);
+    const char* val = getenv(name);
+    if (val) bbl->pushString(val); else bbl->pushNull();
+    return 0;
+}
+
+static int bblOs_setenv(BblState* bbl) {
+    setenv(bbl->getStringArg(0), bbl->getStringArg(1), 1);
+    bbl->pushNull();
+    return 0;
+}
+
+static int bblOs_unsetenv(BblState* bbl) {
+    unsetenv(bbl->getStringArg(0));
+    bbl->pushNull();
+    return 0;
+}
+
+static int bblOs_clock(BblState* bbl) {
+    bbl->pushFloat((double)clock() / CLOCKS_PER_SEC);
+    return 0;
+}
+
+static int bblOs_time(BblState* bbl) {
+    bbl->pushInt((int64_t)::time(nullptr));
+    return 0;
+}
+
+static int bblOs_sleep(BblState* bbl) {
+    double secs = bbl->getFloatArg(0);
+    if (secs < 0) secs = 0;
+    struct timespec ts;
+    ts.tv_sec = (time_t)secs;
+    ts.tv_nsec = (long)((secs - ts.tv_sec) * 1e9);
+    nanosleep(&ts, nullptr);
+    bbl->pushNull();
+    return 0;
+}
+
+static int bblOs_exit(BblState* bbl) {
+    int code = bbl->argCount() > 0 ? (int)bbl->getIntArg(0) : 0;
+    std::exit(code);
+    return 0;
+}
+
+static int bblOs_getpid(BblState* bbl) {
+    bbl->pushInt((int64_t)getpid());
+    return 0;
+}
+
+static int bblOs_getcwd(BblState* bbl) {
+    char buf[4096];
+    if (getcwd(buf, sizeof(buf))) bbl->pushString(buf);
+    else bbl->pushNull();
+    return 0;
+}
+
+static int bblOs_chdir(BblState* bbl) {
+    bbl->pushBool(chdir(bbl->getStringArg(0)) == 0);
+    return 0;
+}
+
+static int bblOs_mkdir(BblState* bbl) {
+    bbl->pushBool(::mkdir(bbl->getStringArg(0), 0755) == 0);
+    return 0;
+}
+
+static int bblOs_remove(BblState* bbl) {
+    bbl->pushBool(::remove(bbl->getStringArg(0)) == 0);
+    return 0;
+}
+
+static int bblOs_rename(BblState* bbl) {
+    bbl->pushBool(::rename(bbl->getStringArg(0), bbl->getStringArg(1)) == 0);
+    return 0;
+}
+
+static int bblOs_tmpname(BblState* bbl) {
+    char tmpl[] = "/tmp/bbl_XXXXXX";
+    int fd = mkstemp(tmpl);
+    if (fd >= 0) { close(fd); bbl->pushString(tmpl); }
+    else bbl->pushNull();
+    return 0;
+}
+
+static int bblOs_execute(BblState* bbl) {
+    int raw = system(bbl->getStringArg(0));
+    if (raw == -1) { bbl->pushInt(-1); return 0; }
+    int code = WIFEXITED(raw) ? WEXITSTATUS(raw) : -1;
+    bbl->pushInt(code);
+    return 0;
+}
+
+static int bblOs_date(BblState* bbl) {
+    const char* fmt = bbl->hasArg(0) ? bbl->getStringArg(0) : "%Y-%m-%d %H:%M:%S";
+    time_t t = bbl->hasArg(1) ? (time_t)bbl->getIntArg(1) : ::time(nullptr);
+    struct tm* tm = localtime(&t);
+    if (!tm) { bbl->pushNull(); return 0; }
+    char buf[256];
+    strftime(buf, sizeof(buf), fmt, tm);
+    bbl->pushString(buf);
+    return 0;
+}
+
+static int bblOs_difftime(BblState* bbl) {
+    bbl->pushFloat(difftime((time_t)bbl->getIntArg(0), (time_t)bbl->getIntArg(1)));
+    return 0;
+}
+
+static int bblOs_stat(BblState* bbl) {
+    struct stat st;
+    if (::stat(bbl->getStringArg(0), &st) != 0) { bbl->pushNull(); return 0; }
+    BblTable* tbl = bbl->allocTable();
+    tbl->set(BblValue::makeString(bbl->intern("size")), BblValue::makeInt((int64_t)st.st_size));
+    tbl->set(BblValue::makeString(bbl->intern("mtime")), BblValue::makeInt((int64_t)st.st_mtime));
+    tbl->set(BblValue::makeString(bbl->intern("is-dir")), BblValue::makeBool(S_ISDIR(st.st_mode)));
+    tbl->set(BblValue::makeString(bbl->intern("is-file")), BblValue::makeBool(S_ISREG(st.st_mode)));
+    bbl->pushTable(tbl);
+    return 0;
+}
+
+static int bblOs_glob(BblState* bbl) {
+    glob_t g;
+    int ret = ::glob(bbl->getStringArg(0), GLOB_NOSORT, nullptr, &g);
+    BblTable* tbl = bbl->allocTable();
+    if (ret == 0) {
+        for (size_t i = 0; i < g.gl_pathc; i++) {
+            tbl->set(BblValue::makeInt((int64_t)(i + 1)),
+                     BblValue::makeString(bbl->intern(g.gl_pathv[i])));
+        }
+    }
+    if (ret != GLOB_NOMATCH) globfree(&g);
+    bbl->pushTable(tbl);
+    return 0;
+}
+
+static int bblOs_spawn(BblState* bbl) {
+    const char* cmd = bbl->getStringArg(0);
+    FILE* pipe = popen(cmd, "r");
+    if (!pipe) throw BBL::Error{"spawn failed: " + std::string(cmd)};
+    auto* proc = new BblProcess{pipe, false};
+    bbl->pushUserData("Process", static_cast<void*>(proc));
+    return 0;
+}
+
+static int bblProcess_read(BblState* bbl) {
+    auto* proc = static_cast<BblProcess*>(bbl->getArg(0).userdataVal->data);
+    if (!proc->pipe) { bbl->pushString(""); return 0; }
+    std::string result;
+    char buf[4096];
+    while (fgets(buf, sizeof(buf), proc->pipe)) result += buf;
+    bbl->pushString(result.c_str());
+    return 0;
+}
+
+static int bblProcess_readLine(BblState* bbl) {
+    auto* proc = static_cast<BblProcess*>(bbl->getArg(0).userdataVal->data);
+    if (!proc->pipe) { bbl->pushNull(); return 0; }
+    std::string result;
+    char buf[4096];
+    if (!fgets(buf, sizeof(buf), proc->pipe)) {
+        bbl->pushNull();
+        return 0;
+    }
+    result = buf;
+    while (!result.empty() && result.back() != '\n' && !feof(proc->pipe)) {
+        if (!fgets(buf, sizeof(buf), proc->pipe)) break;
+        result += buf;
+    }
+    if (!result.empty() && result.back() == '\n') result.pop_back();
+    if (!result.empty() && result.back() == '\r') result.pop_back();
+    bbl->pushString(result.c_str());
+    return 0;
+}
+
+static int bblProcess_wait(BblState* bbl) {
+    auto* proc = static_cast<BblProcess*>(bbl->getArg(0).userdataVal->data);
+    if (proc->waited) { bbl->pushInt(-1); return 0; }
+    int raw = pclose(proc->pipe);
+    proc->pipe = nullptr;
+    proc->waited = true;
+    int code = WIFEXITED(raw) ? WEXITSTATUS(raw) : -1;
+    bbl->pushInt(code);
+    return 0;
+}
+
+static int bblOs_spawnDetached(BblState* bbl) {
+    const char* cmd = bbl->getStringArg(0);
+    pid_t pid = fork();
+    if (pid < 0) throw BBL::Error{"spawn-detached: fork failed"};
+    if (pid == 0) {
+        // Double-fork: first child forks again then exits.
+        // Grandchild is reparented to init, preventing zombies.
+        pid_t pid2 = fork();
+        if (pid2 < 0) _exit(127);
+        if (pid2 > 0) _exit(0); // first child exits immediately
+        // Grandchild: detach session and redirect streams
+        setsid();
+        freopen("/dev/null", "r", stdin);
+        freopen("/dev/null", "w", stdout);
+        freopen("/dev/null", "w", stderr);
+        execl("/bin/sh", "sh", "-c", cmd, nullptr);
+        _exit(127);
+    }
+    // Reap first child immediately (it exits right away)
+    waitpid(pid, nullptr, 0);
+    bbl->pushInt((int64_t)pid);
+    return 0;
+}
+
+void BBL::addOs(BblState& bbl) {
+    if (bbl.has("getenv")) return;
+
+    BBL::TypeBuilder pb("Process");
+    pb.method("read", bblProcess_read)
+      .method("read-line", bblProcess_readLine)
+      .method("wait", bblProcess_wait)
+      .destructor(processDestructor);
+    bbl.registerType(pb);
+
+    bbl.defn("getenv", bblOs_getenv);
+    bbl.defn("setenv", bblOs_setenv);
+    bbl.defn("unsetenv", bblOs_unsetenv);
+    bbl.defn("clock", bblOs_clock);
+    bbl.defn("time", bblOs_time);
+    bbl.defn("sleep", bblOs_sleep);
+    bbl.defn("exit", bblOs_exit);
+    bbl.defn("getpid", bblOs_getpid);
+    bbl.defn("getcwd", bblOs_getcwd);
+    bbl.defn("chdir", bblOs_chdir);
+    bbl.defn("mkdir", bblOs_mkdir);
+    bbl.defn("remove", bblOs_remove);
+    bbl.defn("rename", bblOs_rename);
+    bbl.defn("tmpname", bblOs_tmpname);
+    bbl.defn("execute", bblOs_execute);
+    bbl.defn("date", bblOs_date);
+    bbl.defn("difftime", bblOs_difftime);
+    bbl.defn("stat", bblOs_stat);
+    bbl.defn("glob", bblOs_glob);
+    bbl.defn("spawn", bblOs_spawn);
+    bbl.defn("spawn-detached", bblOs_spawnDetached);
+}
+
 void BBL::addStdLib(BblState& bbl) {
     BBL::addPrint(bbl);
     BBL::addMath(bbl);
     BBL::addFileIo(bbl);
+    BBL::addOs(bbl);
 }

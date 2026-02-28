@@ -664,7 +664,7 @@ Path resolution is relative to the calling script's directory.
 ## Standard Library
 
 Loaded from C++ via `BBL::addStdLib(bbl)`.  Individual modules available:
-`addPrint()`, `addMath()`, `addFileIo()`.
+`addPrint()`, `addMath()`, `addFileIo()`, `addOs()`.
 
 ### Core Functions
 
@@ -722,6 +722,76 @@ They support all File methods.  `close` on a standard stream is a safe no-op.
 // explicit output
 (stdout:write "to stdout\n")
 (stderr:write "error message\n")
+```
+
+### OS Library
+
+Registered by `addOs()` (included in `addStdLib()`).  Provides operating-system
+facilities for general-purpose shell scripting.
+
+#### Environment
+
+| Function                      | Description                                  |
+|-------------------------------|----------------------------------------------|
+| `(getenv name)`               | Read environment variable, null if unset     |
+| `(setenv name value)`         | Set environment variable                     |
+| `(unsetenv name)`             | Remove environment variable                  |
+
+#### Time
+
+| Function                      | Description                                  |
+|-------------------------------|----------------------------------------------|
+| `(time)`                      | Current Unix epoch in seconds (int)          |
+| `(clock)`                     | CPU time used in seconds (float)             |
+| `(sleep seconds)`             | Sleep for `seconds` (float, sub-second OK)   |
+| `(date [fmt [timestamp]])`    | Format time via strftime (default `"%Y-%m-%d %H:%M:%S"`) |
+| `(difftime t2 t1)`            | Difference in seconds between timestamps (float) |
+
+#### Filesystem
+
+| Function                      | Description                                  |
+|-------------------------------|----------------------------------------------|
+| `(getcwd)`                    | Current working directory (string)           |
+| `(chdir path)`                | Change directory, returns bool               |
+| `(mkdir path)`                | Create directory, returns bool               |
+| `(remove path)`               | Delete file or empty directory, returns bool |
+| `(rename old new)`            | Rename/move file, returns bool               |
+| `(tmpname)`                   | Create temp file, return its path (string)   |
+| `(stat path)`                 | File metadata table (`size`, `mtime`, `is-dir`, `is-file`), null if missing |
+| `(glob pattern)`              | Expand shell glob, returns table with 1-based int keys |
+
+#### Process
+
+| Function                      | Description                                  |
+|-------------------------------|----------------------------------------------|
+| `(execute command)`           | Run shell command, return exit status (int)  |
+| `(getpid)`                    | Current process ID (int)                     |
+| `(exit [code])`               | Terminate process (default code 0)           |
+| `(spawn command)`             | Launch child process, return Process userdata |
+| `(spawn-detached command)`    | Launch detached background process, return PID (int) |
+
+#### Process Methods
+
+| Method                        | Description                                  |
+|-------------------------------|----------------------------------------------|
+| `(p:read)`                    | Read all remaining stdout as string          |
+| `(p:read-line)`               | Read one line (strips newline), null at EOF  |
+| `(p:wait)`                    | Wait for exit, return exit status (int)      |
+
+```bbl
+// Capture output of a command
+(= p (spawn "ls -la"))
+(= output (p:read))
+(= status (p:wait))
+(print output)
+
+// Fire-and-forget background process
+(= pid (spawn-detached "long-running-server"))
+(print "launched as pid " pid "\n")
+
+// File metadata
+(= info (stat "/tmp"))
+(print "is directory: " info.is-dir "\n")
 ```
 
 ---
@@ -823,6 +893,7 @@ Default: zero filesystem access.  Capabilities are opt-in:
 | `addPrint()`    | stdout only                                        |
 | `addMath()`     | No filesystem                                      |
 | `addFileIo()`   | `fopen`, `filebytes`, `stdin`/`stdout`/`stderr` globals |
+| `addOs()`       | Process execution, filesystem mutation, env mutation, exit |
 | `defn()`        | Whatever the host function exposes                 |
 
 Path rules for `execfile` and `filebytes` from script:

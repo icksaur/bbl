@@ -471,6 +471,7 @@ struct BblState {
     void pushBool(bool val);
     void pushString(const char* str);
     void pushNull();
+    void pushTable(BblTable* tbl);
     void pushBinary(const uint8_t* ptr, size_t size);
 
     // Introspection
@@ -512,5 +513,6 @@ namespace BBL {
     void addPrint(BblState& bbl);
     void addMath(BblState& bbl);
     void addFileIo(BblState& bbl);
+    void addOs(BblState& bbl);
     void addStdLib(BblState& bbl);
 }

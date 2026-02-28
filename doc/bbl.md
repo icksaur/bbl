@@ -783,6 +783,49 @@ Three pre-opened File globals: `stdin`, `stdout`, `stderr`.  They support all Fi
 (stderr:write "error\n")
 ```
 
+### OS Library
+
+Registered by `addOs()` (included in `addStdLib()`).  Provides operating-system
+facilities for shell scripting.
+
+| Function | Description |
+|----------|-------------|
+| `getenv` | `(getenv name)` — read env var, null if unset |
+| `setenv` | `(setenv name value)` — set env var |
+| `unsetenv` | `(unsetenv name)` — remove env var |
+| `time` | `(time)` — Unix epoch seconds (int) |
+| `clock` | `(clock)` — CPU time in seconds (float) |
+| `sleep` | `(sleep secs)` — pause execution |
+| `date` | `(date [fmt [timestamp]])` — format time |
+| `difftime` | `(difftime t2 t1)` — seconds between timestamps |
+| `getcwd` | `(getcwd)` — current directory |
+| `chdir` | `(chdir path)` — change directory, returns bool |
+| `mkdir` | `(mkdir path)` — create directory, returns bool |
+| `remove` | `(remove path)` — delete file/dir, returns bool |
+| `rename` | `(rename old new)` — rename/move, returns bool |
+| `tmpname` | `(tmpname)` — create temp file, return path |
+| `stat` | `(stat path)` — file metadata table, null if missing |
+| `glob` | `(glob pattern)` — expand glob, returns table (1-based) |
+| `execute` | `(execute cmd)` — run shell command, return exit status |
+| `getpid` | `(getpid)` — process ID |
+| `exit` | `(exit [code])` — terminate (default 0) |
+| `spawn` | `(spawn cmd)` — launch child, return Process |
+| `spawn-detached` | `(spawn-detached cmd)` — detached child, return PID |
+
+#### Process methods
+
+| Method | Description |
+|--------|-------------|
+| `read` | read all remaining stdout as string |
+| `read-line` | read one line, null at EOF |
+| `wait` | wait for exit, return status (int) |
+
+```bbl
+(= p (spawn "ls -la"))
+(print (p:read))
+(p:wait)
+```
+
 ---
 
 ## UserData (C++ types)
