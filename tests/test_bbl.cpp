@@ -4036,6 +4036,389 @@ TEST(test_binary_errors) {
     ASSERT_THROW(bbl.exec("(= b (binary 7)) (vector int b)"));  // 7 not divisible by 8
 }
 
+// ========== Child States Tests ==========
+
+#include <thread>
+#include <chrono>
+
+static void writeWorker(const std::string& name, const std::string& code) {
+    namespace fs = std::filesystem;
+    fs::create_directories("/tmp/bbl_test_workers");
+    std::ofstream f("/tmp/bbl_test_workers/" + name);
+    f << code;
+}
+
+TEST(test_state_new) {
+    writeWorker("noop.bbl", "(= x 1)\n");
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/noop.bbl"))
+        (child:join)
+    )");
+    auto isDone = bbl.getBool("__done");
+    // Just verify it didn't crash. Check is-done via script:
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/noop.bbl"))
+        (child:join)
+        (print (child:is-done))
+    )");
+    bbl.printCapture = nullptr;
+    ASSERT_EQ(out, "true");
+}
+
+TEST(test_state_post_recv_roundtrip) {
+    writeWorker("echo.bbl",
+        "(= msg (recv))\n"
+        "(post (table \"echo\" (msg:get \"greeting\")))\n"
+    );
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/echo.bbl"))
+        (child:post (table "greeting" "hello"))
+        (= reply (child:recv))
+        (print (reply:get "echo"))
+        (child:join)
+    )");
+    bbl.printCapture = nullptr;
+    ASSERT_EQ(out, "hello");
+}
+
+TEST(test_state_post_recv_value_types) {
+    writeWorker("echo_all.bbl",
+        "(= msg (recv))\n"
+        "(post msg)\n"
+    );
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/echo_all.bbl"))
+        (child:post (table "i" 42 "f" 3.14 "b" true "n" null "s" "hi"))
+        (= reply (child:recv))
+        (print (reply:get "i") " " (reply:get "f") " " (reply:get "b") " " (typeof (reply:get "n")) " " (reply:get "s"))
+        (child:join)
+    )");
+    bbl.printCapture = nullptr;
+    ASSERT_EQ(out, "42 3.14 true null hi");
+}
+
+TEST(test_state_vector_transfer) {
+    writeWorker("vec_echo.bbl",
+        "(= msg (recv))\n"
+        "(= v (recv-vec))\n"
+        "(post msg v)\n"
+    );
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/vec_echo.bbl"))
+        (= v (vector int 10 20 30))
+        (child:post (table "tag" "vec") v)
+        (= reply (child:recv))
+        (= rv (child:recv-vec))
+        (print (reply:get "tag") " " (rv:length) " " (rv:at 0) " " (rv:at 2))
+        (print " src=" (v:length))
+        (child:join)
+    )");
+    bbl.printCapture = nullptr;
+    ASSERT_EQ(out, "vec 3 10 30 src=0");
+}
+
+TEST(test_state_binary_transfer) {
+    writeWorker("bin_echo.bbl",
+        "(= msg (recv))\n"
+        "(= b (recv-vec))\n"
+        "(post msg b)\n"
+    );
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/bin_echo.bbl"))
+        (= b (binary 3))
+        (b:set 0 65)
+        (b:set 1 66)
+        (b:set 2 67)
+        (child:post (table "tag" "bin") b)
+        (= reply (child:recv))
+        (= rb (child:recv-vec))
+        (print (reply:get "tag") " " (rb:length) " " (rb:at 0) " " (rb:at 2))
+        (child:join)
+    )");
+    bbl.printCapture = nullptr;
+    ASSERT_EQ(out, "bin 3 65 67");
+}
+
+TEST(test_state_bidirectional) {
+    writeWorker("bidir.bbl",
+        "(= msg (recv))\n"
+        "(post (table \"reply\" \"first\"))\n"
+        "(= msg2 (recv))\n"
+        "(post (table \"reply\" \"second\"))\n"
+    );
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/bidir.bbl"))
+        (child:post (table "go" true))
+        (= r1 (child:recv))
+        (child:post (table "go" true))
+        (= r2 (child:recv))
+        (print (r1:get "reply") " " (r2:get "reply"))
+        (child:join)
+    )");
+    bbl.printCapture = nullptr;
+    ASSERT_EQ(out, "first second");
+}
+
+TEST(test_state_is_done_join) {
+    writeWorker("wait_msg.bbl",
+        "(recv)\n"
+    );
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/wait_msg.bbl"))
+        (print (child:is-done))
+        (child:post (table "done" true))
+        (child:join)
+        (print " " (child:is-done))
+    )");
+    bbl.printCapture = nullptr;
+    ASSERT_EQ(out, "false true");
+}
+
+TEST(test_state_error_propagation) {
+    writeWorker("error.bbl",
+        "(/ 1 0)\n"
+    );
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/error.bbl"))
+        (child:join)
+        (print (child:has-error) " " (child:get-error))
+    )");
+    bbl.printCapture = nullptr;
+    ASSERT_EQ(out, "true division by zero");
+}
+
+TEST(test_state_recv_terminated) {
+    // Child blocks forever on recv. Destroying should not hang.
+    writeWorker("block_forever.bbl",
+        "(recv)\n"
+    );
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    auto start = std::chrono::steady_clock::now();
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/block_forever.bbl"))
+        (state-destroy child)
+    )");
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    ASSERT_TRUE(elapsed < std::chrono::seconds(5));
+}
+
+TEST(test_state_destroy_use_after) {
+    writeWorker("noop2.bbl", "(= x 1)\n");
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/noop2.bbl"))
+        (child:join)
+        (state-destroy child)
+        (child:is-done)
+    )"));
+}
+
+TEST(test_state_nested) {
+    writeWorker("nested_inner.bbl",
+        "(= msg (recv))\n"
+        "(post (table \"from\" \"grandchild\"))\n"
+    );
+    writeWorker("nested_outer.bbl",
+        "(= inner (state-new \"/tmp/bbl_test_workers/nested_inner.bbl\"))\n"
+        "(inner:post (table \"go\" true))\n"
+        "(= reply (inner:recv))\n"
+        "(post (table \"from\" (reply:get \"from\")))\n"
+        "(inner:join)\n"
+    );
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/nested_outer.bbl"))
+        (= reply (child:recv))
+        (print (reply:get "from"))
+        (child:join)
+    )");
+    bbl.printCapture = nullptr;
+    ASSERT_EQ(out, "grandchild");
+}
+
+TEST(test_state_destroy_cascade) {
+    // Child spawns grandchild that blocks forever.
+    // Destroying parent cascades to child → grandchild.
+    writeWorker("cascade_inner.bbl",
+        "(recv)\n"
+    );
+    writeWorker("cascade_outer.bbl",
+        "(= inner (state-new \"/tmp/bbl_test_workers/cascade_inner.bbl\"))\n"
+        "(recv)\n"
+    );
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    auto start = std::chrono::steady_clock::now();
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/cascade_outer.bbl"))
+        (state-destroy child)
+    )");
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    ASSERT_TRUE(elapsed < std::chrono::seconds(5));
+}
+
+TEST(test_state_gc_unreachable) {
+    writeWorker("noop3.bbl", "(= x 1)\n");
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    // Create a child in a scope, let it become unreachable, then GC
+    bbl.exec(R"(
+        (do
+            (= child (state-new "/tmp/bbl_test_workers/noop3.bbl"))
+            (child:join)
+        )
+    )");
+    // Force GC by allocating many objects
+    bbl.exec(R"(
+        (= i 0)
+        (loop (< i 300)
+            (= i (+ i 1))
+            (table "k" i)
+        )
+    )");
+    // If we get here without crash/hang, test passes
+    ASSERT_TRUE(true);
+}
+
+TEST(test_state_post_invalid_value) {
+    writeWorker("noop4.bbl", "(recv)\n");
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/noop4.bbl"))
+        (child:post (table "fn" (fn () null)))
+        (state-destroy child)
+    )"));
+    // Cleanup: the child may still be alive, so destroy it
+    // The throw should have happened before post succeeded
+}
+
+TEST(test_state_recv_dead_child) {
+    writeWorker("silent.bbl", "(= x 1)\n");
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/silent.bbl"))
+        (child:join)
+        (child:recv)
+    )"));
+}
+
+TEST(test_state_terminated_bypasses_try_catch) {
+    writeWorker("try_catch_loop.bbl",
+        "(try\n"
+        "  (loop true\n"
+        "    (recv))\n"
+        "  (catch e null))\n"
+    );
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    auto start = std::chrono::steady_clock::now();
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/try_catch_loop.bbl"))
+        (state-destroy child)
+    )");
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    ASSERT_TRUE(elapsed < std::chrono::seconds(5));
+}
+
+TEST(test_state_recv_vec_survives_gc) {
+    writeWorker("vec_gc.bbl",
+        "(= msg (recv))\n"
+        "(= v (recv-vec))\n"
+        "(post msg v)\n"
+    );
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/vec_gc.bbl"))
+        (= v (vector int 100 200 300))
+        (child:post (table "x" 1) v)
+        (= reply (child:recv))
+        // Force GC before calling recv-vec
+        (= i 0)
+        (loop (< i 300)
+            (= i (+ i 1))
+            (table "k" i)
+        )
+        (= rv (child:recv-vec))
+        (print (rv:at 0) " " (rv:at 1) " " (rv:at 2))
+        (child:join)
+    )");
+    bbl.printCapture = nullptr;
+    ASSERT_EQ(out, "100 200 300");
+}
+
+TEST(test_state_empty_table) {
+    writeWorker("echo_empty.bbl",
+        "(= msg (recv))\n"
+        "(post msg)\n"
+    );
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    std::string out;
+    bbl.printCapture = &out;
+    bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/echo_empty.bbl"))
+        (child:post (table))
+        (= reply (child:recv))
+        (print (reply:length))
+        (child:join)
+    )");
+    bbl.printCapture = nullptr;
+    ASSERT_EQ(out, "0");
+}
+
+TEST(test_state_post_bad_args) {
+    writeWorker("noop5.bbl", "(recv)\n");
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    // Non-table first arg
+    ASSERT_THROW(bbl.exec(R"(
+        (= child (state-new "/tmp/bbl_test_workers/noop5.bbl"))
+        (child:post 42)
+    )"));
+}
+
 // ========== Main ==========
 
 int main() {
@@ -4646,6 +5029,28 @@ int main() {
     RUN(test_binary_resize);
     RUN(test_binary_copy_from);
     RUN(test_binary_errors);
+
+    // Child States
+    std::cout << "--- Child States ---" << std::endl;
+    RUN(test_state_new);
+    RUN(test_state_post_recv_roundtrip);
+    RUN(test_state_post_recv_value_types);
+    RUN(test_state_vector_transfer);
+    RUN(test_state_binary_transfer);
+    RUN(test_state_bidirectional);
+    RUN(test_state_is_done_join);
+    RUN(test_state_error_propagation);
+    RUN(test_state_recv_terminated);
+    RUN(test_state_destroy_use_after);
+    RUN(test_state_nested);
+    RUN(test_state_destroy_cascade);
+    RUN(test_state_gc_unreachable);
+    RUN(test_state_post_invalid_value);
+    RUN(test_state_recv_dead_child);
+    RUN(test_state_terminated_bypasses_try_catch);
+    RUN(test_state_recv_vec_survives_gc);
+    RUN(test_state_empty_table);
+    RUN(test_state_post_bad_args);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

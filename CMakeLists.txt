@@ -4,8 +4,11 @@ project(bbl LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+find_package(Threads REQUIRED)
+
 add_library(bbl_lib STATIC bbl.cpp)
 target_include_directories(bbl_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(bbl_lib PUBLIC Threads::Threads)
 
 add_executable(bbl main.cpp)
 target_link_libraries(bbl PRIVATE bbl_lib)

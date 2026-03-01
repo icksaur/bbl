@@ -673,6 +673,7 @@ void BblState::gc() {
         gcMark(arg);
     }
     gcMark(returnValue);
+    gcMark(lastRecvPayload);
 
     // Sweep helper — partition by mark, cleanup + delete unmarked, clear marks
     auto sweepPool = [](auto& pool, auto cleanup) {
@@ -1087,6 +1088,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             BblValue result = BblValue::makeNull();
             for (size_t i = 1; i < node.children.size(); i++) {
                 result = eval(node.children[i], scope);
+                checkTerminated();
                 if (flowSignal) break;
             }
             return result;
@@ -1121,6 +1123,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 }
                 for (size_t i = 2; i < node.children.size(); i++) {
                     eval(node.children[i], scope);
+                    checkTerminated();
                     if (flowSignal) break;
                 }
                 if (flowSignal == FlowBreak) { flowSignal = FlowNone; break; }
@@ -1160,6 +1163,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 *slot = BblValue::makeInt(idx);
                 for (size_t i = 3; i < node.children.size(); i++) {
                     eval(node.children[i], scope);
+                    checkTerminated();
                     if (flowSignal) break;
                 }
                 if (flowSignal == FlowBreak) { flowSignal = FlowNone; break; }
@@ -1588,6 +1592,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             try {
                 for (size_t i = 1; i < node.children.size() - 1; i++) {
                     result = eval(node.children[i], scope);
+                    checkTerminated();
                     if (flowSignal) return result;
                 }
             } catch (BBL::Error& e) {
@@ -2398,6 +2403,7 @@ BblValue BblState::callFn(BblFn* fn, const BblValue* args, size_t argc, int call
     try {
         for (auto& node : fn->body) {
             result = eval(node, callScope);
+            checkTerminated();
             if (flowSignal) break;
         }
     } catch (...) {
@@ -3781,4 +3787,297 @@ void BBL::addStdLib(BblState& bbl) {
     BBL::addMath(bbl);
     BBL::addFileIo(bbl);
     BBL::addOs(bbl);
+    BBL::addChildStates(bbl, false);
+}
+
+// ---------- Child States ----------
+
+void MessageQueue::push(BblMessage msg) {
+    std::lock_guard lock(mtx);
+    messages.push_back(std::move(msg));
+    cv.notify_one();
+}
+
+BblMessage MessageQueue::pop(std::atomic<bool>& terminated) {
+    std::unique_lock lock(mtx);
+    cv.wait(lock, [&] { return !messages.empty() || terminated.load(); });
+    if (terminated.load()) throw BblTerminated{};
+    BblMessage msg = std::move(messages.front());
+    messages.pop_front();
+    return msg;
+}
+
+bool MessageQueue::empty() {
+    std::lock_guard lock(mtx);
+    return messages.empty();
+}
+
+static void stateDestructor(void* data) {
+    auto* handle = static_cast<BblStateHandle*>(data);
+    if (!handle) return;
+    handle->child->terminated.store(true);
+    { std::lock_guard lk(handle->toChild.mtx); }
+    handle->toChild.cv.notify_one();
+    { std::lock_guard lk(handle->toParent.mtx); }
+    handle->toParent.cv.notify_one();
+    if (handle->thread.joinable()) handle->thread.join();
+    delete handle->child;
+    delete handle;
+}
+
+// Forward declarations for child-side functions
+static int bblChildPost(BblState* bbl);
+static int bblChildRecv(BblState* bbl);
+static int bblChildRecvVec(BblState* bbl);
+
+static BblMessage serializeMessage(BblState* bbl, BblTable* table, BblValue* vecArg) {
+    BblMessage msg;
+    for (auto& entry : table->entries) {
+        if (entry.first.type != BBL::Type::String)
+            throw BBL::Error{"message key must be a string"};
+        MessageValue mv;
+        auto& val = entry.second;
+        mv.type = val.type;
+        switch (val.type) {
+            case BBL::Type::Int:    mv.intVal = val.intVal; break;
+            case BBL::Type::Float:  mv.floatVal = val.floatVal; break;
+            case BBL::Type::Bool:   mv.boolVal = val.boolVal; break;
+            case BBL::Type::Null:   break;
+            case BBL::Type::String: mv.stringVal = val.stringVal->data; break;
+            default:
+                throw BBL::Error{"message value must be int, float, bool, null, or string"};
+        }
+        msg.entries.emplace_back(entry.first.stringVal->data, std::move(mv));
+    }
+    if (vecArg) {
+        if (vecArg->type == BBL::Type::Vector) {
+            msg.hasPayload = true;
+            msg.payloadData = std::move(vecArg->vectorVal->data);
+            msg.payloadElemType = vecArg->vectorVal->elemType;
+            msg.payloadElemTypeTag = vecArg->vectorVal->elemTypeTag;
+            msg.payloadElemSize = vecArg->vectorVal->elemSize;
+        } else if (vecArg->type == BBL::Type::Binary) {
+            msg.hasPayload = true;
+            msg.payloadData = std::move(vecArg->binaryVal->data);
+        } else {
+            throw BBL::Error{"post payload must be a vector or binary"};
+        }
+    }
+    return msg;
+}
+
+static BblValue deserializeMessage(BblState* bbl, BblMessage& msg) {
+    GcPauseGuard guard(bbl);
+    BblTable* table = bbl->allocTable();
+    for (auto& entry : msg.entries) {
+        BblString* key = bbl->intern(entry.first);
+        BblValue val;
+        auto& mv = entry.second;
+        switch (mv.type) {
+            case BBL::Type::Int:    val = BblValue::makeInt(mv.intVal); break;
+            case BBL::Type::Float:  val = BblValue::makeFloat(mv.floatVal); break;
+            case BBL::Type::Bool:   val = BblValue::makeBool(mv.boolVal); break;
+            case BBL::Type::Null:   val = BblValue::makeNull(); break;
+            case BBL::Type::String: val = BblValue::makeString(bbl->intern(mv.stringVal)); break;
+            default: break;
+        }
+        table->set(BblValue::makeString(key), val);
+    }
+    if (msg.hasPayload) {
+        if (!msg.payloadElemType.empty()) {
+            BblVec* vec = bbl->allocVector(msg.payloadElemType, msg.payloadElemTypeTag, msg.payloadElemSize);
+            vec->data = std::move(msg.payloadData);
+            bbl->lastRecvPayload = BblValue::makeVector(vec);
+        } else {
+            BblBinary* bin = bbl->allocBinary(std::move(msg.payloadData));
+            bbl->lastRecvPayload = BblValue::makeBinary(bin);
+        }
+    } else {
+        bbl->lastRecvPayload = BblValue::makeNull();
+    }
+    return BblValue::makeTable(table);
+}
+
+static int bblStateNew(BblState* bbl) {
+    std::string path = bbl->getStringArg(0);
+    auto* child = new BblState();
+    child->allowOpenFilesystem = true;
+    BBL::addStdLib(*child);
+    // addStdLib already registered State type + state-new/state-destroy.
+    // Now add child-mode flat functions (post, recv, recv-vec).
+    child->defn("post", bblChildPost);
+    child->defn("recv", bblChildRecv);
+    child->defn("recv-vec", bblChildRecvVec);
+    auto* handle = new BblStateHandle();
+    handle->child = child;
+    child->handle = handle;
+    BblUserData* ud = bbl->allocUserData("State", handle);
+    handle->thread = std::thread([handle, path] {
+        BblState* child = handle->child;
+        try {
+            child->execfile(path);
+        } catch (const BblTerminated&) {
+            // Normal termination
+        } catch (const BBL::Error& e) {
+            handle->childError = e.what;
+        } catch (const std::exception& e) {
+            handle->childError = e.what();
+        } catch (...) {
+            handle->childError = "unknown error in child thread";
+        }
+        handle->done.store(true, std::memory_order_release);
+        { std::lock_guard lk(handle->toParent.mtx); }
+        handle->toParent.cv.notify_one();
+    });
+    bbl->returnValue = BblValue::makeUserData(ud);
+    bbl->hasReturn = true;
+    return 0;
+}
+
+// --- Parent-side methods ---
+
+static BblStateHandle* getHandle(BblState* bbl) {
+    BblValue self = bbl->getArg(0);
+    if (self.type != BBL::Type::UserData || !self.userdataVal->data)
+        throw BBL::Error{"state handle is invalid (destroyed)"};
+    return static_cast<BblStateHandle*>(self.userdataVal->data);
+}
+
+static int statePost(BblState* bbl) {
+    auto* handle = getHandle(bbl);
+    BblValue tblArg = bbl->getArg(1);
+    if (tblArg.type != BBL::Type::Table)
+        throw BBL::Error{"post: first argument must be a table"};
+    BblValue* vecArg = nullptr;
+    BblValue vecVal;
+    if (bbl->argCount() >= 3) {
+        vecVal = bbl->getArg(2);
+        vecArg = &vecVal;
+    }
+    BblMessage msg = serializeMessage(bbl, tblArg.tableVal, vecArg);
+    handle->toChild.push(std::move(msg));
+    return 0;
+}
+
+static int stateRecv(BblState* bbl) {
+    auto* handle = getHandle(bbl);
+    std::unique_lock lock(handle->toParent.mtx);
+    handle->toParent.cv.wait(lock, [&] {
+        return !handle->toParent.messages.empty()
+            || bbl->terminated.load()
+            || handle->done.load(std::memory_order_acquire);
+    });
+    if (!handle->toParent.messages.empty()) {
+        BblMessage msg = std::move(handle->toParent.messages.front());
+        handle->toParent.messages.pop_front();
+        lock.unlock();
+        BblValue table = deserializeMessage(bbl, msg);
+        bbl->returnValue = table;
+        bbl->hasReturn = true;
+        return 0;
+    }
+    lock.unlock();
+    if (bbl->terminated.load()) throw BblTerminated{};
+    if (handle->childError) throw BBL::Error{*handle->childError};
+    throw BBL::Error{"child state has exited"};
+}
+
+static int stateRecvVec(BblState* bbl) {
+    getHandle(bbl);  // validate handle
+    bbl->returnValue = bbl->lastRecvPayload;
+    bbl->hasReturn = true;
+    return 0;
+}
+
+static int stateJoin(BblState* bbl) {
+    auto* handle = getHandle(bbl);
+    if (handle->thread.joinable()) handle->thread.join();
+    return 0;
+}
+
+static int stateIsDone(BblState* bbl) {
+    auto* handle = getHandle(bbl);
+    bbl->pushBool(handle->done.load(std::memory_order_acquire));
+    return 0;
+}
+
+static int stateHasError(BblState* bbl) {
+    auto* handle = getHandle(bbl);
+    if (!handle->done.load(std::memory_order_acquire)) { bbl->pushBool(false); return 0; }
+    bbl->pushBool(handle->childError.has_value());
+    return 0;
+}
+
+static int stateGetError(BblState* bbl) {
+    auto* handle = getHandle(bbl);
+    if (!handle->done.load(std::memory_order_acquire)) { bbl->pushNull(); return 0; }
+    if (handle->childError) {
+        bbl->pushString(handle->childError->c_str());
+    } else {
+        bbl->pushNull();
+    }
+    return 0;
+}
+
+static int stateDestroy(BblState* bbl) {
+    BblValue self = bbl->getArg(0);
+    if (self.type != BBL::Type::UserData || !self.userdataVal->data)
+        throw BBL::Error{"state handle is invalid (destroyed)"};
+    auto* handle = static_cast<BblStateHandle*>(self.userdataVal->data);
+    stateDestructor(handle);
+    self.userdataVal->data = nullptr;
+    return 0;
+}
+
+// --- Child-side flat functions ---
+
+static int bblChildPost(BblState* bbl) {
+    auto* handle = bbl->handle;
+    if (!handle) throw BBL::Error{"post: not inside a child state"};
+    BblValue tblArg = bbl->getArg(0);
+    if (tblArg.type != BBL::Type::Table)
+        throw BBL::Error{"post: first argument must be a table"};
+    BblValue* vecArg = nullptr;
+    BblValue vecVal;
+    if (bbl->argCount() >= 2) {
+        vecVal = bbl->getArg(1);
+        vecArg = &vecVal;
+    }
+    BblMessage msg = serializeMessage(bbl, tblArg.tableVal, vecArg);
+    handle->toParent.push(std::move(msg));
+    return 0;
+}
+
+static int bblChildRecv(BblState* bbl) {
+    auto* handle = bbl->handle;
+    if (!handle) throw BBL::Error{"recv: not inside a child state"};
+    BblMessage msg = handle->toChild.pop(bbl->terminated);
+    BblValue table = deserializeMessage(bbl, msg);
+    bbl->returnValue = table;
+    bbl->hasReturn = true;
+    return 0;
+}
+
+static int bblChildRecvVec(BblState* bbl) {
+    if (!bbl->handle) throw BBL::Error{"recv-vec: not inside a child state"};
+    bbl->returnValue = bbl->lastRecvPayload;
+    bbl->hasReturn = true;
+    return 0;
+}
+
+// --- Registration ---
+
+void BBL::addChildStates(BblState& bbl, bool) {
+    BBL::TypeBuilder sb("State");
+    sb.method("post", statePost)
+      .method("recv", stateRecv)
+      .method("recv-vec", stateRecvVec)
+      .method("join", stateJoin)
+      .method("is-done", stateIsDone)
+      .method("has-error", stateHasError)
+      .method("get-error", stateGetError);
+    sb.destructor(stateDestructor);
+    bbl.registerType(sb);
+    bbl.defn("state-new", bblStateNew);
+    bbl.defn("state-destroy", stateDestroy);
 }

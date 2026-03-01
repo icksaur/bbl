@@ -2,12 +2,18 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <expected>
 #include <string>
 #include <string_view>
 #include <ostream>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 #include <functional>
@@ -379,6 +385,46 @@ struct Frame {
     std::string expr;
 };
 
+struct BblTerminated {};
+
+// ---------- Child-states messaging ----------
+
+struct MessageValue {
+    BBL::Type type = BBL::Type::Null;
+    int64_t intVal = 0;
+    double floatVal = 0;
+    bool boolVal = false;
+    std::string stringVal;
+};
+
+struct BblMessage {
+    std::vector<std::pair<std::string, MessageValue>> entries;
+    bool hasPayload = false;
+    std::vector<uint8_t> payloadData;
+    std::string payloadElemType;
+    BBL::Type payloadElemTypeTag = BBL::Type::Null;
+    size_t payloadElemSize = 0;
+};
+
+struct MessageQueue {
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::deque<BblMessage> messages;
+
+    void push(BblMessage msg);
+    BblMessage pop(std::atomic<bool>& terminated);
+    bool empty();
+};
+
+struct BblStateHandle {
+    BblState* child = nullptr;
+    std::thread thread;
+    MessageQueue toChild;
+    MessageQueue toParent;
+    std::atomic<bool> done{false};
+    std::optional<std::string> childError;
+};
+
 struct BblState {
     BblScope rootScope;
     std::unordered_map<std::string, BblString*> internTable;
@@ -397,6 +443,9 @@ struct BblState {
     // GC
     size_t allocCount = 0;
     size_t gcThreshold = 256;
+    size_t savedGcThreshold = 0;
+    void pauseGC() { savedGcThreshold = gcThreshold; gcThreshold = SIZE_MAX; }
+    void resumeGC() { gcThreshold = savedGcThreshold; }
     std::vector<BblScope*> activeScopes;
 
     // C function call interface
@@ -419,6 +468,12 @@ struct BblState {
 
     // Print capture (for testing)
     std::string* printCapture = nullptr;
+
+    // Child-states support
+    std::atomic<bool> terminated{false};
+    BblStateHandle* handle = nullptr;
+    BblValue lastRecvPayload;
+    void checkTerminated() { if (terminated.load(std::memory_order_relaxed)) throw BblTerminated{}; }
 
     // Symbol ID table
     mutable std::unordered_map<std::string, uint32_t> symbolIds;
@@ -534,10 +589,17 @@ struct BblState {
     void printBacktrace(const std::string& what);
 };
 
+struct GcPauseGuard {
+    BblState* bbl;
+    GcPauseGuard(BblState* b) : bbl(b) { bbl->pauseGC(); }
+    ~GcPauseGuard() { bbl->resumeGC(); }
+};
+
 namespace BBL {
     void addPrint(BblState& bbl);
     void addMath(BblState& bbl);
     void addFileIo(BblState& bbl);
     void addOs(BblState& bbl);
+    void addChildStates(BblState& bbl, bool childMode = false);
     void addStdLib(BblState& bbl);
 }
