@@ -517,6 +517,8 @@ struct BblState {
     BblValue callFn(BblFn* fn, const BblValue* args, size_t argc, int callLine);
 
     // Method dispatch (extracted from evalList)
+    BblValue evalBinaryMethod(BblBinary* bin, const std::string& method,
+                               const AstNode& node, BblScope& scope);
     BblValue evalVectorMethod(BblVec* vec, const std::string& method,
                               const AstNode& node, BblScope& scope);
     BblValue evalStringMethod(BblString* strObj, const std::string& method,

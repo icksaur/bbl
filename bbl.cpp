@@ -952,7 +952,7 @@ enum class SpecialForm {
     Vector, Table, Not, Add, Sub, Mul, Div, Mod,
     CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe,
     Do, Band, Bor, Bxor, Bnot, Shl, Shr, With, Break, Continue, Try,
-    Struct, Sizeof
+    Struct, Sizeof, Binary
 };
 
 static SpecialForm lookupSpecialForm(const std::string& op) {
@@ -974,6 +974,7 @@ static SpecialForm lookupSpecialForm(const std::string& op) {
         {"break", SpecialForm::Break}, {"continue", SpecialForm::Continue},
         {"try", SpecialForm::Try},
         {"struct", SpecialForm::Struct}, {"sizeof", SpecialForm::Sizeof},
+        {"binary", SpecialForm::Binary},
     };
     auto it = table.find(op);
     return it != table.end() ? it->second : SpecialForm::None;
@@ -1322,6 +1323,20 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 elemSize = sit->second.totalSize;
             }
             BblVec* vec = allocVector(elemTypeName, elemTag, elemSize);
+            // Binary bulk-load: (vector Type binaryVal)
+            if (node.children.size() == 3) {
+                BblValue arg = eval(node.children[2], scope);
+                if (arg.type == BBL::Type::Binary) {
+                    if (elemSize == 0 || arg.binaryVal->data.size() % elemSize != 0) {
+                        throw BBL::Error{"vector: binary size " + std::to_string(arg.binaryVal->data.size()) +
+                                         " is not a multiple of element size " + std::to_string(elemSize)};
+                    }
+                    vec->data = arg.binaryVal->data;
+                    return BblValue::makeVector(vec);
+                }
+                packValue(vec, arg);
+                return BblValue::makeVector(vec);
+            }
             for (size_t i = 2; i < node.children.size(); i++) {
                 BblValue elem = eval(node.children[i], scope);
                 packValue(vec, elem);
@@ -1722,6 +1737,26 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             throw BBL::Error{"sizeof: argument must be a struct type name or struct value"};
         }
 
+        case SpecialForm::Binary: {
+            if (node.children.size() != 2) {
+                throw BBL::Error{"binary: expected exactly 1 argument"};
+            }
+            BblValue arg = eval(node.children[1], scope);
+            if (arg.type == BBL::Type::Vector) {
+                return BblValue::makeBinary(allocBinary(arg.vectorVal->data));
+            }
+            if (arg.type == BBL::Type::Struct) {
+                return BblValue::makeBinary(allocBinary(arg.structVal->data));
+            }
+            if (arg.type == BBL::Type::Int) {
+                if (arg.intVal < 0) {
+                    throw BBL::Error{"binary: size must be non-negative"};
+                }
+                return BblValue::makeBinary(allocBinary(std::vector<uint8_t>(static_cast<size_t>(arg.intVal), 0)));
+            }
+            throw BBL::Error{"binary: argument must be vector, struct, or non-negative integer"};
+        }
+
         case SpecialForm::None: {
             // Check if this is a struct constructor call
             auto sit = structDescs.find(op);
@@ -1751,10 +1786,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
         }
 
         if (obj.type == BBL::Type::Binary) {
-            if (method == "length") {
-                return BblValue::makeInt(static_cast<int64_t>(obj.binaryVal->length()));
-            }
-            throw BBL::Error{"binary has no method " + method};
+            return evalBinaryMethod(obj.binaryVal, method, node, scope);
         }
 
         if (obj.type == BBL::Type::Table) {
@@ -1868,6 +1900,107 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
 // ---------------------------------------------------------------------------
 
 static size_t toIndex(int64_t val, size_t length, const char* context);
+
+BblValue BblState::evalBinaryMethod(BblBinary* bin, const std::string& method,
+                                    const AstNode& node, BblScope& scope) {
+    if (method == "length") {
+        return BblValue::makeInt(static_cast<int64_t>(bin->length()));
+    }
+    if (method == "at") {
+        if (node.children.size() < 2) {
+            throw BBL::Error{"binary.at requires an index"};
+        }
+        BblValue idx = eval(node.children[1], scope);
+        if (idx.type != BBL::Type::Int) {
+            throw BBL::Error{"binary.at: index must be int"};
+        }
+        size_t i = toIndex(idx.intVal, bin->data.size(), "binary.at");
+        return BblValue::makeInt(static_cast<int64_t>(bin->data[i]));
+    }
+    if (method == "set") {
+        if (node.children.size() < 3) {
+            throw BBL::Error{"binary.set requires an index and a value"};
+        }
+        BblValue idx = eval(node.children[1], scope);
+        if (idx.type != BBL::Type::Int) {
+            throw BBL::Error{"binary.set: index must be int"};
+        }
+        BblValue val = eval(node.children[2], scope);
+        if (val.type != BBL::Type::Int) {
+            throw BBL::Error{"binary.set: value must be int"};
+        }
+        size_t i = toIndex(idx.intVal, bin->data.size(), "binary.set");
+        bin->data[i] = static_cast<uint8_t>(val.intVal);
+        return BblValue::makeNull();
+    }
+    if (method == "slice") {
+        if (node.children.size() < 3) {
+            throw BBL::Error{"binary.slice requires start and length"};
+        }
+        BblValue startVal = eval(node.children[1], scope);
+        BblValue lenVal = eval(node.children[2], scope);
+        if (startVal.type != BBL::Type::Int || lenVal.type != BBL::Type::Int) {
+            throw BBL::Error{"binary.slice: start and length must be int"};
+        }
+        int64_t start = startVal.intVal;
+        int64_t len = lenVal.intVal;
+        if (start < 0 || len < 0) {
+            throw BBL::Error{"binary.slice: start and length must be non-negative"};
+        }
+        size_t ustart = static_cast<size_t>(start);
+        size_t ulen = static_cast<size_t>(len);
+        if (ustart > bin->data.size() || ulen > bin->data.size() - ustart) {
+            throw BBL::Error{"binary.slice: range [" + std::to_string(start) + ", " +
+                             std::to_string(start + len) + ") exceeds length " +
+                             std::to_string(bin->data.size())};
+        }
+        auto beg = bin->data.begin() + static_cast<ptrdiff_t>(ustart);
+        return BblValue::makeBinary(allocBinary(std::vector<uint8_t>(beg, beg + static_cast<ptrdiff_t>(ulen))));
+    }
+    if (method == "resize") {
+        if (node.children.size() < 2) {
+            throw BBL::Error{"binary.resize requires a size"};
+        }
+        BblValue sizeVal = eval(node.children[1], scope);
+        if (sizeVal.type != BBL::Type::Int) {
+            throw BBL::Error{"binary.resize: size must be int"};
+        }
+        if (sizeVal.intVal < 0) {
+            throw BBL::Error{"binary.resize: size must be non-negative"};
+        }
+        bin->data.resize(static_cast<size_t>(sizeVal.intVal), 0);
+        return BblValue::makeNull();
+    }
+    if (method == "copy-from") {
+        if (node.children.size() < 2 || node.children.size() > 3) {
+            throw BBL::Error{"binary.copy-from requires 1 or 2 arguments"};
+        }
+        BblValue srcVal = eval(node.children[1], scope);
+        if (srcVal.type != BBL::Type::Binary) {
+            throw BBL::Error{"binary.copy-from: source must be binary"};
+        }
+        int64_t offset = 0;
+        if (node.children.size() == 3) {
+            BblValue offVal = eval(node.children[2], scope);
+            if (offVal.type != BBL::Type::Int) {
+                throw BBL::Error{"binary.copy-from: offset must be int"};
+            }
+            offset = offVal.intVal;
+        }
+        if (offset < 0) {
+            throw BBL::Error{"binary.copy-from: offset must be non-negative"};
+        }
+        BblBinary* src = srcVal.binaryVal;
+        if (static_cast<size_t>(offset) + src->data.size() > bin->data.size()) {
+            throw BBL::Error{"binary.copy-from: source (" + std::to_string(src->data.size()) +
+                             " bytes) at offset " + std::to_string(offset) +
+                             " exceeds destination length " + std::to_string(bin->data.size())};
+        }
+        std::memcpy(bin->data.data() + offset, src->data.data(), src->data.size());
+        return BblValue::makeNull();
+    }
+    throw BBL::Error{"binary has no method " + method};
+}
 
 BblValue BblState::evalVectorMethod(BblVec* vec, const std::string& method,
                                     const AstNode& node, BblScope& scope) {

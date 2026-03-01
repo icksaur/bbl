@@ -499,6 +499,14 @@ Raw byte buffers for textures, audio, mesh data, or any binary content.
 (= texture 0b65536:<65536 raw bytes>)
 ```
 
+### Constructor
+
+```bbl
+(= b (binary 16))              // zero-filled, 16 bytes
+(= b (binary myVec))           // copy vector's raw bytes
+(= b (binary myStruct))        // copy struct's raw bytes
+```
+
 ### From File
 
 ```bbl
@@ -507,9 +515,30 @@ Raw byte buffers for textures, audio, mesh data, or any binary content.
 
 ### Methods
 
-| Method         | Description       |
-|----------------|-------------------|
-| `(b:length)`   | Byte count        |
+| Method                     | Description                                      |
+|----------------------------|--------------------------------------------------|
+| `(b:length)`               | Byte count                                       |
+| `(b:at i)`                 | Read byte at index (returns 0–255)                |
+| `(b:set i val)`            | Write byte at index (int, truncated to uint8)    |
+| `(b:slice start len)`      | New binary from sub-range (strict bounds)        |
+| `(b:resize n)`             | Resize (zero-fills if growing)                   |
+| `(b:copy-from src [off])`  | Copy src binary into self at offset (default 0)  |
+
+### Vector ↔ Binary
+
+```bbl
+(struct Vertex float32 x float32 y float32 z)
+(= verts (vector Vertex (Vertex 1 2 3) (Vertex 4 5 6)))
+
+// serialize: vector → binary
+(= blob (binary verts))
+
+// deserialize: binary → vector
+(= loaded (vector Vertex blob))
+(print loaded.0.x)   // 1
+```
+
+`(vector Type bin)` requires `bin.length` to be a multiple of the element size.
 
 ### Shell Generation
 
@@ -948,6 +977,7 @@ CLI binary).
 | `with`      | resource mgmt  | Scoped userdata with deterministic destructor  |
 | `struct`    | data           | Define a struct type                           |
 | `sizeof`    | data           | Return byte size of struct type or instance    |
+| `binary`    | data           | Construct binary from vector, struct, or size  |
 | `exec`      | evaluation     | Evaluate string as code                        |
 | `execfile`  | evaluation     | Execute file                                   |
 | `and`       | logic          | Short-circuit logical AND                      |

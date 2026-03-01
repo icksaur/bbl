@@ -3832,6 +3832,206 @@ TEST(test_script_struct_closure) {
     ASSERT_NEAR(bbl.getFloat("rx"), 5.0, 0.001);
 }
 
+// ========== Binary ↔ Vector Tests ==========
+
+TEST(test_binary_from_vector) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(
+        "(= v (vector int 10 20 30))"
+        "(= b (binary v))"
+        "(= blen (b:length))"
+    );
+    ASSERT_EQ(bbl.getInt("blen"), 24);  // 3 * sizeof(int64_t)
+}
+
+TEST(test_binary_from_struct) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(
+        "(struct Pixel uint8 r uint8 g uint8 b uint8 a)"
+        "(= p (Pixel 255 128 0 200))"
+        "(= b (binary p))"
+        "(= blen (b:length))"
+        "(= r (b:at 0)) (= g (b:at 1)) (= bl (b:at 2)) (= a (b:at 3))"
+    );
+    ASSERT_EQ(bbl.getInt("blen"), 4);
+    ASSERT_EQ(bbl.getInt("r"), 255);
+    ASSERT_EQ(bbl.getInt("g"), 128);
+    ASSERT_EQ(bbl.getInt("bl"), 0);
+    ASSERT_EQ(bbl.getInt("a"), 200);
+}
+
+TEST(test_binary_from_size) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(
+        "(= b0 (binary 0))"
+        "(= len0 (b0:length))"
+        "(= b10 (binary 10))"
+        "(= len10 (b10:length))"
+        "(= byte0 (b10:at 0))"
+        "(= byte9 (b10:at 9))"
+    );
+    ASSERT_EQ(bbl.getInt("len0"), 0);
+    ASSERT_EQ(bbl.getInt("len10"), 10);
+    ASSERT_EQ(bbl.getInt("byte0"), 0);
+    ASSERT_EQ(bbl.getInt("byte9"), 0);
+}
+
+TEST(test_vector_from_binary) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    // Round-trip: vector → binary → vector
+    bbl.exec(
+        "(= v1 (vector int 42 -7 1000))"
+        "(= b (binary v1))"
+        "(= v2 (vector int b))"
+        "(= a (v2:at 0)) (= b2 (v2:at 1)) (= c (v2:at 2))"
+        "(= len (v2:length))"
+    );
+    ASSERT_EQ(bbl.getInt("len"), 3);
+    ASSERT_EQ(bbl.getInt("a"), 42);
+    ASSERT_EQ(bbl.getInt("b2"), -7);
+    ASSERT_EQ(bbl.getInt("c"), 1000);
+}
+
+TEST(test_vector_from_binary_struct) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(
+        "(struct V2 float32 x float32 y)"
+        "(= v (vector V2 (V2 1 2) (V2 3 4)))"
+        "(= b (binary v))"
+        "(= v2 (vector V2 b))"
+        "(= x0 v2.0.x) (= y0 v2.0.y)"
+        "(= x1 v2.1.x) (= y1 v2.1.y)"
+    );
+    ASSERT_NEAR(bbl.getFloat("x0"), 1.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("y0"), 2.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("x1"), 3.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("y1"), 4.0, 0.001);
+}
+
+TEST(test_binary_at_set) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(
+        "(= b (binary 4))"
+        "(b:set 0 65)"
+        "(b:set 1 255)"
+        "(b:set 2 256)"   // truncation: 256 → 0
+        "(b:set 3 -1)"    // truncation: -1 → 255
+        "(= v0 (b:at 0)) (= v1 (b:at 1)) (= v2 (b:at 2)) (= v3 (b:at 3))"
+    );
+    ASSERT_EQ(bbl.getInt("v0"), 65);
+    ASSERT_EQ(bbl.getInt("v1"), 255);
+    ASSERT_EQ(bbl.getInt("v2"), 0);
+    ASSERT_EQ(bbl.getInt("v3"), 255);
+}
+
+TEST(test_binary_slice) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(
+        "(= b (binary 5))"
+        "(b:set 0 10) (b:set 1 20) (b:set 2 30) (b:set 3 40) (b:set 4 50)"
+        "(= s (b:slice 1 3))"
+        "(= slen (s:length))"
+        "(= s0 (s:at 0)) (= s1 (s:at 1)) (= s2 (s:at 2))"
+        // Zero-length slice
+        "(= empty (b:slice 3 0))"
+        "(= elen (empty:length))"
+    );
+    ASSERT_EQ(bbl.getInt("slen"), 3);
+    ASSERT_EQ(bbl.getInt("s0"), 20);
+    ASSERT_EQ(bbl.getInt("s1"), 30);
+    ASSERT_EQ(bbl.getInt("s2"), 40);
+    ASSERT_EQ(bbl.getInt("elen"), 0);
+}
+
+TEST(test_binary_resize) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(
+        "(= b (binary 4))"
+        "(b:set 0 99)"
+        "(b:resize 8)"
+        "(= len (b:length))"
+        "(= b0 (b:at 0))"
+        "(= b4 (b:at 4))"
+        // Shrink
+        "(b:resize 2)"
+        "(= len2 (b:length))"
+        "(= b0_2 (b:at 0))"
+    );
+    ASSERT_EQ(bbl.getInt("len"), 8);
+    ASSERT_EQ(bbl.getInt("b0"), 99);   // preserved
+    ASSERT_EQ(bbl.getInt("b4"), 0);    // zero-filled
+    ASSERT_EQ(bbl.getInt("len2"), 2);
+    ASSERT_EQ(bbl.getInt("b0_2"), 99); // still preserved
+}
+
+TEST(test_binary_copy_from) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(
+        "(= dest (binary 10))"
+        "(= src1 (binary 3))"
+        "(src1:set 0 11) (src1:set 1 22) (src1:set 2 33)"
+        "(= src2 (binary 2))"
+        "(src2:set 0 44) (src2:set 1 55)"
+        // copy-from with explicit offset
+        "(dest:copy-from src1 0)"
+        "(dest:copy-from src2 5)"
+        "(= a (dest:at 0)) (= b (dest:at 1)) (= c (dest:at 2))"
+        "(= d (dest:at 5)) (= e (dest:at 6))"
+        // copy-from with default offset (0)
+        "(= dest2 (binary 3))"
+        "(dest2:copy-from src1)"
+        "(= f (dest2:at 0)) (= g (dest2:at 1)) (= h (dest2:at 2))"
+    );
+    ASSERT_EQ(bbl.getInt("a"), 11);
+    ASSERT_EQ(bbl.getInt("b"), 22);
+    ASSERT_EQ(bbl.getInt("c"), 33);
+    ASSERT_EQ(bbl.getInt("d"), 44);
+    ASSERT_EQ(bbl.getInt("e"), 55);
+    ASSERT_EQ(bbl.getInt("f"), 11);
+    ASSERT_EQ(bbl.getInt("g"), 22);
+    ASSERT_EQ(bbl.getInt("h"), 33);
+}
+
+TEST(test_binary_errors) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    // binary constructor errors
+    ASSERT_THROW(bbl.exec("(binary -1)"));
+    ASSERT_THROW(bbl.exec("(binary \"hello\")"));
+    ASSERT_THROW(bbl.exec("(binary)"));
+    ASSERT_THROW(bbl.exec("(binary 1 2)"));
+    // at/set out of bounds
+    ASSERT_THROW(bbl.exec("(= b (binary 2)) (b:at 2)"));
+    ASSERT_THROW(bbl.exec("(= b (binary 2)) (b:at -1)"));
+    ASSERT_THROW(bbl.exec("(= b (binary 2)) (b:set 2 0)"));
+    // set type check
+    ASSERT_THROW(bbl.exec("(= b (binary 2)) (b:set 0 3.14)"));
+    // slice errors
+    ASSERT_THROW(bbl.exec("(= b (binary 4)) (b:slice -1 2)"));
+    ASSERT_THROW(bbl.exec("(= b (binary 4)) (b:slice 0 -1)"));
+    ASSERT_THROW(bbl.exec("(= b (binary 4)) (b:slice 3 2)"));  // 3+2=5 > 4
+    // resize negative
+    ASSERT_THROW(bbl.exec("(= b (binary 2)) (b:resize -1)"));
+    // copy-from overflow
+    ASSERT_THROW(bbl.exec("(= d (binary 2)) (= s (binary 3)) (d:copy-from s)"));
+    ASSERT_THROW(bbl.exec("(= d (binary 5)) (= s (binary 3)) (d:copy-from s 4)"));
+    // copy-from negative offset
+    ASSERT_THROW(bbl.exec("(= d (binary 5)) (= s (binary 1)) (d:copy-from s -1)"));
+    // copy-from type check
+    ASSERT_THROW(bbl.exec("(= d (binary 5)) (d:copy-from 42)"));
+    // vector from binary: misaligned
+    ASSERT_THROW(bbl.exec("(= b (binary 7)) (vector int b)"));  // 7 not divisible by 8
+}
+
 // ========== Main ==========
 
 int main() {
@@ -4429,6 +4629,19 @@ int main() {
     RUN(test_script_struct_errors);
     RUN(test_structbuilder_new_types);
     RUN(test_script_struct_closure);
+
+    // Binary ↔ Vector
+    std::cout << "--- Binary/Vector ---" << std::endl;
+    RUN(test_binary_from_vector);
+    RUN(test_binary_from_struct);
+    RUN(test_binary_from_size);
+    RUN(test_vector_from_binary);
+    RUN(test_vector_from_binary_struct);
+    RUN(test_binary_at_set);
+    RUN(test_binary_slice);
+    RUN(test_binary_resize);
+    RUN(test_binary_copy_from);
+    RUN(test_binary_errors);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;
