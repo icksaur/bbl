@@ -6,4 +6,4 @@
     (= s (+ s "x"))
     (= i (+ i 1))
 )
-(print (s.length))
+(print (s:length))

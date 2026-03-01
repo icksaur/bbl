@@ -4537,6 +4537,146 @@ TEST(test_step_limit_count_value) {
     ASSERT_EQ(bbl.stepCount, (size_t)10);
 }
 
+// ========== Tail Call Optimization ==========
+
+TEST(test_tco_basic_accumulator) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= f (fn (n acc)
+            (if (== n 0) acc (f (- n 1) (+ acc n)))))
+        (= r (f 100000 0))
+    )");
+    ASSERT_EQ(bbl.getInt("r").value(), 5000050000LL);
+}
+
+TEST(test_tco_countdown) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= countdown (fn (n)
+            (if (== n 0) 0 (countdown (- n 1)))))
+        (= r (countdown 100000))
+    )");
+    ASSERT_EQ(bbl.getInt("r").value(), 0LL);
+}
+
+TEST(test_tco_with_if_else) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= f (fn (n) (if (> n 0) (f (- n 1)) n)))
+        (= r (f 100000))
+    )");
+    ASSERT_EQ(bbl.getInt("r").value(), 0LL);
+}
+
+TEST(test_tco_with_do) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= f (fn (n) (do (if (== n 0) n (f (- n 1))))))
+        (= r (f 100000))
+    )");
+    ASSERT_EQ(bbl.getInt("r").value(), 0LL);
+}
+
+TEST(test_tco_non_tail_still_limited) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec(R"(
+        (= f (fn (n) (+ 1 (f (- n 1)))))
+        (f 1000)
+    )"));
+}
+
+TEST(test_tco_step_limit_still_works) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.maxSteps = 100;
+    ASSERT_THROW(bbl.exec(R"(
+        (= f (fn (n) (if (== n 0) 0 (f (- n 1)))))
+        (f 100000)
+    )"));
+}
+
+TEST(test_tco_mutual_recursion_not_optimized) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec(R"(
+        (= a (fn (n) (if (== n 0) 0 (b (- n 1)))))
+        (= b (fn (n) (if (== n 0) 0 (a (- n 1)))))
+        (a 1000)
+    )"));
+}
+
+TEST(test_tco_anonymous_not_optimized) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec(R"(
+        (= f (fn (n) (if (== n 0) 0 ((fn (x) (f (- x 1))) n))))
+        (f 1000)
+    )"));
+}
+
+TEST(test_tco_preserves_captures) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= make-counter (fn (start)
+            (= f (fn (n acc)
+                (if (== n 0) (+ acc start) (f (- n 1) (+ acc 1)))))
+            (f 10000 0)))
+        (= r (make-counter 42))
+    )");
+    ASSERT_EQ(bbl.getInt("r").value(), 10042LL);
+}
+
+TEST(test_tco_inside_try) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= f (fn (n) (try (if (== n 0) 0 (f (- n 1))) (catch e -1))))
+        (= r (f 100000))
+    )");
+    ASSERT_EQ(bbl.getInt("r").value(), 0LL);
+}
+
+TEST(test_tco_arity_mismatch) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec(R"(
+        (= f (fn (a b) (if (== a 0) b (f (- a 1)))))
+        (f 5 0)
+    )"));
+}
+
+TEST(test_tco_heap_args) {
+    // More than 8 args exercises the heapArgs path in TailCall
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= f (fn (a b c d e f2 g h i j)
+            (if (== a 0) (+ (+ (+ (+ (+ (+ (+ (+ b c) d) e) f2) g) h) i) j)
+                (f (- a 1) b c d e f2 g h i j))))
+        (= r (f 10000 1 2 3 4 5 6 7 8 9))
+    )");
+    ASSERT_EQ(bbl.getInt("r").value(), 45LL);
+}
+
+TEST(test_tco_rebinding) {
+    // If the function name is rebound mid-execution, the tail call
+    // should fall through to a normal call (fnVal != currentFn).
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= f (fn (n) (if (== n 0) 42 (do (= f (fn (x) 99)) (f 0)))))
+        (= r (f 1))
+    )");
+    // After rebinding, (f 0) calls the new f which returns 99
+    ASSERT_EQ(bbl.getInt("r").value(), 99LL);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -5182,6 +5322,22 @@ int main() {
     RUN(test_step_limit_do_block);
     RUN(test_step_limit_error_message_contains_limit);
     RUN(test_step_limit_count_value);
+
+    // ========== Tail Call Optimization ==========
+    std::cout << "--- Tail Call Optimization ---" << std::endl;
+    RUN(test_tco_basic_accumulator);
+    RUN(test_tco_countdown);
+    RUN(test_tco_with_if_else);
+    RUN(test_tco_with_do);
+    RUN(test_tco_non_tail_still_limited);
+    RUN(test_tco_step_limit_still_works);
+    RUN(test_tco_mutual_recursion_not_optimized);
+    RUN(test_tco_anonymous_not_optimized);
+    RUN(test_tco_preserves_captures);
+    RUN(test_tco_inside_try);
+    RUN(test_tco_arity_mismatch);
+    RUN(test_tco_heap_args);
+    RUN(test_tco_rebinding);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

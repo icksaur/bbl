@@ -371,6 +371,7 @@ struct AstNode {
     int line = 1;
     mutable uint32_t symbolId = 0;                // lazy-resolved symbol ID for Symbol nodes
     mutable int8_t cachedSpecialForm = -1;        // lazy-resolved SpecialForm for List head symbols
+    mutable bool isTailCall = false;               // marked for tail-call optimization
 };
 
 std::vector<AstNode> parse(BblLexer& lexer);
@@ -458,6 +459,7 @@ struct BblState {
     size_t maxCallDepth = 512;
     size_t maxSteps = 0;  // 0 = unlimited
     size_t stepCount = 0;
+    BblFn* currentFn = nullptr;
     std::string currentFile;
     std::string scriptDir;
     bool allowOpenFilesystem = false;

@@ -981,6 +981,46 @@ static SpecialForm lookupSpecialForm(const std::string& op) {
     return it != table.end() ? it->second : SpecialForm::None;
 }
 
+// ---------- Tail Call Optimization ----------
+
+struct TailCall {
+    BblValue args[8];
+    std::vector<BblValue> heapArgs;
+    size_t argc;
+};
+
+static void markTailPosition(AstNode& node, const std::string& fnName) {
+    if (node.type != NodeType::List || node.children.empty()) return;
+    auto& head = node.children[0];
+    // Direct self-call in tail position
+    if (head.type == NodeType::Symbol && head.stringVal == fnName) {
+        node.isTailCall = true;
+        return;
+    }
+    // Recurse into transparent forms
+    if (head.type != NodeType::Symbol) return;
+    SpecialForm sf = lookupSpecialForm(head.stringVal);
+    switch (sf) {
+        case SpecialForm::If:
+            if (node.children.size() >= 3) markTailPosition(node.children[2], fnName);
+            if (node.children.size() >= 4) markTailPosition(node.children[3], fnName);
+            break;
+        case SpecialForm::Do:
+            if (node.children.size() >= 2) markTailPosition(node.children.back(), fnName);
+            break;
+        case SpecialForm::Try:
+            if (node.children.size() >= 3) markTailPosition(node.children[node.children.size() - 2], fnName);
+            break;
+        default:
+            break;
+    }
+}
+
+static void markTailCalls(std::vector<AstNode>& body, const std::string& fnName) {
+    if (body.empty()) return;
+    markTailPosition(body.back(), fnName);
+}
+
 static std::string valueToString(const BblValue& val);
 
 BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
@@ -1049,6 +1089,9 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 throw BBL::Error{"=: first argument must be a symbol or place expression"};
             }
             BblValue val = eval(node.children[2], scope);
+            if (val.type == BBL::Type::Fn && !val.isCFn && val.fnVal) {
+                markTailCalls(val.fnVal->body, target.stringVal);
+            }
             if (!target.symbolId) target.symbolId = resolveSymbol(target.stringVal);
             uint32_t targetId = target.symbolId;
             // assign-or-create
@@ -1899,6 +1942,20 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             (void)rc;
             return ret;
         }
+        if (node.isTailCall && headVal.fnVal == currentFn && currentFn != nullptr) {
+            if (argc != currentFn->params.size()) {
+                throw BBL::Error{"arity mismatch: expected " + std::to_string(currentFn->params.size())
+                                 + " argument(s), got " + std::to_string(argc)};
+            }
+            TailCall tc;
+            tc.argc = argc;
+            if (argc <= 8) {
+                for (size_t i = 0; i < argc; i++) tc.args[i] = args[i];
+            } else {
+                tc.heapArgs.assign(args, args + argc);
+            }
+            throw tc;
+        }
         return callFn(headVal.fnVal, args, argc, node.line);
     }
 
@@ -2403,18 +2460,45 @@ BblValue BblState::callFn(BblFn* fn, const BblValue* args, size_t argc, int call
         callScope.slots[fn->paramSlotStart + i] = args[i];
     }
 
+    BblFn* prevFn = currentFn;
+    currentFn = fn;
     BblValue result = BblValue::makeNull();
-    try {
-        for (auto& node : fn->body) {
-            result = eval(node, callScope);
-            checkTerminated();
-            checkStepLimit();
-            if (flowSignal) break;
+    bool done = false;
+    while (!done) {
+        try {
+            for (auto& node : fn->body) {
+                result = eval(node, callScope);
+                checkTerminated();
+                checkStepLimit();
+                if (flowSignal) break;
+            }
+            done = true;
+        } catch (TailCall& tc) {
+            try {
+                checkTerminated();
+                checkStepLimit();
+            } catch (...) {
+                currentFn = prevFn;
+                activeScopes.pop_back();
+                throw;
+            }
+            // Rebind params in-place
+            for (size_t i = 0; i < tc.argc; i++) {
+                callScope.slots[fn->paramSlotStart + i] =
+                    (tc.argc <= 8) ? tc.args[i] : tc.heapArgs[i];
+            }
+            // Reload captures (body may have mutated shadowing locals)
+            for (auto& [id, val] : fn->captures) {
+                callScope.slots[fn->slotIndex.at(id)] = val;
+            }
+            // Continue loop — no new stack frame
+        } catch (...) {
+            currentFn = prevFn;
+            activeScopes.pop_back();
+            throw;
         }
-    } catch (...) {
-        activeScopes.pop_back();
-        throw;
     }
+    currentFn = prevFn;
     activeScopes.pop_back();
     if (flowSignal) {
         const char* msg = (flowSignal == FlowBreak) ? "break outside of loop" : "continue outside of loop";
