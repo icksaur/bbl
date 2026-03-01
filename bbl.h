@@ -456,6 +456,8 @@ struct BblState {
     // Backtrace
     std::vector<Frame> callStack;
     size_t maxCallDepth = 512;
+    size_t maxSteps = 0;  // 0 = unlimited
+    size_t stepCount = 0;
     std::string currentFile;
     std::string scriptDir;
     bool allowOpenFilesystem = false;
@@ -474,6 +476,10 @@ struct BblState {
     BblStateHandle* handle = nullptr;
     BblValue lastRecvPayload;
     void checkTerminated() { if (terminated.load(std::memory_order_relaxed)) throw BblTerminated{}; }
+    void checkStepLimit() {
+        if (maxSteps && ++stepCount > maxSteps)
+            throw BBL::Error{"step limit exceeded: " + std::to_string(maxSteps) + " steps"};
+    }
 
     // Symbol ID table
     mutable std::unordered_map<std::string, uint32_t> symbolIds;

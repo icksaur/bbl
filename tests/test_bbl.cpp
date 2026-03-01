@@ -4419,6 +4419,124 @@ TEST(test_state_post_bad_args) {
     )"));
 }
 
+// ========== Step Limit Tests ==========
+
+TEST(test_step_limit_infinite_loop) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.maxSteps = 100;
+    try {
+        bbl.exec("(loop true null)");
+        failed++;
+        std::cerr << "  FAIL: expected exception at " << __FILE__ << ":" << __LINE__ << std::endl;
+    } catch (const BBL::Error& e) {
+        ASSERT_TRUE(std::string(e.what).find("step limit exceeded") != std::string::npos);
+    }
+}
+
+TEST(test_step_limit_infinite_recursion) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.maxSteps = 1000;
+    // Will hit maxCallDepth (512) before maxSteps since the callFn checkpoint
+    // fires after body expressions return, which never happens in unbounded recursion.
+    ASSERT_THROW(bbl.exec("(= f (fn () (f))) (f)"));
+}
+
+TEST(test_step_limit_normal_execution) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.maxSteps = 1000;
+    bbl.exec("(= x 0) (loop (< x 10) (= x (+ x 1)))");
+    BblValue result = bbl.execExpr("x");
+    ASSERT_EQ(result.type, BBL::Type::Int);
+    ASSERT_EQ(result.intVal, (int64_t)10);
+}
+
+TEST(test_step_limit_zero_unlimited) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    // maxSteps = 0 is default (unlimited)
+    ASSERT_EQ(bbl.maxSteps, (size_t)0);
+    bbl.exec("(= x 0) (loop (< x 10000) (= x (+ x 1)))");
+    BblValue result = bbl.execExpr("x");
+    ASSERT_EQ(result.type, BBL::Type::Int);
+    ASSERT_EQ(result.intVal, (int64_t)10000);
+}
+
+TEST(test_step_limit_persists_across_exec) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.maxSteps = 60;
+    // First exec: 40 loop iterations = 40 steps
+    bbl.exec("(= x 0) (loop (< x 40) (= x (+ x 1)))");
+    // Second exec: another 40 iterations, cumulative 80 > 60
+    ASSERT_THROW(bbl.exec("(= x 0) (loop (< x 40) (= x (+ x 1)))"));
+}
+
+TEST(test_step_limit_manual_reset) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.maxSteps = 100;
+    bbl.exec("(= x 0) (loop (< x 40) (= x (+ x 1)))");
+    // Reset counter
+    bbl.stepCount = 0;
+    // Should complete fine now
+    bbl.exec("(= x 0) (loop (< x 40) (= x (+ x 1)))");
+    BblValue result = bbl.execExpr("x");
+    ASSERT_EQ(result.intVal, (int64_t)40);
+}
+
+TEST(test_step_limit_try_catch_no_escape) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.maxSteps = 50;
+    // Script-level catch cannot suppress step limit because counter keeps incrementing
+    try {
+        bbl.exec("(loop true (try null (catch e null)))");
+        failed++;
+        std::cerr << "  FAIL: expected exception at " << __FILE__ << ":" << __LINE__ << std::endl;
+    } catch (const BBL::Error& e) {
+        ASSERT_TRUE(std::string(e.what).find("step limit exceeded") != std::string::npos);
+    }
+}
+
+TEST(test_step_limit_each) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.maxSteps = 5;
+    ASSERT_THROW(bbl.exec("(= v (vector int 1 2 3 4 5 6 7 8 9 10)) (each i v null)"));
+}
+
+TEST(test_step_limit_do_block) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.maxSteps = 3;
+    ASSERT_THROW(bbl.exec("(do 1 2 3 4 5)"));
+}
+
+TEST(test_step_limit_error_message_contains_limit) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.maxSteps = 42;
+    try {
+        bbl.exec("(loop true null)");
+        failed++;
+        std::cerr << "  FAIL: expected exception at " << __FILE__ << ":" << __LINE__ << std::endl;
+    } catch (const BBL::Error& e) {
+        ASSERT_TRUE(std::string(e.what).find("42") != std::string::npos);
+    }
+}
+
+TEST(test_step_limit_count_value) {
+    BblState bbl;
+    BBL::addStdLib(bbl);
+    bbl.maxSteps = 1000;
+    bbl.exec("(= x 0) (loop (< x 10) (= x (+ x 1)))");
+    // One checkpoint per loop iteration
+    ASSERT_EQ(bbl.stepCount, (size_t)10);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -5051,6 +5169,19 @@ int main() {
     RUN(test_state_recv_vec_survives_gc);
     RUN(test_state_empty_table);
     RUN(test_state_post_bad_args);
+
+    // ========== Step Limit Tests ==========
+    RUN(test_step_limit_infinite_loop);
+    RUN(test_step_limit_infinite_recursion);
+    RUN(test_step_limit_normal_execution);
+    RUN(test_step_limit_zero_unlimited);
+    RUN(test_step_limit_persists_across_exec);
+    RUN(test_step_limit_manual_reset);
+    RUN(test_step_limit_try_catch_no_escape);
+    RUN(test_step_limit_each);
+    RUN(test_step_limit_do_block);
+    RUN(test_step_limit_error_message_contains_limit);
+    RUN(test_step_limit_count_value);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

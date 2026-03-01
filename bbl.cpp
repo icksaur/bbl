@@ -1089,6 +1089,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             for (size_t i = 1; i < node.children.size(); i++) {
                 result = eval(node.children[i], scope);
                 checkTerminated();
+                checkStepLimit();
                 if (flowSignal) break;
             }
             return result;
@@ -1124,6 +1125,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 for (size_t i = 2; i < node.children.size(); i++) {
                     eval(node.children[i], scope);
                     checkTerminated();
+                    checkStepLimit();
                     if (flowSignal) break;
                 }
                 if (flowSignal == FlowBreak) { flowSignal = FlowNone; break; }
@@ -1164,6 +1166,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 for (size_t i = 3; i < node.children.size(); i++) {
                     eval(node.children[i], scope);
                     checkTerminated();
+                    checkStepLimit();
                     if (flowSignal) break;
                 }
                 if (flowSignal == FlowBreak) { flowSignal = FlowNone; break; }
@@ -1593,6 +1596,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 for (size_t i = 1; i < node.children.size() - 1; i++) {
                     result = eval(node.children[i], scope);
                     checkTerminated();
+                    checkStepLimit();
                     if (flowSignal) return result;
                 }
             } catch (BBL::Error& e) {
@@ -2404,6 +2408,7 @@ BblValue BblState::callFn(BblFn* fn, const BblValue* args, size_t argc, int call
         for (auto& node : fn->body) {
             result = eval(node, callScope);
             checkTerminated();
+            checkStepLimit();
             if (flowSignal) break;
         }
     } catch (...) {
