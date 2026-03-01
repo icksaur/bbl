@@ -18,6 +18,9 @@
 #include <vector>
 #include <functional>
 
+struct BblClosure;
+struct VmState;
+
 namespace BBL {
 
 enum class Type {
@@ -201,6 +204,7 @@ public:
 struct BblValue {
     BBL::Type type = BBL::Type::Null;
     bool isCFn = false;
+    bool isClosure = false;
     union {
         int64_t intVal;
         double floatVal;
@@ -213,6 +217,7 @@ struct BblValue {
         BblVec* vectorVal;
         BblTable* tableVal;
         BblUserData* userdataVal;
+        BblClosure* closureVal;
     };
 
     BblValue() : type(BBL::Type::Null), intVal(0) {}
@@ -224,6 +229,7 @@ struct BblValue {
     static BblValue makeBinary(BblBinary* b) { BblValue r; r.type = BBL::Type::Binary; r.binaryVal = b; return r; }
     static BblValue makeFn(BblFn* f) { BblValue r; r.type = BBL::Type::Fn; r.fnVal = f; return r; }
     static BblValue makeCFn(BblCFunction f) { BblValue r; r.type = BBL::Type::Fn; r.isCFn = true; r.cfnVal = f; return r; }
+    static BblValue makeClosure(BblClosure* c) { BblValue r; r.type = BBL::Type::Fn; r.isClosure = true; r.closureVal = c; return r; }
     static BblValue makeStruct(BblStruct* s) { BblValue r; r.type = BBL::Type::Struct; r.structVal = s; return r; }
     static BblValue makeVector(BblVec* v) { BblValue r; r.type = BBL::Type::Vector; r.vectorVal = v; return r; }
     static BblValue makeTable(BblTable* t) { BblValue r; r.type = BBL::Type::Table; r.tableVal = t; return r; }
@@ -436,6 +442,8 @@ struct BblState {
     std::vector<BblVec*> allocatedVectors;
     std::vector<BblTable*> allocatedTables;
     std::vector<BblUserData*> allocatedUserDatas;
+    std::vector<BblClosure*> allocatedClosures;
+    std::unique_ptr<VmState> vm;
 
     // Type descriptors
     std::unordered_map<std::string, StructDesc> structDescs;
@@ -463,6 +471,7 @@ struct BblState {
     std::string currentFile;
     std::string scriptDir;
     bool allowOpenFilesystem = false;
+    bool useBytecode = false;
 
     // Flow control (break/continue state flag)
     static constexpr uint8_t FlowNone = 0;

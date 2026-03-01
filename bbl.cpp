@@ -16,6 +16,8 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <glob.h>
+#include "compiler.h"
+#include "vm.h"
 
 // ---------- BblValue ----------
 
@@ -80,7 +82,10 @@ bool BblValue::operator==(const BblValue& o) const {
         case BBL::Type::Binary: return binaryVal == o.binaryVal;
         case BBL::Type::Fn:
             if (isCFn != o.isCFn) return false;
-            return isCFn ? (cfnVal == o.cfnVal) : (fnVal == o.fnVal);
+            if (isClosure != o.isClosure) return false;
+            if (isCFn) return cfnVal == o.cfnVal;
+            if (isClosure) return closureVal == o.closureVal;
+            return fnVal == o.fnVal;
         case BBL::Type::Struct:
             return structVal == o.structVal ||
                    (structVal->desc == o.structVal->desc && structVal->data == o.structVal->data);
@@ -510,6 +515,7 @@ std::vector<AstNode> parse(BblLexer& lexer) {
 
 BblState::BblState() {
     rootScope.bindings = std::make_unique<std::unordered_map<uint32_t, BblValue>>();
+    vm = std::make_unique<VmState>();
 }
 
 BblState::~BblState() {
@@ -536,6 +542,9 @@ BblState::~BblState() {
             u->desc->destructor(u->data);
         }
         delete u;
+    }
+    for (auto* c : allocatedClosures) {
+        delete c;
     }
 }
 
@@ -620,7 +629,12 @@ static void gcMark(BblValue& val) {
             }
             break;
         case BBL::Type::Fn:
-            if (!val.isCFn && val.fnVal && !val.fnVal->marked) {
+            if (val.isClosure && val.closureVal && !val.closureVal->marked) {
+                val.closureVal->marked = true;
+                for (auto& cap : val.closureVal->captures) {
+                    gcMark(cap);
+                }
+            } else if (!val.isCFn && !val.isClosure && val.fnVal && !val.fnVal->marked) {
                 val.fnVal->marked = true;
                 for (auto& [name, cap] : val.fnVal->captures) {
                     gcMark(cap);
@@ -675,6 +689,20 @@ void BblState::gc() {
     gcMark(returnValue);
     gcMark(lastRecvPayload);
 
+    // Mark VM stack and frame closures
+    if (vm) {
+        for (BblValue* p = vm->stack.data(); p < vm->stackTop; p++)
+            gcMark(*p);
+        for (int i = 0; i < vm->frameCount; i++) {
+            if (vm->frames[i].closure) {
+                BblValue cv = BblValue::makeClosure(vm->frames[i].closure);
+                gcMark(cv);
+            }
+        }
+        for (auto& [id, val] : vm->globals)
+            gcMark(val);
+    }
+
     // Sweep helper — partition by mark, cleanup + delete unmarked, clear marks
     auto sweepPool = [](auto& pool, auto cleanup) {
         auto mid = std::partition(pool.begin(), pool.end(),
@@ -690,6 +718,7 @@ void BblState::gc() {
 
     sweepPool(allocatedBinaries, noop);
     sweepPool(allocatedFns, noop);
+    sweepPool(allocatedClosures, noop);
     sweepPool(allocatedStructs, noop);
     sweepPool(allocatedVectors, noop);
     sweepPool(allocatedTables, noop);
@@ -704,6 +733,7 @@ void BblState::gc() {
 
     // Adaptive threshold: next GC when allocations double the surviving set
     size_t liveCount = allocatedBinaries.size() + allocatedFns.size()
+                     + allocatedClosures.size()
                      + allocatedStructs.size() + allocatedVectors.size()
                      + allocatedTables.size() + allocatedUserDatas.size()
                      + allocatedStrings.size();
@@ -2513,6 +2543,13 @@ BblValue BblState::callFn(BblFn* fn, const BblValue* args, size_t argc, int call
 void BblState::exec(const std::string& source) {
     BblLexer lexer(source.c_str());
     auto nodes = parse(lexer);
+    if (useBytecode) {
+        Chunk chunk = compile(*this, nodes);
+        auto result = vmExecute(*this, chunk);
+        if (result != INTERPRET_OK)
+            throw BBL::Error{"bytecode execution failed"};
+        return;
+    }
     for (auto& node : nodes) {
         if (allocCount >= gcThreshold) gc();
         eval(node, rootScope);
@@ -2527,6 +2564,13 @@ void BblState::exec(const std::string& source) {
 BblValue BblState::execExpr(const std::string& source) {
     BblLexer lexer(source.c_str());
     auto nodes = parse(lexer);
+    if (useBytecode) {
+        Chunk chunk = compile(*this, nodes);
+        auto result = vmExecute(*this, chunk);
+        if (result != INTERPRET_OK)
+            throw BBL::Error{"bytecode execution failed"};
+        return vm->stack[0];
+    }
     BblValue result;
     result.type = BBL::Type::Null;
     for (auto& node : nodes) {

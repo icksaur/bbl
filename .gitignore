@@ -7,4 +7,8 @@ plan.md
 spec.md
 backlog.md
 pkg/
-*.zst
+*.zstbuild_prof/
+luac.out
+build_prof/
+*.pkg.tar.zst
+luac.out

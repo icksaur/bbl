@@ -1,5 +1,3 @@
-// gc_pressure.bbl — rapid allocation to stress GC
-// Measures: alloc + GC trigger frequency + sweep cost
 (= i 0)
 (loop (< i 100000)
     (= t (table "k" i))
