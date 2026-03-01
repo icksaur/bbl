@@ -2,6 +2,7 @@ doc/
 build/
 build_dbg/
 build_rel/
+build-release/
 plan.md
 spec.md
 backlog.md
