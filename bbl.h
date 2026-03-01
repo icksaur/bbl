@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <expected>
 #include <string>
 #include <string_view>
 #include <ostream>
@@ -30,6 +31,8 @@ enum class Type {
 struct Error {
     std::string what;
 };
+
+enum class GetError { NotFound, TypeMismatch };
 
 } // namespace BBL
 
@@ -230,7 +233,7 @@ struct BblTable {
     bool marked = false;
 
     size_t length() const { return entries.size(); }
-    BblValue get(const BblValue& key) const;
+    std::expected<BblValue, BBL::GetError> get(const BblValue& key) const;
     void set(const BblValue& key, const BblValue& val);
     bool has(const BblValue& key) const;
     bool del(const BblValue& key);
@@ -456,20 +459,22 @@ struct BblState {
 
     template<typename T>
     T* getVectorData(const std::string& name) {
-        BblValue v = get(name);
-        if (v.type != BBL::Type::Vector) {
-            throw BBL::Error{"type mismatch: expected vector, got " + std::string(typeName(v.type))};
+        auto v = get(name);
+        if (!v) throw BBL::Error{"undefined symbol: " + name};
+        if (v->type != BBL::Type::Vector) {
+            throw BBL::Error{"type mismatch: expected vector, got " + std::string(typeName(v->type))};
         }
-        return reinterpret_cast<T*>(v.vectorVal->data.data());
+        return reinterpret_cast<T*>(v->vectorVal->data.data());
     }
 
     template<typename T>
     size_t getVectorLength(const std::string& name) {
-        BblValue v = get(name);
-        if (v.type != BBL::Type::Vector) {
+        auto v = get(name);
+        if (!v) throw BBL::Error{"undefined symbol: " + name};
+        if (v->type != BBL::Type::Vector) {
             throw BBL::Error{"type mismatch: expected vector"};
         }
-        return v.vectorVal->length();
+        return v->vectorVal->length();
     }
 
     // C function arg access
@@ -494,14 +499,14 @@ struct BblState {
 
     // Introspection
     bool has(const std::string& name) const;
-    BBL::Type getType(const std::string& name) const;
-    BblValue get(const std::string& name) const;
-    int64_t getInt(const std::string& name) const;
-    double getFloat(const std::string& name) const;
-    bool getBool(const std::string& name) const;
-    const char* getString(const std::string& name) const;
-    BblTable* getTable(const std::string& name) const;
-    BblBinary* getBinary(const std::string& name) const;
+    std::expected<BBL::Type, BBL::GetError> getType(const std::string& name) const;
+    std::expected<BblValue, BBL::GetError> get(const std::string& name) const;
+    std::expected<int64_t, BBL::GetError> getInt(const std::string& name) const;
+    std::expected<double, BBL::GetError> getFloat(const std::string& name) const;
+    std::expected<bool, BBL::GetError> getBool(const std::string& name) const;
+    std::expected<const char*, BBL::GetError> getString(const std::string& name) const;
+    std::expected<BblTable*, BBL::GetError> getTable(const std::string& name) const;
+    std::expected<BblBinary*, BBL::GetError> getBinary(const std::string& name) const;
 
     // Setters
     void setInt(const std::string& name, int64_t val);

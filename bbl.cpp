@@ -28,11 +28,11 @@ static bool bblValueKeyEqual(const BblValue& a, const BblValue& b) {
 
 // ---------- BblTable ----------
 
-BblValue BblTable::get(const BblValue& key) const {
+std::expected<BblValue, BBL::GetError> BblTable::get(const BblValue& key) const {
     for (auto& [k, v] : entries) {
         if (bblValueKeyEqual(k, key)) return v;
     }
-    return BblValue::makeNull();
+    return std::unexpected(BBL::GetError::NotFound);
 }
 
 void BblTable::set(const BblValue& key, const BblValue& val) {
@@ -802,7 +802,7 @@ BblValue BblState::eval(const AstNode& node, BblScope& scope) {
                     return readVecElem(left.vectorVal, static_cast<size_t>(idx));
                 }
                 if (left.type == BBL::Type::Table) {
-                    return left.tableVal->get(BblValue::makeInt(idx));
+                    return left.tableVal->get(BblValue::makeInt(idx)).value_or(BblValue::makeNull());
                 }
                 throw BBL::Error{"integer index not supported on " + typeName(left.type)};
             }
@@ -822,7 +822,7 @@ BblValue BblState::eval(const AstNode& node, BblScope& scope) {
             if (left.type == BBL::Type::Table) {
                 // Dot on table is always key lookup — no method-first resolution
                 BblValue key = BblValue::makeString(intern(field));
-                return left.tableVal->get(key);
+                return left.tableVal->get(key).value_or(BblValue::makeNull());
             }
             throw BBL::Error{typeName(left.type) + " has no fields"};
         }
@@ -1802,8 +1802,8 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                 return evalTableMethod(obj.tableVal, method, node, scope);
             }
             // Lua-style self-passing sugar: look up method as key, call with table as first arg
-            BblValue funcVal = obj.tableVal->get(BblValue::makeString(intern(method)));
-            if (funcVal.type != BBL::Type::Fn) {
+            auto funcResult = obj.tableVal->get(BblValue::makeString(intern(method)));
+            if (!funcResult || funcResult->type != BBL::Type::Fn) {
                 throw BBL::Error{"table has no method " + method + " and key '" + method + "' is not a function"};
             }
             // Evaluate call arguments
@@ -1812,6 +1812,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
             for (size_t i = 1; i < node.children.size(); i++) {
                 selfArgs.push_back(eval(node.children[i], scope));
             }
+            BblValue funcVal = *funcResult;
             if (funcVal.isCFn) {
                 callArgs = std::move(selfArgs);
                 hasReturn = false;
@@ -2211,7 +2212,7 @@ BblValue BblState::evalStringMethod(BblString* strObj, const std::string& method
             BblTable* tbl = container.tableVal;
             for (int64_t i = 0; i < tbl->nextIntKey; i++) {
                 if (i > 0) result += data;
-                BblValue elem = tbl->get(BblValue::makeInt(i));
+                BblValue elem = tbl->get(BblValue::makeInt(i)).value_or(BblValue::makeNull());
                 result += valueToString(elem);
             }
         } else if (container.type == BBL::Type::Vector) {
@@ -2283,7 +2284,7 @@ BblValue BblState::evalTableMethod(BblTable* tbl, const std::string& method,
             throw BBL::Error{"table.get requires a key argument"};
         }
         BblValue key = eval(node.children[1], scope);
-        return tbl->get(key);
+        return tbl->get(key).value_or(BblValue::makeNull());
     }
     if (method == "set") {
         if (node.children.size() < 3) {
@@ -2522,70 +2523,64 @@ bool BblState::has(const std::string& name) const {
     return rootScope.bindings->count(id) > 0;
 }
 
-BBL::Type BblState::getType(const std::string& name) const {
+std::expected<BBL::Type, BBL::GetError> BblState::getType(const std::string& name) const {
     uint32_t id = resolveSymbol(name);
     auto it = rootScope.bindings->find(id);
     if (it == rootScope.bindings->end()) {
-        return BBL::Type::Null;
+        return std::unexpected(BBL::GetError::NotFound);
     }
     return it->second.type;
 }
 
-BblValue BblState::get(const std::string& name) const {
+std::expected<BblValue, BBL::GetError> BblState::get(const std::string& name) const {
     uint32_t id = resolveSymbol(name);
     auto it = rootScope.bindings->find(id);
     if (it == rootScope.bindings->end()) {
-        throw BBL::Error{"undefined symbol: " + name};
+        return std::unexpected(BBL::GetError::NotFound);
     }
     return it->second;
 }
 
-int64_t BblState::getInt(const std::string& name) const {
-    BblValue v = get(name);
-    if (v.type != BBL::Type::Int) {
-        throw BBL::Error{"type mismatch: expected int, got " + typeName(v.type)};
-    }
-    return v.intVal;
+std::expected<int64_t, BBL::GetError> BblState::getInt(const std::string& name) const {
+    auto v = get(name);
+    if (!v) return std::unexpected(v.error());
+    if (v->type != BBL::Type::Int) return std::unexpected(BBL::GetError::TypeMismatch);
+    return v->intVal;
 }
 
-double BblState::getFloat(const std::string& name) const {
-    BblValue v = get(name);
-    if (v.type != BBL::Type::Float) {
-        throw BBL::Error{"type mismatch: expected float, got " + typeName(v.type)};
-    }
-    return v.floatVal;
+std::expected<double, BBL::GetError> BblState::getFloat(const std::string& name) const {
+    auto v = get(name);
+    if (!v) return std::unexpected(v.error());
+    if (v->type != BBL::Type::Float) return std::unexpected(BBL::GetError::TypeMismatch);
+    return v->floatVal;
 }
 
-bool BblState::getBool(const std::string& name) const {
-    BblValue v = get(name);
-    if (v.type != BBL::Type::Bool) {
-        throw BBL::Error{"type mismatch: expected bool, got " + typeName(v.type)};
-    }
-    return v.boolVal;
+std::expected<bool, BBL::GetError> BblState::getBool(const std::string& name) const {
+    auto v = get(name);
+    if (!v) return std::unexpected(v.error());
+    if (v->type != BBL::Type::Bool) return std::unexpected(BBL::GetError::TypeMismatch);
+    return v->boolVal;
 }
 
-const char* BblState::getString(const std::string& name) const {
-    BblValue v = get(name);
-    if (v.type != BBL::Type::String) {
-        throw BBL::Error{"type mismatch: expected string, got " + typeName(v.type)};
-    }
-    return v.stringVal->data.c_str();
+std::expected<const char*, BBL::GetError> BblState::getString(const std::string& name) const {
+    auto v = get(name);
+    if (!v) return std::unexpected(v.error());
+    if (v->type != BBL::Type::String) return std::unexpected(BBL::GetError::TypeMismatch);
+    return v->stringVal->data.c_str();
 }
 
-BblTable* BblState::getTable(const std::string& name) const {
-    BblValue v = get(name);
-    if (v.type != BBL::Type::Table) {
-        throw BBL::Error{"type mismatch: expected table, got " + typeName(v.type)};
-    }
-    return v.tableVal;
+std::expected<BblTable*, BBL::GetError> BblState::getTable(const std::string& name) const {
+    auto v = get(name);
+    if (!v) return std::unexpected(v.error());
+    if (v->type != BBL::Type::Table) return std::unexpected(BBL::GetError::TypeMismatch);
+    return v->tableVal;
 }
 
-BblBinary* BblState::getBinary(const std::string& name) const {
-    BblValue v = get(name);
-    if (v.type != BBL::Type::Binary) {
-        throw BBL::Error{"type mismatch: expected binary, got " + typeName(v.type)};
-    }
-    return v.binaryVal;
+std::expected<BblBinary*, BBL::GetError> BblState::getBinary(const std::string& name) const {
+    auto v = get(name);
+    if (!v) return std::unexpected(v.error());
+    if (v->type != BBL::Type::Binary) return std::unexpected(BBL::GetError::TypeMismatch);
+    return v->binaryVal;
 }
 
 // ---------- Setters ----------

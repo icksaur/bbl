@@ -18,7 +18,7 @@ int main() {
 
     auto* verts = bbl.getVectorData<vertex>("player-verts");
     size_t count = bbl.getVectorLength<vertex>("player-verts");
-    auto* tex = bbl.getBinary("player-texture");
+    auto* tex = bbl.getBinary("player-texture").value();
 
     // use verts, tex for GPU upload, serialization, etc.
     // ~BblState frees all script data, runs GC
@@ -164,19 +164,29 @@ bbl.defn("my-print", myPrint);
 
 ## Environment Introspection
 
+### Error Handling
+
+Getter methods return `std::expected<T, BBL::GetError>` instead of throwing.
+The `BBL::GetError` enum has two values:
+
+| Value                          | Meaning                                  |
+|--------------------------------|------------------------------------------|
+| `BBL::GetError::NotFound`      | Variable does not exist in root scope    |
+| `BBL::GetError::TypeMismatch`  | Variable exists but has the wrong type   |
+
 ### Reading Variables
 
-| Method                      | Returns        | Notes                            |
-|-----------------------------|----------------|----------------------------------|
-| `bbl.has(name)`             | `bool`         | Variable exists in root scope    |
-| `bbl.getType(name)`         | `BBL::Type`    | Type tag                         |
-| `bbl.get(name)`             | `BblValue`     | Generic access                   |
-| `bbl.getInt(name)`          | `int64_t`      |                                  |
-| `bbl.getFloat(name)`        | `double`       |                                  |
-| `bbl.getBool(name)`         | `bool`         |                                  |
-| `bbl.getString(name)`       | `const char*`  | Pointer to interned string data  |
-| `bbl.getTable(name)`        | `BblTable*`    |                                  |
-| `bbl.getBinary(name)`       | `BblBinary*`   |                                  |
+| Method                      | Returns                                      | Notes                            |
+|-----------------------------|----------------------------------------------|----------------------------------|
+| `bbl.has(name)`             | `bool`                                       | Variable exists in root scope    |
+| `bbl.getType(name)`         | `std::expected<BBL::Type, BBL::GetError>`    | Type tag (NotFound on missing)   |
+| `bbl.get(name)`             | `std::expected<BblValue, BBL::GetError>`     | Generic access                   |
+| `bbl.getInt(name)`          | `std::expected<int64_t, BBL::GetError>`      |                                  |
+| `bbl.getFloat(name)`        | `std::expected<double, BBL::GetError>`       |                                  |
+| `bbl.getBool(name)`         | `std::expected<bool, BBL::GetError>`         |                                  |
+| `bbl.getString(name)`       | `std::expected<const char*, BBL::GetError>`  | Pointer to interned string data  |
+| `bbl.getTable(name)`        | `std::expected<BblTable*, BBL::GetError>`    |                                  |
+| `bbl.getBinary(name)`       | `std::expected<BblBinary*, BBL::GetError>`   |                                  |
 
 ### Writing Variables
 
@@ -193,9 +203,19 @@ bbl.defn("my-print", myPrint);
 ```cpp
 bbl.exec("(= score 42)");
 
+// Check + use with .value() (throws std::bad_expected_access on error)
 if (bbl.has("score")) {
-    int64_t score = bbl.getInt("score");
+    int64_t score = bbl.getInt("score").value();
     printf("Score: %lld\n", (long long)score);
+}
+
+// Pattern-match on the result
+if (auto score = bbl.getInt("score")) {
+    printf("Score: %lld\n", (long long)*score);
+} else if (score.error() == BBL::GetError::NotFound) {
+    printf("No score variable\n");
+} else {
+    printf("'score' is not an int\n");
 }
 
 bbl.setInt("level", 5);
@@ -648,12 +668,14 @@ struct BblTable {
     int64_t nextIntKey;     // auto-increment for push (0-based)
     bool marked;
     size_t length() const;
-    BblValue get(const BblValue& key) const;
+    std::expected<BblValue, BBL::GetError> get(const BblValue& key) const;
     void set(const BblValue& key, const BblValue& val);
     bool has(const BblValue& key) const;
     bool del(const BblValue& key);
 };
 ```
+
+`get()` returns `NotFound` when the key doesn't exist.
 
 Table operations are O(n) linear scans.  Fine for small tables (< 50 entries).
 For large collections, use vectors with integer indexing.

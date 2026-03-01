@@ -327,25 +327,25 @@ TEST(test_intern_different_pointer) {
 TEST(test_scope_assign_get) {
     BblState bbl;
     bbl.exec("(= x 10)");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)10);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)10);
 }
 
 TEST(test_scope_set) {
     BblState bbl;
     bbl.exec("(= x 10) (= x 20)");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)20);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)20);
 }
 
 TEST(test_scope_assign_creates) {
     BblState bbl;
     bbl.exec("(= y 5)");
-    ASSERT_EQ(bbl.getInt("y"), (int64_t)5);
+    ASSERT_EQ(bbl.getInt("y").value(), (int64_t)5);
 }
 
 TEST(test_scope_shadow) {
     BblState bbl;
     bbl.exec("(= x 1) (= x 2)");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)2);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)2);
 }
 
 // ========== Arithmetic Tests ==========
@@ -353,49 +353,49 @@ TEST(test_scope_shadow) {
 TEST(test_add_int) {
     BblState bbl;
     bbl.exec("(= x (+ 1 2))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)3);
 }
 
 TEST(test_add_float) {
     BblState bbl;
     bbl.exec("(= x (+ 1.0 2.0))");
-    ASSERT_NEAR(bbl.getFloat("x"), 3.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("x").value(), 3.0, 0.001);
 }
 
 TEST(test_add_promotion) {
     BblState bbl;
     bbl.exec("(= x (+ 1 2.0))");
-    ASSERT_NEAR(bbl.getFloat("x"), 3.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("x").value(), 3.0, 0.001);
 }
 
 TEST(test_multiply) {
     BblState bbl;
     bbl.exec("(= x (* 3 4))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)12);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)12);
 }
 
 TEST(test_int_division) {
     BblState bbl;
     bbl.exec("(= x (/ 10 3))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)3);
 }
 
 TEST(test_float_division) {
     BblState bbl;
     bbl.exec("(= x (/ 10.0 3.0))");
-    ASSERT_NEAR(bbl.getFloat("x"), 3.333, 0.01);
+    ASSERT_NEAR(bbl.getFloat("x").value(), 3.333, 0.01);
 }
 
 TEST(test_modulo) {
     BblState bbl;
     bbl.exec("(= x (% 10 3))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)1);
 }
 
 TEST(test_subtract) {
     BblState bbl;
     bbl.exec("(= x (- 10 3))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)7);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)7);
 }
 
 TEST(test_division_by_zero_int) {
@@ -416,7 +416,7 @@ TEST(test_add_type_error) {
 TEST(test_nested_arithmetic) {
     BblState bbl;
     bbl.exec("(= x (+ (* 2 3) (/ 10 2)))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)11);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)11);
 }
 
 // ========== Comparison Tests ==========
@@ -424,43 +424,43 @@ TEST(test_nested_arithmetic) {
 TEST(test_eq_true) {
     BblState bbl;
     bbl.exec("(= x (== 1 1))");
-    ASSERT_TRUE(bbl.getBool("x"));
+    ASSERT_TRUE(bbl.getBool("x").value());
 }
 
 TEST(test_eq_false) {
     BblState bbl;
     bbl.exec("(= x (== 1 2))");
-    ASSERT_FALSE(bbl.getBool("x"));
+    ASSERT_FALSE(bbl.getBool("x").value());
 }
 
 TEST(test_lt) {
     BblState bbl;
     bbl.exec("(= x (< 1 2))");
-    ASSERT_TRUE(bbl.getBool("x"));
+    ASSERT_TRUE(bbl.getBool("x").value());
 }
 
 TEST(test_gt) {
     BblState bbl;
     bbl.exec("(= x (> 2 1))");
-    ASSERT_TRUE(bbl.getBool("x"));
+    ASSERT_TRUE(bbl.getBool("x").value());
 }
 
 TEST(test_lte) {
     BblState bbl;
     bbl.exec("(= x (<= 2 2))");
-    ASSERT_TRUE(bbl.getBool("x"));
+    ASSERT_TRUE(bbl.getBool("x").value());
 }
 
 TEST(test_gte) {
     BblState bbl;
     bbl.exec("(= x (>= 2 2))");
-    ASSERT_TRUE(bbl.getBool("x"));
+    ASSERT_TRUE(bbl.getBool("x").value());
 }
 
 TEST(test_neq) {
     BblState bbl;
     bbl.exec("(= x (!= 1 2))");
-    ASSERT_TRUE(bbl.getBool("x"));
+    ASSERT_TRUE(bbl.getBool("x").value());
 }
 
 // ========== Logic Tests ==========
@@ -468,49 +468,49 @@ TEST(test_neq) {
 TEST(test_and_true) {
     BblState bbl;
     bbl.exec("(= b (and true true))");
-    ASSERT_TRUE(bbl.getBool("b"));
+    ASSERT_TRUE(bbl.getBool("b").value());
 }
 
 TEST(test_and_false) {
     BblState bbl;
     bbl.exec("(= b (and true false))");
-    ASSERT_FALSE(bbl.getBool("b"));
+    ASSERT_FALSE(bbl.getBool("b").value());
 }
 
 TEST(test_or_true) {
     BblState bbl;
     bbl.exec("(= b (or false true))");
-    ASSERT_TRUE(bbl.getBool("b"));
+    ASSERT_TRUE(bbl.getBool("b").value());
 }
 
 TEST(test_or_false) {
     BblState bbl;
     bbl.exec("(= b (or false false))");
-    ASSERT_FALSE(bbl.getBool("b"));
+    ASSERT_FALSE(bbl.getBool("b").value());
 }
 
 TEST(test_not_true) {
     BblState bbl;
     bbl.exec("(= b (not true))");
-    ASSERT_FALSE(bbl.getBool("b"));
+    ASSERT_FALSE(bbl.getBool("b").value());
 }
 
 TEST(test_not_false) {
     BblState bbl;
     bbl.exec("(= b (not false))");
-    ASSERT_TRUE(bbl.getBool("b"));
+    ASSERT_TRUE(bbl.getBool("b").value());
 }
 
 TEST(test_short_circuit_or) {
     BblState bbl;
     bbl.exec("(= x 0) (or true (= x 1))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)0);
 }
 
 TEST(test_short_circuit_and) {
     BblState bbl;
     bbl.exec("(= x 0) (and false (= x 1))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)0);
 }
 
 TEST(test_and_type_error) {
@@ -533,19 +533,19 @@ TEST(test_not_type_error) {
 TEST(test_string_concat) {
     BblState bbl;
     bbl.exec("(= s (+ \"a\" \"b\"))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("ab"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("ab"));
 }
 
 TEST(test_string_concat_variadic) {
     BblState bbl;
     bbl.exec("(= s (+ \"hello\" \" \" \"world\"))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("hello world"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("hello world"));
 }
 
 TEST(test_string_int_auto_coerce) {
     BblState bbl;
     bbl.exec("(= s (+ \"a\" 1))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("a1"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("a1"));
 }
 
 // ========== If/Loop Tests ==========
@@ -553,43 +553,43 @@ TEST(test_string_int_auto_coerce) {
 TEST(test_if_then) {
     BblState bbl;
     bbl.exec("(= x 0) (if true (= x 1))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)1);
 }
 
 TEST(test_if_else) {
     BblState bbl;
     bbl.exec("(= x 0) (if false (= x 1) (= x 2))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)2);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)2);
 }
 
 TEST(test_if_returns_then_value) {
     BblState bbl;
     bbl.exec("(= x (if true 42))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)42);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)42);
 }
 
 TEST(test_if_returns_else_value) {
     BblState bbl;
     bbl.exec("(= x (if false 1 2))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)2);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)2);
 }
 
 TEST(test_if_no_else_returns_null) {
     BblState bbl;
     bbl.exec("(= x (if false 42))");
-    ASSERT_EQ(bbl.getType("x"), BBL::Type::Null);
+    ASSERT_EQ(bbl.getType("x").value(), BBL::Type::Null);
 }
 
 TEST(test_if_expr_nested) {
     BblState bbl;
     bbl.exec("(= x (if true (if false 1 2) 3))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)2);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)2);
 }
 
 TEST(test_if_expr_with_do) {
     BblState bbl;
     bbl.exec("(= x (if true (do 1 2 3) 0))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)3);
 }
 
 TEST(test_args_table_no_args) {
@@ -598,7 +598,7 @@ TEST(test_args_table_no_args) {
     BblTable* argsTable = bbl.allocTable();
     bbl.set("args", BblValue::makeTable(argsTable));
     bbl.exec("(= n (args:length))");
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)0);
 }
 
 TEST(test_args_table_no_args_with_default) {
@@ -607,7 +607,7 @@ TEST(test_args_table_no_args_with_default) {
     BblTable* argsTable = bbl.allocTable();
     bbl.set("args", BblValue::makeTable(argsTable));
     bbl.exec("(= v (if (args:has 0) (args:at 0) \"default\"))");
-    ASSERT_EQ(std::string(bbl.getString("v")), std::string("default"));
+    ASSERT_EQ(std::string(bbl.getString("v").value()), std::string("default"));
 }
 
 TEST(test_args_table_multi) {
@@ -619,9 +619,9 @@ TEST(test_args_table_multi) {
     argsTable->set(BblValue::makeInt(2), BblValue::makeString(bbl.intern("world")));
     bbl.set("args", BblValue::makeTable(argsTable));
     bbl.exec("(= a (args:at 0)) (= b (args:at 1)) (= c (args:at 2))");
-    ASSERT_EQ(std::string(bbl.getString("a")), std::string("hello"));
-    ASSERT_EQ(std::string(bbl.getString("b")), std::string("42"));
-    ASSERT_EQ(std::string(bbl.getString("c")), std::string("world"));
+    ASSERT_EQ(std::string(bbl.getString("a").value()), std::string("hello"));
+    ASSERT_EQ(std::string(bbl.getString("b").value()), std::string("42"));
+    ASSERT_EQ(std::string(bbl.getString("c").value()), std::string("world"));
 }
 
 TEST(test_if_non_bool_condition) {
@@ -632,13 +632,13 @@ TEST(test_if_non_bool_condition) {
 TEST(test_loop_basic) {
     BblState bbl;
     bbl.exec("(= i 0) (loop (< i 5) (= i (+ i 1)))");
-    ASSERT_EQ(bbl.getInt("i"), (int64_t)5);
+    ASSERT_EQ(bbl.getInt("i").value(), (int64_t)5);
 }
 
 TEST(test_loop_statement_returns_null) {
     BblState bbl;
     bbl.exec("(= x (loop false 1))");
-    ASSERT_EQ(bbl.getType("x"), BBL::Type::Null);
+    ASSERT_EQ(bbl.getType("x").value(), BBL::Type::Null);
 }
 
 TEST(test_loop_non_bool_condition) {
@@ -669,13 +669,13 @@ TEST(test_each_table_basic) {
 TEST(test_each_empty) {
     BblState bbl;
     bbl.exec("(= v (vector int)) (each i v (= x 999))");
-    ASSERT_EQ(bbl.getInt("i"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("i").value(), (int64_t)0);
 }
 
 TEST(test_each_index_survives) {
     BblState bbl;
     bbl.exec("(= v (vector int 10 20 30)) (each i v (= x 0))");
-    ASSERT_EQ(bbl.getInt("i"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("i").value(), (int64_t)3);
 }
 
 TEST(test_each_type_error) {
@@ -704,9 +704,9 @@ TEST(test_each_closure_capture) {
         "(= r1 ((fns:at 1)))"
         "(= r2 ((fns:at 2)))"
     );
-    ASSERT_EQ(bbl.getInt("r0"), (int64_t)0);
-    ASSERT_EQ(bbl.getInt("r1"), (int64_t)1);
-    ASSERT_EQ(bbl.getInt("r2"), (int64_t)2);
+    ASSERT_EQ(bbl.getInt("r0").value(), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("r1").value(), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("r2").value(), (int64_t)2);
 }
 
 TEST(test_each_nested) {
@@ -721,13 +721,13 @@ TEST(test_each_nested) {
     );
     // v1 has 2 elements (1,2), v2 has 3 (10,20,30)
     // Each pair: (1+10)+(1+20)+(1+30)+(2+10)+(2+20)+(2+30) = 11+21+31+12+22+32 = 129
-    ASSERT_EQ(bbl.getInt("sum"), (int64_t)129);
+    ASSERT_EQ(bbl.getInt("sum").value(), (int64_t)129);
 }
 
 TEST(test_each_returns_null) {
     BblState bbl;
     bbl.exec("(= v (vector int 1 2 3)) (= x (each i v 1))");
-    ASSERT_EQ(bbl.getType("x"), BBL::Type::Null);
+    ASSERT_EQ(bbl.getType("x").value(), BBL::Type::Null);
 }
 
 TEST(test_each_inside_closure) {
@@ -737,7 +737,7 @@ TEST(test_each_inside_closure) {
         "(= f (fn () (= sum 0) (each i data (= sum (+ sum (data:at i)))) sum))"
         "(= r (f))"
     );
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)6);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)6);
 }
 
 // ========== Function Tests ==========
@@ -745,19 +745,19 @@ TEST(test_each_inside_closure) {
 TEST(test_fn_basic) {
     BblState bbl;
     bbl.exec("(= f (fn (x) (* x 2))) (= r (f 5))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)10);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)10);
 }
 
 TEST(test_fn_multi_arg) {
     BblState bbl;
     bbl.exec("(= f (fn (x y) (+ x y))) (= r (f 3 4))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)7);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)7);
 }
 
 TEST(test_fn_zero_arg) {
     BblState bbl;
     bbl.exec("(= f (fn () 42)) (= r (f))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)42);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)42);
 }
 
 TEST(test_fn_arity_error) {
@@ -768,31 +768,31 @@ TEST(test_fn_arity_error) {
 TEST(test_closure_value_capture) {
     BblState bbl;
     bbl.exec("(= x 10) (= f (fn () x)) (= x 99) (= r (f))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)10);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)10);
 }
 
 TEST(test_closure_write_no_leak) {
     BblState bbl;
     bbl.exec("(= x 10) (= f (fn () (= x 20))) (f)");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)10);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)10);
 }
 
 TEST(test_higher_order) {
     BblState bbl;
     bbl.exec("(= make (fn (n) (fn (x) (+ x n)))) (= add5 (make 5)) (= r (add5 3))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)8);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)8);
 }
 
 TEST(test_last_expression_return) {
     BblState bbl;
     bbl.exec("(= f (fn () 1 2 3)) (= r (f))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)3);
 }
 
 TEST(test_fn_with_def_inside) {
     BblState bbl;
     bbl.exec("(= f (fn (x) (= y (* x 2)) (+ y 1))) (= r (f 5))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)11);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)11);
 }
 
 TEST(test_fn_iterative_factorial) {
@@ -809,7 +809,7 @@ TEST(test_fn_iterative_factorial) {
         ))
         (= r (factorial 5))
     )");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)120);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)120);
 }
 
 // ========== Exec Tests ==========
@@ -817,27 +817,27 @@ TEST(test_fn_iterative_factorial) {
 TEST(test_exec_defines_var) {
     BblState bbl;
     bbl.exec("(= x 10)");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)10);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)10);
 }
 
 TEST(test_exec_accumulates) {
     BblState bbl;
     bbl.exec("(= x 10)");
     bbl.exec("(= y (+ x 5))");
-    ASSERT_EQ(bbl.getInt("y"), (int64_t)15);
+    ASSERT_EQ(bbl.getInt("y").value(), (int64_t)15);
 }
 
 TEST(test_script_exec_returns_value) {
     BblState bbl;
     bbl.exec("(= r (exec \"(+ 1 2)\"))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)3);
 }
 
 TEST(test_script_exec_isolates_scope) {
     BblState bbl;
     bbl.exec("(= x 99) (= r (exec \"(= y 5) y\"))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)5);
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)99);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)5);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)99);
     ASSERT_FALSE(bbl.has("y"));
 }
 
@@ -853,16 +853,18 @@ TEST(test_has) {
 TEST(test_get_type) {
     BblState bbl;
     bbl.exec("(= x 1) (= s \"hi\") (= b true) (= n null)");
-    ASSERT_EQ(bbl.getType("x"), BBL::Type::Int);
-    ASSERT_EQ(bbl.getType("s"), BBL::Type::String);
-    ASSERT_EQ(bbl.getType("b"), BBL::Type::Bool);
-    ASSERT_EQ(bbl.getType("n"), BBL::Type::Null);
+    ASSERT_EQ(bbl.getType("x").value(), BBL::Type::Int);
+    ASSERT_EQ(bbl.getType("s").value(), BBL::Type::String);
+    ASSERT_EQ(bbl.getType("b").value(), BBL::Type::Bool);
+    ASSERT_EQ(bbl.getType("n").value(), BBL::Type::Null);
 }
 
 TEST(test_get_wrong_type) {
     BblState bbl;
     bbl.exec("(= x 1)");
-    ASSERT_THROW(bbl.getString("x"));
+    auto result = bbl.getString("x");
+    ASSERT_FALSE(result.has_value());
+    ASSERT_TRUE(result.error() == BBL::GetError::TypeMismatch);
 }
 
 // ========== Phase 2: C Function Registration ==========
@@ -887,21 +889,21 @@ TEST(test_defn_basic) {
     BblState bbl;
     bbl.defn("myadd", testAdd);
     bbl.exec("(= r (myadd 10 20))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)30);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)30);
 }
 
 TEST(test_defn_args) {
     BblState bbl;
     bbl.defn("count", testGetArgCount);
     bbl.exec("(= c (count 1 2 3))");
-    ASSERT_EQ(bbl.getInt("c"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("c").value(), (int64_t)3);
 }
 
 TEST(test_defn_return_int) {
     BblState bbl;
     bbl.defn("myadd", testAdd);
     bbl.exec("(= x (myadd 3 4))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)7);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)7);
 }
 
 static int testReturnString(BblState* bbl) {
@@ -913,7 +915,7 @@ TEST(test_defn_return_string) {
     BblState bbl;
     bbl.defn("greet", testReturnString);
     bbl.exec("(= s (greet))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("hello"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("hello"));
 }
 
 TEST(test_defn_arg_type_check) {
@@ -935,7 +937,7 @@ TEST(test_defn_no_return) {
     BblState bbl;
     bbl.defn("noop", testNoReturn);
     bbl.exec("(= r (noop))");
-    ASSERT_EQ(bbl.getType("r"), BBL::Type::Null);
+    ASSERT_EQ(bbl.getType("r").value(), BBL::Type::Null);
 }
 
 // ========== Phase 2: Setters ==========
@@ -943,25 +945,25 @@ TEST(test_defn_no_return) {
 TEST(test_setInt) {
     BblState bbl;
     bbl.setInt("x", 99);
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)99);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)99);
 }
 
 TEST(test_setFloat) {
     BblState bbl;
     bbl.setFloat("f", 2.5);
-    ASSERT_NEAR(bbl.getFloat("f"), 2.5, 0.001);
+    ASSERT_NEAR(bbl.getFloat("f").value(), 2.5, 0.001);
 }
 
 TEST(test_setString) {
     BblState bbl;
     bbl.setString("s", "hello");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("hello"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("hello"));
 }
 
 TEST(test_set_value) {
     BblState bbl;
     bbl.set("v", BblValue::makeBool(true));
-    ASSERT_TRUE(bbl.getBool("v"));
+    ASSERT_TRUE(bbl.getBool("v").value());
 }
 
 // ========== Phase 2: Print ==========
@@ -1060,31 +1062,31 @@ TEST(test_struct_construct) {
     addVertex(bbl);
     bbl.exec("(= v (vertex 1.0 2.0 3.0))");
     ASSERT_TRUE(bbl.has("v"));
-    ASSERT_EQ(bbl.getType("v"), BBL::Type::Struct);
+    ASSERT_EQ(bbl.getType("v").value(), BBL::Type::Struct);
 }
 
 TEST(test_struct_field_read) {
     BblState bbl;
     addVertex(bbl);
     bbl.exec("(= v (vertex 1.0 2.0 3.0)) (= rx v.x) (= ry v.y) (= rz v.z)");
-    ASSERT_NEAR(bbl.getFloat("rx"), 1.0, 0.001);
-    ASSERT_NEAR(bbl.getFloat("ry"), 2.0, 0.001);
-    ASSERT_NEAR(bbl.getFloat("rz"), 3.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("rx").value(), 1.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("ry").value(), 2.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("rz").value(), 3.0, 0.001);
 }
 
 TEST(test_struct_field_write) {
     BblState bbl;
     addVertex(bbl);
     bbl.exec("(= v (vertex 1.0 2.0 3.0)) (= v.x 5.0) (= rx v.x)");
-    ASSERT_NEAR(bbl.getFloat("rx"), 5.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("rx").value(), 5.0, 0.001);
 }
 
 TEST(test_struct_copy_semantics) {
     BblState bbl;
     addVertex(bbl);
     bbl.exec("(= a (vertex 1.0 2.0 3.0)) (= b a) (= b.x 99.0) (= ax a.x) (= bx b.x)");
-    ASSERT_NEAR(bbl.getFloat("ax"), 1.0, 0.001);
-    ASSERT_NEAR(bbl.getFloat("bx"), 99.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("ax").value(), 1.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("bx").value(), 99.0, 0.001);
 }
 
 struct Triangle {
@@ -1105,9 +1107,9 @@ TEST(test_struct_composed) {
     addTriangle(bbl);
     bbl.exec("(= tri (triangle (vertex 0 1 0) (vertex 1 0 0) (vertex -1 0 0)))");
     bbl.exec("(= ax tri.a.x)");
-    ASSERT_NEAR(bbl.getFloat("ax"), 0.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("ax").value(), 0.0, 0.001);
     bbl.exec("(= by tri.b.y)");
-    ASSERT_NEAR(bbl.getFloat("by"), 0.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("by").value(), 0.0, 0.001);
 }
 
 TEST(test_struct_arity_error) {
@@ -1133,38 +1135,38 @@ TEST(test_struct_unknown_field) {
 TEST(test_vector_int) {
     BblState bbl;
     bbl.exec("(= v (vector int 1 2 3))");
-    ASSERT_EQ(bbl.getType("v"), BBL::Type::Vector);
+    ASSERT_EQ(bbl.getType("v").value(), BBL::Type::Vector);
 }
 
 TEST(test_vector_length) {
     BblState bbl;
     bbl.exec("(= v (vector int 1 2 3)) (= n (v:length))");
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)3);
 }
 
 TEST(test_vector_at) {
     BblState bbl;
     bbl.exec("(= v (vector int 10 20 30)) (= x (v:at 1))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)20);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)20);
 }
 
 TEST(test_vector_push) {
     BblState bbl;
     bbl.exec("(= v (vector int 1 2)) (v:push 3) (= n (v:length))");
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)3);
 }
 
 TEST(test_vector_pop) {
     BblState bbl;
     bbl.exec("(= v (vector int 10 20 30)) (= last (v:pop)) (= n (v:length))");
-    ASSERT_EQ(bbl.getInt("last"), (int64_t)30);
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)2);
+    ASSERT_EQ(bbl.getInt("last").value(), (int64_t)30);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)2);
 }
 
 TEST(test_vector_clear) {
     BblState bbl;
     bbl.exec("(= v (vector int 1 2 3)) (v:clear) (= n (v:length))");
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)0);
 }
 
 TEST(test_vector_struct) {
@@ -1172,14 +1174,14 @@ TEST(test_vector_struct) {
     addVertex(bbl);
     bbl.exec("(= verts (vector vertex (vertex 0 1 0) (vertex 1 0 0)))");
     bbl.exec("(= x (verts:at 0).x)");
-    ASSERT_NEAR(bbl.getFloat("x"), 0.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("x").value(), 0.0, 0.001);
 }
 
 TEST(test_vector_push_struct) {
     BblState bbl;
     addVertex(bbl);
     bbl.exec("(= verts (vector vertex)) (verts:push (vertex 3 4 5)) (= n (verts:length))");
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)1);
 }
 
 TEST(test_vector_type_mismatch) {
@@ -1213,7 +1215,7 @@ TEST(test_vector_get_data_cpp) {
 TEST(test_vector_set_int) {
     BblState bbl;
     bbl.exec("(= v (vector int 10 20 30)) (v:set 1 99) (= r (v:at 1))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)99);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)99);
 }
 
 TEST(test_vector_set_struct) {
@@ -1222,7 +1224,7 @@ TEST(test_vector_set_struct) {
     bbl.exec("(= v (vector vertex (vertex 1 2 3) (vertex 4 5 6)))"
              "(v:set 0 (vertex 7 8 9))"
              "(= r (v:at 0).x)");
-    ASSERT_NEAR(bbl.getFloat("r"), 7.0f, 0.001f);
+    ASSERT_NEAR(bbl.getFloat("r").value(), 7.0f, 0.001f);
 }
 
 TEST(test_vector_set_out_of_bounds) {
@@ -1234,8 +1236,8 @@ TEST(test_vector_set_preserves_others) {
     BblState bbl;
     bbl.exec("(= v (vector int 10 20 30)) (v:set 1 99)"
              "(= a (v:at 0)) (= b (v:at 2))");
-    ASSERT_EQ(bbl.getInt("a"), (int64_t)10);
-    ASSERT_EQ(bbl.getInt("b"), (int64_t)30);
+    ASSERT_EQ(bbl.getInt("a").value(), (int64_t)10);
+    ASSERT_EQ(bbl.getInt("b").value(), (int64_t)30);
 }
 
 // ========== Integer Dot Syntax ==========
@@ -1243,20 +1245,20 @@ TEST(test_vector_set_preserves_others) {
 TEST(test_int_dot_vector_read) {
     BblState bbl;
     bbl.exec("(= v (vector int 10 20 30)) (= r v.1)");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)20);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)20);
 }
 
 TEST(test_int_dot_vector_write) {
     BblState bbl;
     bbl.exec("(= v (vector int 10 20 30)) (= v.1 99) (= r v.1)");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)99);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)99);
 }
 
 TEST(test_int_dot_vector_struct_chain) {
     BblState bbl;
     addVertex(bbl);
     bbl.exec("(= v (vector vertex (vertex 1 2 3))) (= r v.0.x)");
-    ASSERT_NEAR(bbl.getFloat("r"), 1.0f, 0.001f);
+    ASSERT_NEAR(bbl.getFloat("r").value(), 1.0f, 0.001f);
 }
 
 TEST(test_int_dot_vector_out_of_bounds) {
@@ -1267,13 +1269,13 @@ TEST(test_int_dot_vector_out_of_bounds) {
 TEST(test_int_dot_table_read) {
     BblState bbl;
     bbl.exec(R"((= t (table)) (t:push "hello") (= r t.0))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("hello"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("hello"));
 }
 
 TEST(test_int_dot_table_write) {
     BblState bbl;
     bbl.exec(R"((= t (table)) (t:push "hello") (= t.0 "world") (= r t.0))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("world"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("world"));
 }
 
 TEST(test_int_dot_on_int_error) {
@@ -1289,7 +1291,7 @@ TEST(test_dot_on_int_error) {
 TEST(test_string_length_method) {
     BblState bbl;
     bbl.exec("(= s \"hello\") (= n (s:length))");
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)5);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)5);
 }
 
 // ========== Phase 4: Tables ==========
@@ -1297,22 +1299,22 @@ TEST(test_string_length_method) {
 TEST(test_table_construct_string_keys) {
     BblState bbl;
     bbl.exec(R"((= t (table "name" "hero" "hp" 100)))");
-    ASSERT_EQ(bbl.getType("t"), BBL::Type::Table);
-    auto* tbl = bbl.getTable("t");
+    ASSERT_EQ(bbl.getType("t").value(), BBL::Type::Table);
+    auto* tbl = bbl.getTable("t").value();
     ASSERT_EQ(tbl->length(), (size_t)2);
 }
 
 TEST(test_table_dot_read_string_key) {
     BblState bbl;
     bbl.exec(R"((= t (table "name" "hero" "hp" 100)) (= n t.name) (= h t.hp))");
-    ASSERT_EQ(std::string(bbl.getString("n")), std::string("hero"));
-    ASSERT_EQ(bbl.getInt("h"), (int64_t)100);
+    ASSERT_EQ(std::string(bbl.getString("n").value()), std::string("hero"));
+    ASSERT_EQ(bbl.getInt("h").value(), (int64_t)100);
 }
 
 TEST(test_table_integer_indexed) {
     BblState bbl;
     bbl.exec(R"((= t (table 1 "sword" 2 "shield" 3 "potion")) (= v (t:at 0)))");
-    ASSERT_EQ(std::string(bbl.getString("v")), std::string("sword"));
+    ASSERT_EQ(std::string(bbl.getString("v").value()), std::string("sword"));
 }
 
 TEST(test_table_get_set) {
@@ -1323,8 +1325,8 @@ TEST(test_table_get_set) {
         (= a (t:get "a"))
         (= b (t:get "b"))
     )");
-    ASSERT_EQ(bbl.getInt("a"), (int64_t)1);
-    ASSERT_EQ(bbl.getInt("b"), (int64_t)2);
+    ASSERT_EQ(bbl.getInt("a").value(), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("b").value(), (int64_t)2);
 }
 
 TEST(test_table_delete) {
@@ -1334,7 +1336,7 @@ TEST(test_table_delete) {
         (t:delete "a")
         (= len (t:length))
     )");
-    ASSERT_EQ(bbl.getInt("len"), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("len").value(), (int64_t)1);
 }
 
 TEST(test_table_has) {
@@ -1344,8 +1346,8 @@ TEST(test_table_has) {
         (= yes (t:has "a"))
         (= no (t:has "b"))
     )");
-    ASSERT_TRUE(bbl.getBool("yes"));
-    ASSERT_FALSE(bbl.getBool("no"));
+    ASSERT_TRUE(bbl.getBool("yes").value());
+    ASSERT_FALSE(bbl.getBool("no").value());
 }
 
 TEST(test_table_keys) {
@@ -1355,13 +1357,13 @@ TEST(test_table_keys) {
         (= ks (t:keys))
         (= n (ks:length))
     )");
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)2);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)2);
 }
 
 TEST(test_table_length) {
     BblState bbl;
     bbl.exec(R"((= t (table "a" 1 "b" 2 "c" 3)) (= n (t:length)))");
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)3);
 }
 
 TEST(test_table_push_pop) {
@@ -1373,8 +1375,8 @@ TEST(test_table_push_pop) {
         (= len (t:length))
         (= val (t:pop))
     )");
-    ASSERT_EQ(bbl.getInt("len"), (int64_t)2);
-    ASSERT_EQ(std::string(bbl.getString("val")), std::string("second"));
+    ASSERT_EQ(bbl.getInt("len").value(), (int64_t)2);
+    ASSERT_EQ(std::string(bbl.getString("val").value()), std::string("second"));
 }
 
 TEST(test_table_method_first_resolution) {
@@ -1384,18 +1386,19 @@ TEST(test_table_method_first_resolution) {
         (= mlen (t:length))
         (= klen (t:get "length"))
     )");
-    ASSERT_EQ(bbl.getInt("mlen"), (int64_t)1);
-    ASSERT_EQ(bbl.getInt("klen"), (int64_t)42);
+    ASSERT_EQ(bbl.getInt("mlen").value(), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("klen").value(), (int64_t)42);
 }
 
 TEST(test_table_get_cpp) {
     BblState bbl;
     bbl.exec(R"((= t (table "name" "hero" "hp" 100)))");
-    BblTable* tbl = bbl.getTable("t");
+    BblTable* tbl = bbl.getTable("t").value();
     BblValue nameKey = BblValue::makeString(bbl.intern("name"));
-    BblValue nameVal = tbl->get(nameKey);
-    ASSERT_EQ(nameVal.type, BBL::Type::String);
-    ASSERT_EQ(nameVal.stringVal->data, std::string("hero"));
+    auto nameResult = tbl->get(nameKey);
+    ASSERT_TRUE(nameResult.has_value());
+    ASSERT_EQ(nameResult->type, BBL::Type::String);
+    ASSERT_EQ(nameResult->stringVal->data, std::string("hero"));
     ASSERT_EQ(tbl->length(), (size_t)2);
     ASSERT_TRUE(tbl->has(nameKey));
 }
@@ -1403,19 +1406,19 @@ TEST(test_table_get_cpp) {
 TEST(test_table_empty) {
     BblState bbl;
     bbl.exec(R"((= t (table)) (= n (t:length)))");
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)0);
 }
 
 TEST(test_table_get_missing) {
     BblState bbl;
     bbl.exec(R"((= t (table "a" 1)) (= v (t:get "missing")))");
-    ASSERT_EQ(bbl.getType("v"), BBL::Type::Null);
+    ASSERT_EQ(bbl.getType("v").value(), BBL::Type::Null);
 }
 
 TEST(test_table_delete_missing) {
     BblState bbl;
     bbl.exec(R"((= t (table "a" 1)) (t:delete "missing") (= n (t:length)))");
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)1);
 }
 
 TEST(test_table_pop_no_int_keys) {
@@ -1432,7 +1435,7 @@ TEST(test_table_closure_shared_capture) {
         (f)
         (= n (t:length))
     )");
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)1);
 }
 
 TEST(test_table_place_expression) {
@@ -1442,7 +1445,7 @@ TEST(test_table_place_expression) {
         (= t.hp 80)
         (= v t.hp)
     )");
-    ASSERT_EQ(bbl.getInt("v"), (int64_t)80);
+    ASSERT_EQ(bbl.getInt("v").value(), (int64_t)80);
 }
 
 // ========== Phase 4: String comparison ==========
@@ -1450,31 +1453,31 @@ TEST(test_table_place_expression) {
 TEST(test_string_eq_interned) {
     BblState bbl;
     bbl.exec(R"((= r (== "hello" "hello")))");
-    ASSERT_TRUE(bbl.getBool("r"));
+    ASSERT_TRUE(bbl.getBool("r").value());
 }
 
 TEST(test_string_neq) {
     BblState bbl;
     bbl.exec(R"((= r (== "a" "b")))");
-    ASSERT_FALSE(bbl.getBool("r"));
+    ASSERT_FALSE(bbl.getBool("r").value());
 }
 
 TEST(test_string_lt_basic) {
     BblState bbl;
     bbl.exec(R"((= r (< "a" "b")))");
-    ASSERT_TRUE(bbl.getBool("r"));
+    ASSERT_TRUE(bbl.getBool("r").value());
 }
 
 TEST(test_string_gt_basic) {
     BblState bbl;
     bbl.exec(R"((= r (> "a" "b")))");
-    ASSERT_FALSE(bbl.getBool("r"));
+    ASSERT_FALSE(bbl.getBool("r").value());
 }
 
 TEST(test_string_concat_multi) {
     BblState bbl;
     bbl.exec(R"((= s (+ "a" "b" "c")))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("abc"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("abc"));
 }
 
 // ========== Phase 5: Binary C++ API ==========
@@ -1482,7 +1485,7 @@ TEST(test_string_concat_multi) {
 TEST(test_get_binary) {
     BblState bbl;
     bbl.exec("(= b 0b3:abc)");
-    auto* b = bbl.getBinary("b");
+    auto* b = bbl.getBinary("b").value();
     ASSERT_EQ(b->length(), (size_t)3);
     ASSERT_EQ(b->data[0], (uint8_t)'a');
 }
@@ -1491,7 +1494,7 @@ TEST(test_set_binary) {
     BblState bbl;
     uint8_t data[] = {1, 2, 3, 4};
     bbl.setBinary("b", data, 4);
-    auto* b = bbl.getBinary("b");
+    auto* b = bbl.getBinary("b").value();
     ASSERT_EQ(b->length(), (size_t)4);
     ASSERT_EQ(b->data[0], (uint8_t)1);
     ASSERT_EQ(b->data[3], (uint8_t)4);
@@ -1516,7 +1519,7 @@ TEST(test_gc_closure_survives) {
         (= r (f 5))
     )");
     bbl.gc();
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)6);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)6);
 }
 
 TEST(test_gc_stress) {
@@ -1530,7 +1533,7 @@ TEST(test_gc_stress) {
             (= i (+ i 1))
         )
     )");
-    ASSERT_EQ(bbl.getInt("i"), (int64_t)200);
+    ASSERT_EQ(bbl.getInt("i").value(), (int64_t)200);
 }
 
 TEST(test_gc_flat_scope_slots) {
@@ -1549,13 +1552,14 @@ TEST(test_gc_flat_scope_slots) {
             (= i (+ i 1))
         )
     )");
-    BblValue last = bbl.get("last");
+    BblValue last = bbl.get("last").value();
     ASSERT_EQ(last.type, BBL::Type::Table);
     // The table from the last iteration should have "val" = 49
     BblValue key = BblValue::makeString(bbl.intern("val"));
-    BblValue val = last.tableVal->get(key);
-    ASSERT_EQ(val.type, BBL::Type::Int);
-    ASSERT_EQ(val.intVal, (int64_t)49);
+    auto val = last.tableVal->get(key);
+    ASSERT_TRUE(val.has_value());
+    ASSERT_EQ(val->type, BBL::Type::Int);
+    ASSERT_EQ(val->intVal, (int64_t)49);
 }
 
 // ========== Phase 5: TypeBuilder & Userdata ==========
@@ -1594,7 +1598,7 @@ TEST(test_typebuilder_register) {
     auto* ud = bbl.allocUserData("Counter", &counterValue);
     bbl.set("c", BblValue::makeUserData(ud));
     bbl.exec(R"((= v (c:value)))");
-    ASSERT_EQ(bbl.getInt("v"), (int64_t)42);
+    ASSERT_EQ(bbl.getInt("v").value(), (int64_t)42);
 }
 
 TEST(test_typebuilder_method_call) {
@@ -1607,7 +1611,7 @@ TEST(test_typebuilder_method_call) {
     auto* ud = bbl.allocUserData("Counter", &counterValue);
     bbl.set("c", BblValue::makeUserData(ud));
     bbl.exec(R"((c:increment) (= v (c:value)))");
-    ASSERT_EQ(bbl.getInt("v"), (int64_t)11);
+    ASSERT_EQ(bbl.getInt("v").value(), (int64_t)11);
 }
 
 TEST(test_typebuilder_destructor_on_gc) {
@@ -1642,21 +1646,21 @@ TEST(test_math_sqrt) {
     BblState bbl;
     BBL::addMath(bbl);
     bbl.exec("(= r (sqrt 4.0))");
-    ASSERT_NEAR(bbl.getFloat("r"), 2.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("r").value(), 2.0, 0.001);
 }
 
 TEST(test_math_sin) {
     BblState bbl;
     BBL::addMath(bbl);
     bbl.exec("(= r (sin 0.0))");
-    ASSERT_NEAR(bbl.getFloat("r"), 0.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("r").value(), 0.0, 0.001);
 }
 
 TEST(test_math_abs_int_promoted) {
     BblState bbl;
     BBL::addMath(bbl);
     bbl.exec("(= r (abs -5))");
-    ASSERT_NEAR(bbl.getFloat("r"), 5.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("r").value(), 5.0, 0.001);
 }
 
 TEST(test_math_sqrt_negative) {
@@ -1668,15 +1672,15 @@ TEST(test_math_sqrt_negative) {
 TEST(test_math_pi_e) {
     BblState bbl;
     BBL::addMath(bbl);
-    ASSERT_NEAR(bbl.getFloat("pi"), 3.14159, 0.001);
-    ASSERT_NEAR(bbl.getFloat("e"), 2.71828, 0.001);
+    ASSERT_NEAR(bbl.getFloat("pi").value(), 3.14159, 0.001);
+    ASSERT_NEAR(bbl.getFloat("e").value(), 2.71828, 0.001);
 }
 
 TEST(test_math_pow) {
     BblState bbl;
     BBL::addMath(bbl);
     bbl.exec("(= r (pow 2.0 10.0))");
-    ASSERT_NEAR(bbl.getFloat("r"), 1024.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("r").value(), 1024.0, 0.001);
 }
 
 // ========== Phase 5: File I/O ==========
@@ -1693,7 +1697,7 @@ TEST(test_file_write_read) {
         (= contents (f2:read))
         (f2:close)
     )");
-    ASSERT_EQ(std::string(bbl.getString("contents")), std::string("hello bbl"));
+    ASSERT_EQ(std::string(bbl.getString("contents").value()), std::string("hello bbl"));
 }
 
 TEST(test_file_read_bytes) {
@@ -1709,7 +1713,7 @@ TEST(test_file_read_bytes) {
         (f2:close)
         (= n (b:length))
     )");
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)3);
 }
 
 TEST(test_filebytes_sandbox_absolute) {
@@ -1773,7 +1777,7 @@ TEST(test_execExpr_null_for_def) {
     BblValue v = bbl.execExpr("(= x 5)");
     // def returns null
     ASSERT_TRUE(true); // just don't crash
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)5);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)5);
 }
 
 // ========== Phase 6: BBL_PATH ==========
@@ -1793,7 +1797,7 @@ TEST(test_bbl_path_resolution) {
     bbl.scriptDir = "/tmp/bbl_test_other";
     // execfile should find lib.bbl via BBL_PATH
     bbl.execfile("lib.bbl");
-    ASSERT_EQ(bbl.getBool("loaded"), true);
+    ASSERT_EQ(bbl.getBool("loaded").value(), true);
     unsetenv("BBL_PATH");
 }
 
@@ -1839,7 +1843,7 @@ TEST(test_recursive_factorial) {
         ))
         (= r (fact 10))
     )");
-    ASSERT_EQ(bbl.getInt("r"), 3628800LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 3628800LL);
 }
 
 TEST(test_recursive_fibonacci) {
@@ -1855,7 +1859,7 @@ TEST(test_recursive_fibonacci) {
         ))
         (= r (fib 10))
     )");
-    ASSERT_EQ(bbl.getInt("r"), 55LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 55LL);
 }
 
 TEST(test_recursive_countdown) {
@@ -1871,7 +1875,7 @@ TEST(test_recursive_countdown) {
         ))
         (= r (countdown 5))
     )");
-    ASSERT_EQ(bbl.getInt("r"), 0LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 0LL);
 }
 
 TEST(test_recursive_self_capture_only) {
@@ -1881,7 +1885,7 @@ TEST(test_recursive_self_capture_only) {
         (= add1 (fn (x) (+ x 1)))
         (= r (add1 9))
     )");
-    ASSERT_EQ(bbl.getInt("r"), 10LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 10LL);
 }
 
 // ========== = (assign-or-create) ==========
@@ -1889,7 +1893,7 @@ TEST(test_recursive_self_capture_only) {
 TEST(test_eq_create_new) {
     BblState bbl;
     bbl.exec(R"((= x 42))");
-    ASSERT_EQ(bbl.getInt("x"), 42LL);
+    ASSERT_EQ(bbl.getInt("x").value(), 42LL);
 }
 
 TEST(test_eq_rebind_existing) {
@@ -1898,7 +1902,7 @@ TEST(test_eq_rebind_existing) {
         (= x 10)
         (= x 20)
     )");
-    ASSERT_EQ(bbl.getInt("x"), 20LL);
+    ASSERT_EQ(bbl.getInt("x").value(), 20LL);
 }
 
 TEST(test_eq_place_table) {
@@ -1908,7 +1912,7 @@ TEST(test_eq_place_table) {
         (= t.a 99)
         (= r t.a)
     )");
-    ASSERT_EQ(bbl.getInt("r"), 99LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 99LL);
 }
 
 TEST(test_eq_closure_capture) {
@@ -1919,7 +1923,7 @@ TEST(test_eq_closure_capture) {
         (= x 99)
         (= r (f))
     )");
-    ASSERT_EQ(bbl.getInt("r"), 10LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 10LL);
 }
 
 TEST(test_eq_closure_rebind_captured) {
@@ -1933,9 +1937,9 @@ TEST(test_eq_closure_rebind_captured) {
         ))
         (= r (f))
     )");
-    ASSERT_EQ(bbl.getInt("r"), 20LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 20LL);
     // Outer x unchanged
-    ASSERT_EQ(bbl.getInt("x"), 10LL);
+    ASSERT_EQ(bbl.getInt("x").value(), 10LL);
 }
 
 TEST(test_eq_higher_order) {
@@ -1945,7 +1949,7 @@ TEST(test_eq_higher_order) {
         (= add5 (make-adder 5))
         (= r (add5 3))
     )");
-    ASSERT_EQ(bbl.getInt("r"), 8LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 8LL);
 }
 
 TEST(test_eq_recursive_fn) {
@@ -1961,7 +1965,7 @@ TEST(test_eq_recursive_fn) {
         ))
         (= r (fact 10))
     )");
-    ASSERT_EQ(bbl.getInt("r"), 3628800LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 3628800LL);
 }
 
 TEST(test_eq_create_inside_fn) {
@@ -1974,7 +1978,7 @@ TEST(test_eq_create_inside_fn) {
         ))
         (= r (f))
     )");
-    ASSERT_EQ(bbl.getInt("r"), 42LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 42LL);
 }
 
 // ========== do block tests ==========
@@ -1983,40 +1987,40 @@ TEST(test_do_basic) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= x (do 1 2 3))");
-    ASSERT_EQ(bbl.getInt("x"), 3LL);
+    ASSERT_EQ(bbl.getInt("x").value(), 3LL);
 }
 TEST(test_do_empty) {
     BblState bbl;
     bbl.exec("(= x (do))");
-    ASSERT_EQ(bbl.getType("x"), BBL::Type::Null);
+    ASSERT_EQ(bbl.getType("x").value(), BBL::Type::Null);
 }
 TEST(test_do_side_effects) {
     BblState bbl;
     bbl.exec("(= a 0) (do (= a 1) (= a 2))");
-    ASSERT_EQ(bbl.getInt("a"), 2LL);
+    ASSERT_EQ(bbl.getInt("a").value(), 2LL);
 }
 TEST(test_do_in_if_then) {
     BblState bbl;
     bbl.exec("(= a 0) (= b 0) (if true (do (= a 1) (= b 2)))");
-    ASSERT_EQ(bbl.getInt("a"), 1LL);
-    ASSERT_EQ(bbl.getInt("b"), 2LL);
+    ASSERT_EQ(bbl.getInt("a").value(), 1LL);
+    ASSERT_EQ(bbl.getInt("b").value(), 2LL);
 }
 TEST(test_do_in_if_else) {
     BblState bbl;
     bbl.exec("(= a 0) (= b 0) (if false (= a 99) (do (= a 1) (= b 2)))");
-    ASSERT_EQ(bbl.getInt("a"), 1LL);
-    ASSERT_EQ(bbl.getInt("b"), 2LL);
+    ASSERT_EQ(bbl.getInt("a").value(), 1LL);
+    ASSERT_EQ(bbl.getInt("b").value(), 2LL);
 }
 TEST(test_do_nested) {
     BblState bbl;
     bbl.exec("(= x (do (do 1 2) (do 3 4)))");
-    ASSERT_EQ(bbl.getInt("x"), 4LL);
+    ASSERT_EQ(bbl.getInt("x").value(), 4LL);
 }
 TEST(test_do_in_fn) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= f (fn (x) (do (= y (* x 2)) y))) (= r (f 5))");
-    ASSERT_EQ(bbl.getInt("r"), 10LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 10LL);
 }
 
 // ========== str built-in tests ==========
@@ -2024,27 +2028,27 @@ TEST(test_do_in_fn) {
 TEST(test_str_int) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= s (str 42))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("42"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("42"));
 }
 TEST(test_str_float) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= s (str 3.14))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("3.14"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("3.14"));
 }
 TEST(test_str_bool) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= s (str true))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("true"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("true"));
 }
 TEST(test_str_null) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= s (str null))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("null"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("null"));
 }
 TEST(test_str_concat) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= s (+ \"val=\" (str 99)))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("val=99"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("val=99"));
 }
 
 // ========== string + auto-coerce tests ==========
@@ -2052,22 +2056,22 @@ TEST(test_str_concat) {
 TEST(test_string_plus_int) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= s (+ \"val=\" 42))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("val=42"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("val=42"));
 }
 TEST(test_string_plus_float) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= s (+ \"pi=\" 3.14))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("pi=3.14"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("pi=3.14"));
 }
 TEST(test_string_plus_bool) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= s (+ \"ok=\" true))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("ok=true"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("ok=true"));
 }
 TEST(test_string_plus_mixed) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= s (+ \"a\" 1 \" b\" 2.5 \" c\" true))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("a1 b2.5 ctrue"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("a1 b2.5 ctrue"));
 }
 TEST(test_int_plus_string_still_errors) {
     BblState bbl; BBL::addStdLib(bbl);
@@ -2106,7 +2110,7 @@ TEST(test_gc_strings_pointer_equality) {
         )
         (= result (== x "hello"))
     )");
-    BblValue r = bbl.get("result");
+    BblValue r = bbl.get("result").value();
     ASSERT_EQ(r.type, BBL::Type::Bool);
     ASSERT_TRUE(r.boolVal);
 }
@@ -2116,13 +2120,13 @@ TEST(test_gc_strings_pointer_equality) {
 TEST(test_int_from_string) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (int \"42\"))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)42);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)42);
 }
 
 TEST(test_int_negative_string) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (int \"-7\"))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)-7);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)-7);
 }
 
 TEST(test_int_parse_error) {
@@ -2138,25 +2142,25 @@ TEST(test_int_partial_parse_error) {
 TEST(test_int_leading_whitespace) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (int \" 42\"))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)42);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)42);
 }
 
 TEST(test_int_truncate_float) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (int 3.9))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)3);
 }
 
 TEST(test_int_truncate_negative_float) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (int -2.7))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)-2);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)-2);
 }
 
 TEST(test_float_from_string) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (float \"3.14\"))");
-    ASSERT_NEAR(bbl.getFloat("r"), 3.14, 0.001);
+    ASSERT_NEAR(bbl.getFloat("r").value(), 3.14, 0.001);
 }
 
 TEST(test_float_partial_parse_error) {
@@ -2172,7 +2176,7 @@ TEST(test_float_parse_error) {
 TEST(test_float_from_int) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (float 42))");
-    ASSERT_NEAR(bbl.getFloat("r"), 42.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("r").value(), 42.0, 0.001);
 }
 
 // ========== String methods ==========
@@ -2181,7 +2185,7 @@ TEST(test_float_from_int) {
 TEST(test_string_at) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"hello\":at 0))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("h"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("h"));
 }
 
 TEST(test_string_at_oob) {
@@ -2193,53 +2197,53 @@ TEST(test_string_at_oob) {
 TEST(test_string_slice) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"hello world\":slice 0 5))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("hello"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("hello"));
 }
 
 TEST(test_string_slice_to_end) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"hello world\":slice 6))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("world"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("world"));
 }
 
 // find
 TEST(test_string_find) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"hello world\":find \"world\"))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)6);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)6);
 }
 
 TEST(test_string_find_not_found) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"hello\":find \"xyz\"))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)-1);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)-1);
 }
 
 TEST(test_string_find_with_start) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"hello\":find \"l\" 3))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)3);
 }
 
 // contains
 TEST(test_string_contains) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"hello world\":contains \"world\"))");
-    ASSERT_TRUE(bbl.getBool("r"));
+    ASSERT_TRUE(bbl.getBool("r").value());
 }
 
 // starts-with
 TEST(test_string_starts_with) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"hello\":starts-with \"hel\"))");
-    ASSERT_TRUE(bbl.getBool("r"));
+    ASSERT_TRUE(bbl.getBool("r").value());
 }
 
 // ends-with
 TEST(test_string_ends_with) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"hello\":ends-with \"llo\"))");
-    ASSERT_TRUE(bbl.getBool("r"));
+    ASSERT_TRUE(bbl.getBool("r").value());
 }
 
 // split
@@ -2251,9 +2255,9 @@ TEST(test_string_split) {
         (= r1 (t:get 1))
         (= r2 (t:get 2))
     )");
-    ASSERT_EQ(std::string(bbl.getString("r0")), std::string("a"));
-    ASSERT_EQ(std::string(bbl.getString("r1")), std::string("b"));
-    ASSERT_EQ(std::string(bbl.getString("r2")), std::string("c"));
+    ASSERT_EQ(std::string(bbl.getString("r0").value()), std::string("a"));
+    ASSERT_EQ(std::string(bbl.getString("r1").value()), std::string("b"));
+    ASSERT_EQ(std::string(bbl.getString("r2").value()), std::string("c"));
 }
 
 TEST(test_string_split_empty_sep) {
@@ -2270,14 +2274,14 @@ TEST(test_string_join) {
         (t:push "y")
         (= r (",":join t))
     )");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("x,y"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("x,y"));
 }
 
 // replace
 TEST(test_string_replace) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"aXbXc\":replace \"X\" \"-\"))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("a-b-c"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("a-b-c"));
 }
 
 TEST(test_string_replace_empty_error) {
@@ -2289,19 +2293,19 @@ TEST(test_string_replace_empty_error) {
 TEST(test_string_trim) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"  hi  \":trim))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("hi"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("hi"));
 }
 
 TEST(test_string_trim_left) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"  hi  \":trim-left))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("hi  "));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("hi  "));
 }
 
 TEST(test_string_trim_right) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"  hi  \":trim-right))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("  hi"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("  hi"));
 }
 
 // upper/lower — colon in value position is now an error
@@ -2319,33 +2323,33 @@ TEST(test_string_lower_value_pos_error) {
 TEST(test_string_upper_call) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"hello\":upper))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("HELLO"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("HELLO"));
 }
 
 TEST(test_string_lower_call) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (\"HELLO\":lower))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("hello"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("hello"));
 }
 
 // pad-left
 TEST(test_string_pad_left) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r ((str 42):pad-left 6))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("    42"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("    42"));
 }
 
 TEST(test_string_pad_left_fill) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r ((str 42):pad-left 6 \"0\"))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("000042"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("000042"));
 }
 
 // pad-right
 TEST(test_string_pad_right) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r ((str 42):pad-right 6))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("42    "));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("42    "));
 }
 
 // --- fmt ---
@@ -2353,25 +2357,25 @@ TEST(test_string_pad_right) {
 TEST(test_fmt_basic) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (fmt \"{} + {} = {}\" 1 2 3))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("1 + 2 = 3"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("1 + 2 = 3"));
 }
 
 TEST(test_fmt_escaped_braces) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (fmt \"use {{}} for placeholders\"))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("use {} for placeholders"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("use {} for placeholders"));
 }
 
 TEST(test_fmt_single_arg) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (fmt \"{}\" 42))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("42"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("42"));
 }
 
 TEST(test_fmt_no_placeholders) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (fmt \"no args\"))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("no args"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("no args"));
 }
 
 TEST(test_fmt_arg_count_mismatch) {
@@ -2386,7 +2390,7 @@ TEST(test_fmt_arg_count_mismatch) {
 TEST(test_cfn_assign_and_call) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= s sqrt) (= r (int (s 9)))");
-    ASSERT_EQ(bbl.getInt("r"), 3LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 3LL);
 }
 
 TEST(test_cfn_assign_print) {
@@ -2401,37 +2405,37 @@ TEST(test_cfn_pass_as_argument) {
         (= apply (fn (f x) (f x)))
         (= r (int (apply sqrt 16)))
     )");
-    ASSERT_EQ(bbl.getInt("r"), 4LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 4LL);
 }
 
 TEST(test_cfn_equality_same) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (== sqrt sqrt))");
-    ASSERT_EQ(bbl.getBool("r"), true);
+    ASSERT_EQ(bbl.getBool("r").value(), true);
 }
 
 TEST(test_cfn_equality_different) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (== sqrt print))");
-    ASSERT_EQ(bbl.getBool("r"), false);
+    ASSERT_EQ(bbl.getBool("r").value(), false);
 }
 
 TEST(test_cfn_inequality_vs_bbl_fn) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (== sqrt (fn (x) x)))");
-    ASSERT_EQ(bbl.getBool("r"), false);
+    ASSERT_EQ(bbl.getBool("r").value(), false);
 }
 
 TEST(test_cfn_tostring) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= s (str sqrt))");
-    ASSERT_EQ(std::string(bbl.getString("s")), std::string("<cfn>"));
+    ASSERT_EQ(std::string(bbl.getString("s").value()), std::string("<cfn>"));
 }
 
 TEST(test_cfn_reassignment) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= s sqrt) (= s abs) (= r (int (s -7)))");
-    ASSERT_EQ(bbl.getInt("r"), 7LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 7LL);
 }
 
 TEST(test_cfn_in_table) {
@@ -2441,13 +2445,13 @@ TEST(test_cfn_in_table) {
         (= g t.f)
         (= r (int (g 9)))
     )");
-    ASSERT_EQ(bbl.getInt("r"), 3LL);
+    ASSERT_EQ(bbl.getInt("r").value(), 3LL);
 }
 
 TEST(test_cfn_multiple_aliases) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= a sqrt) (= b sqrt) (= r (== a b))");
-    ASSERT_EQ(bbl.getBool("r"), true);
+    ASSERT_EQ(bbl.getBool("r").value(), true);
 }
 
 // ========== typeof tests ==========
@@ -2455,67 +2459,67 @@ TEST(test_cfn_multiple_aliases) {
 TEST(test_typeof_int) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (typeof 42))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("int"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("int"));
 }
 
 TEST(test_typeof_float) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (typeof 3.14))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("float"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("float"));
 }
 
 TEST(test_typeof_string) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (typeof \"hello\"))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("string"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("string"));
 }
 
 TEST(test_typeof_bool) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (typeof true))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("bool"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("bool"));
 }
 
 TEST(test_typeof_null) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (typeof null))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("null"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("null"));
 }
 
 TEST(test_typeof_cfn) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (typeof sqrt))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("fn"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("fn"));
 }
 
 TEST(test_typeof_bbl_fn) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (typeof (fn (x) x)))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("fn"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("fn"));
 }
 
 TEST(test_typeof_table) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (typeof (table)))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("table"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("table"));
 }
 
 TEST(test_typeof_vector) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (typeof (vector int)))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("vector"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("vector"));
 }
 
 TEST(test_typeof_binary) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (typeof 0b4:test))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("binary"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("binary"));
 }
 
 TEST(test_typeof_expression) {
     BblState bbl; BBL::addStdLib(bbl);
     bbl.exec("(= r (typeof (+ 1 2)))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("int"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("int"));
 }
 
 TEST(test_typeof_arity_error) {
@@ -2528,7 +2532,7 @@ TEST(test_typeof_struct) {
     BblState bbl; BBL::addStdLib(bbl);
     addVertex(bbl);
     bbl.exec("(= r (typeof (vertex 1.0 2.0 3.0)))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("struct"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("struct"));
 }
 
 TEST(test_typeof_userdata) {
@@ -2540,7 +2544,7 @@ TEST(test_typeof_userdata) {
     auto* ud = bbl.allocUserData("Counter", &val);
     bbl.set("c", BblValue::makeUserData(ud));
     bbl.exec("(= r (typeof c))");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("userdata"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("userdata"));
 }
 
 // ---------- bitwise ----------
@@ -2548,79 +2552,79 @@ TEST(test_typeof_userdata) {
 TEST(test_band_basic) {
     BblState bbl;
     bbl.exec("(= x (band 255 15))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)15);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)15);
 }
 
 TEST(test_bor_basic) {
     BblState bbl;
     bbl.exec("(= x (bor 15 240))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)255);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)255);
 }
 
 TEST(test_bxor_basic) {
     BblState bbl;
     bbl.exec("(= x (bxor 255 15))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)240);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)240);
 }
 
 TEST(test_bnot_zero) {
     BblState bbl;
     bbl.exec("(= x (bnot 0))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)-1);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)-1);
 }
 
 TEST(test_bnot_neg1) {
     BblState bbl;
     bbl.exec("(= x (bnot -1))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)0);
 }
 
 TEST(test_shl_basic) {
     BblState bbl;
     bbl.exec("(= x (shl 1 8))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)256);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)256);
 }
 
 TEST(test_shr_basic) {
     BblState bbl;
     bbl.exec("(= x (shr 256 4))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)16);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)16);
 }
 
 TEST(test_band_variadic) {
     BblState bbl;
     bbl.exec("(= x (band 7 6 5))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)4);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)4);
 }
 
 TEST(test_bor_variadic) {
     BblState bbl;
     bbl.exec("(= x (bor 1 2 4))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)7);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)7);
 }
 
 TEST(test_bxor_variadic) {
     BblState bbl;
     bbl.exec("(= x (bxor 15 9 6))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)0);
 }
 
 TEST(test_shr_arithmetic) {
     BblState bbl;
     bbl.exec("(= x (shr -1 1))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)-1);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)-1);
 }
 
 TEST(test_shr_large_neg) {
     BblState bbl;
     bbl.exec("(= x (shr -1 64))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)-1);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)-1);
 }
 
 TEST(test_shl_large) {
     BblState bbl;
     bbl.exec("(= x (shl 1 64))");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)0);
 }
 
 TEST(test_bitwise_float_err) {
@@ -2697,7 +2701,7 @@ TEST(test_execfile_abs_open) {
     BblState bbl;
     bbl.allowOpenFilesystem = true;
     bbl.execfile(path);
-    ASSERT_EQ(bbl.getInt("openfs_result"), (int64_t)42);
+    ASSERT_EQ(bbl.getInt("openfs_result").value(), (int64_t)42);
     fs::remove(path);
 }
 
@@ -2711,7 +2715,7 @@ TEST(test_execfile_dotdot_open) {
     bbl.allowOpenFilesystem = true;
     bbl.scriptDir = "/tmp/bbl_test_openfs/child";
     bbl.exec("(execfile \"../target.bbl\")");
-    ASSERT_EQ(bbl.getInt("dotdot_result"), (int64_t)99);
+    ASSERT_EQ(bbl.getInt("dotdot_result").value(), (int64_t)99);
     fs::remove_all("/tmp/bbl_test_openfs");
 }
 
@@ -2722,7 +2726,7 @@ TEST(test_filebytes_abs_open) {
     BblState bbl; BBL::addFileIo(bbl);
     bbl.allowOpenFilesystem = true;
     bbl.exec("(= data (filebytes \"/tmp/bbl_test_open_fb.bin\"))");
-    ASSERT_EQ(bbl.getType("data"), BBL::Type::Binary);
+    ASSERT_EQ(bbl.getType("data").value(), BBL::Type::Binary);
     fs::remove(path);
 }
 
@@ -2735,7 +2739,7 @@ TEST(test_filebytes_dotdot_open) {
     bbl.allowOpenFilesystem = true;
     bbl.scriptDir = "/tmp/bbl_test_openfs2/child";
     bbl.exec("(= data (filebytes \"../target.bin\"))");
-    ASSERT_EQ(bbl.getType("data"), BBL::Type::Binary);
+    ASSERT_EQ(bbl.getType("data").value(), BBL::Type::Binary);
     fs::remove_all("/tmp/bbl_test_openfs2");
 }
 
@@ -2786,7 +2790,7 @@ TEST(test_with_return_value) {
     bbl.exec(R"(
         (= result (with c (make-counter) (c:value)))
     )");
-    ASSERT_EQ(bbl.getInt("result"), (int64_t)42);
+    ASSERT_EQ(bbl.getInt("result").value(), (int64_t)42);
     ASSERT_EQ(destructionCount, 1);
 }
 
@@ -2862,7 +2866,7 @@ TEST(test_with_no_destructor) {
     bbl.exec(R"(
         (= result (with o obj (o:value)))
     )");
-    ASSERT_EQ(bbl.getInt("result"), (int64_t)99);
+    ASSERT_EQ(bbl.getInt("result").value(), (int64_t)99);
 }
 
 TEST(test_with_nested) {
@@ -2921,7 +2925,7 @@ TEST(test_with_file_io) {
         (= contents (with f (fopen "/tmp/bbl_test_with_io.txt" "r")
             (f:read)))
     )");
-    ASSERT_EQ(std::string(bbl.getString("contents")), std::string("hello with"));
+    ASSERT_EQ(std::string(bbl.getString("contents").value()), std::string("hello with"));
     namespace fs = std::filesystem;
     fs::remove("/tmp/bbl_test_with_io.txt");
 }
@@ -2931,32 +2935,32 @@ TEST(test_with_file_io) {
 TEST(test_string_lt) {
     BblState bbl;
     bbl.exec(R"((= r (< "a" "b")))");
-    ASSERT_TRUE(bbl.getBool("r"));
+    ASSERT_TRUE(bbl.getBool("r").value());
 }
 
 TEST(test_string_gt) {
     BblState bbl;
     bbl.exec(R"((= r (> "z" "a")))");
-    ASSERT_TRUE(bbl.getBool("r"));
+    ASSERT_TRUE(bbl.getBool("r").value());
 }
 
 TEST(test_string_le_equal) {
     BblState bbl;
     bbl.exec(R"((= r (<= "abc" "abc")))");
-    ASSERT_TRUE(bbl.getBool("r"));
+    ASSERT_TRUE(bbl.getBool("r").value());
 }
 
 TEST(test_string_ge_less) {
     BblState bbl;
     bbl.exec(R"((= r (>= "abc" "abd")))");
-    ASSERT_FALSE(bbl.getBool("r"));
+    ASSERT_FALSE(bbl.getBool("r").value());
 }
 
 TEST(test_string_lt_case) {
     // Uppercase < lowercase in ASCII
     BblState bbl;
     bbl.exec(R"((= r (< "A" "a")))");
-    ASSERT_TRUE(bbl.getBool("r"));
+    ASSERT_TRUE(bbl.getBool("r").value());
 }
 
 TEST(test_string_ordering_cross_type_error) {
@@ -2967,13 +2971,13 @@ TEST(test_string_ordering_cross_type_error) {
 TEST(test_string_le_prefix) {
     BblState bbl;
     bbl.exec(R"((= r (<= "ab" "abc")))");
-    ASSERT_TRUE(bbl.getBool("r"));
+    ASSERT_TRUE(bbl.getBool("r").value());
 }
 
 TEST(test_string_gt_empty) {
     BblState bbl;
     bbl.exec(R"((= r (> "a" "")))");
-    ASSERT_TRUE(bbl.getBool("r"));
+    ASSERT_TRUE(bbl.getBool("r").value());
 }
 
 // ========== Break / Continue ==========
@@ -2986,7 +2990,7 @@ TEST(test_break_basic) {
             (break)
             (= x 1))
     )");
-    ASSERT_EQ(bbl.getInt("x"), 0);
+    ASSERT_EQ(bbl.getInt("x").value(), 0);
 }
 
 TEST(test_break_with_condition) {
@@ -2999,7 +3003,7 @@ TEST(test_break_with_condition) {
             (= sum (+ sum i))
             (= i (+ i 1)))
     )");
-    ASSERT_EQ(bbl.getInt("sum"), 10); // 0+1+2+3+4
+    ASSERT_EQ(bbl.getInt("sum").value(), 10); // 0+1+2+3+4
 }
 
 TEST(test_continue_basic) {
@@ -3012,7 +3016,7 @@ TEST(test_continue_basic) {
             (if (== i 3) (continue))
             (= sum (+ sum i)))
     )");
-    ASSERT_EQ(bbl.getInt("sum"), 12); // 1+2+4+5, skip 3
+    ASSERT_EQ(bbl.getInt("sum").value(), 12); // 1+2+4+5, skip 3
 }
 
 TEST(test_break_in_each) {
@@ -3024,7 +3028,7 @@ TEST(test_break_in_each) {
             (if (== i 2) (break))
             (= sum (+ sum (v:at i))))
     )");
-    ASSERT_EQ(bbl.getInt("sum"), 30); // 10+20
+    ASSERT_EQ(bbl.getInt("sum").value(), 30); // 10+20
 }
 
 TEST(test_continue_in_each) {
@@ -3036,7 +3040,7 @@ TEST(test_continue_in_each) {
             (if (== i 1) (continue))
             (= sum (+ sum (v:at i))))
     )");
-    ASSERT_EQ(bbl.getInt("sum"), 80); // 10+30+40, skip 20
+    ASSERT_EQ(bbl.getInt("sum").value(), 80); // 10+30+40, skip 20
 }
 
 TEST(test_break_outside_loop_error) {
@@ -3063,7 +3067,7 @@ TEST(test_break_in_nested_do) {
                 (= x (+ x 1))
                 (break)))
     )");
-    ASSERT_EQ(bbl.getInt("x"), 1);
+    ASSERT_EQ(bbl.getInt("x").value(), 1);
 }
 
 TEST(test_break_in_nested_if) {
@@ -3077,7 +3081,7 @@ TEST(test_break_in_nested_if) {
                 (break)
                 (= count (+ count 1))))
     )");
-    ASSERT_EQ(bbl.getInt("count"), 2);
+    ASSERT_EQ(bbl.getInt("count").value(), 2);
 }
 
 TEST(test_break_does_not_cross_fn) {
@@ -3097,7 +3101,7 @@ TEST(test_vec_resize_grow) {
         (v:resize 5)
         (= len (v:length))
     )");
-    ASSERT_EQ(bbl.getInt("len"), 5);
+    ASSERT_EQ(bbl.getInt("len").value(), 5);
 }
 
 TEST(test_vec_resize_zero_fill) {
@@ -3107,7 +3111,7 @@ TEST(test_vec_resize_zero_fill) {
         (v:resize 3)
         (= val (v:at 0))
     )");
-    ASSERT_EQ(bbl.getInt("val"), 0);
+    ASSERT_EQ(bbl.getInt("val").value(), 0);
 }
 
 TEST(test_vec_resize_shrink) {
@@ -3117,7 +3121,7 @@ TEST(test_vec_resize_shrink) {
         (v:resize 2)
         (= len (v:length))
     )");
-    ASSERT_EQ(bbl.getInt("len"), 2);
+    ASSERT_EQ(bbl.getInt("len").value(), 2);
 }
 
 TEST(test_vec_reserve_no_length_change) {
@@ -3127,7 +3131,7 @@ TEST(test_vec_reserve_no_length_change) {
         (v:reserve 1000)
         (= len (v:length))
     )");
-    ASSERT_EQ(bbl.getInt("len"), 0);
+    ASSERT_EQ(bbl.getInt("len").value(), 0);
 }
 
 TEST(test_vec_resize_negative_error) {
@@ -3162,7 +3166,7 @@ TEST(test_vec_resize_then_set) {
         (v:set 2 42)
         (= val (v:at 2))
     )");
-    ASSERT_EQ(bbl.getInt("val"), 42);
+    ASSERT_EQ(bbl.getInt("val").value(), 42);
 }
 
 // ========== Try / Catch ==========
@@ -3174,7 +3178,7 @@ TEST(test_try_catch_basic) {
             (/ 1 0)
             (catch e e)))
     )");
-    ASSERT_EQ(std::string(bbl.getString("result")), std::string("division by zero"));
+    ASSERT_EQ(std::string(bbl.getString("result").value()), std::string("division by zero"));
 }
 
 TEST(test_try_no_error) {
@@ -3184,7 +3188,7 @@ TEST(test_try_no_error) {
             (+ 1 2)
             (catch e "error")))
     )");
-    ASSERT_EQ(bbl.getInt("result"), 3);
+    ASSERT_EQ(bbl.getInt("result").value(), 3);
 }
 
 TEST(test_try_catch_handler_body) {
@@ -3194,7 +3198,7 @@ TEST(test_try_catch_handler_body) {
             (/ 1 0)
             (catch e (+ "caught: " e))))
     )");
-    ASSERT_EQ(std::string(bbl.getString("result")), std::string("caught: division by zero"));
+    ASSERT_EQ(std::string(bbl.getString("result").value()), std::string("caught: division by zero"));
 }
 
 TEST(test_try_missing_catch_error) {
@@ -3216,7 +3220,7 @@ TEST(test_try_nested) {
                 (catch e (+ "inner: " e)))
             (catch e (+ "outer: " e))))
     )");
-    ASSERT_EQ(std::string(bbl.getString("result")), std::string("inner: division by zero"));
+    ASSERT_EQ(std::string(bbl.getString("result").value()), std::string("inner: division by zero"));
 }
 
 TEST(test_try_catch_scope) {
@@ -3241,7 +3245,7 @@ TEST(test_try_multi_body) {
             (= x 99)
             (catch e "ok"))
     )");
-    ASSERT_EQ(bbl.getInt("x"), 2);
+    ASSERT_EQ(bbl.getInt("x").value(), 2);
 }
 
 TEST(test_try_catch_multi_handler) {
@@ -3255,8 +3259,8 @@ TEST(test_try_catch_multi_handler) {
                 (= a 1)
                 (= b 2)))
     )");
-    ASSERT_EQ(bbl.getInt("a"), 1);
-    ASSERT_EQ(bbl.getInt("b"), 2);
+    ASSERT_EQ(bbl.getInt("a").value(), 1);
+    ASSERT_EQ(bbl.getInt("b").value(), 2);
 }
 
 TEST(test_try_type_error) {
@@ -3267,7 +3271,7 @@ TEST(test_try_type_error) {
             (catch e e)))
     )");
     // Should catch the type error
-    ASSERT_EQ(std::string(bbl.getString("result")).empty(), false);
+    ASSERT_EQ(std::string(bbl.getString("result").value()).empty(), false);
 }
 
 // ========== Colon Syntax ==========
@@ -3308,7 +3312,7 @@ TEST(test_table_dot_is_key_lookup) {
         (= t (table "length" 42))
         (= v t.length)
     )");
-    ASSERT_EQ(bbl.getInt("v"), (int64_t)42);
+    ASSERT_EQ(bbl.getInt("v").value(), (int64_t)42);
 }
 
 TEST(test_table_colon_is_method) {
@@ -3317,7 +3321,7 @@ TEST(test_table_colon_is_method) {
         (= t (table "length" 42))
         (= v (t:length))
     )");
-    ASSERT_EQ(bbl.getInt("v"), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("v").value(), (int64_t)1);
 }
 
 TEST(test_table_self_passing_fn) {
@@ -3327,7 +3331,7 @@ TEST(test_table_self_passing_fn) {
                      "name"  "bbl"))
         (= r (t:greet))
     )");
-    ASSERT_EQ(std::string(bbl.getString("r")), std::string("hello from bbl"));
+    ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("hello from bbl"));
 }
 
 TEST(test_table_self_passing_builtin_priority) {
@@ -3338,7 +3342,7 @@ TEST(test_table_self_passing_builtin_priority) {
         (= r (t:length))
     )");
     // Should return 1 (built-in length), not 999 (the fn at key "length")
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)1);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)1);
 }
 
 TEST(test_table_self_passing_not_callable_error) {
@@ -3373,7 +3377,7 @@ TEST(test_colon_on_int_error) {
 TEST(test_shebang_skipped) {
     BblState bbl;
     bbl.exec("#!/usr/bin/env bbl\n(= x 42)");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)42);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)42);
 }
 
 TEST(test_shebang_only_at_start) {
@@ -3392,7 +3396,7 @@ TEST(test_shebang_preserves_line_numbers) {
     // Shebang line is line 1.  Code on line 2 should still work.
     BblState bbl;
     bbl.exec("#!/usr/bin/env bbl\n\n(= x 99)");
-    ASSERT_EQ(bbl.getInt("x"), (int64_t)99);
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)99);
 }
 
 // ========== read-line ==========
@@ -3412,10 +3416,10 @@ TEST(test_file_read_line) {
         (= d (f2:read-line))
         (f2:close)
     )");
-    ASSERT_EQ(std::string(bbl.getString("a")), std::string("aaa"));
-    ASSERT_EQ(std::string(bbl.getString("b")), std::string("bbb"));
-    ASSERT_EQ(std::string(bbl.getString("c")), std::string("ccc"));
-    ASSERT_EQ(bbl.getType("d"), BBL::Type::Null);
+    ASSERT_EQ(std::string(bbl.getString("a").value()), std::string("aaa"));
+    ASSERT_EQ(std::string(bbl.getString("b").value()), std::string("bbb"));
+    ASSERT_EQ(std::string(bbl.getString("c").value()), std::string("ccc"));
+    ASSERT_EQ(bbl.getType("d").value(), BBL::Type::Null);
 }
 
 TEST(test_file_read_line_empty_lines) {
@@ -3433,10 +3437,10 @@ TEST(test_file_read_line_empty_lines) {
         (= fourth (f2:read-line))
         (f2:close)
     )");
-    ASSERT_EQ(std::string(bbl.getString("first")), std::string("a"));
-    ASSERT_EQ(std::string(bbl.getString("second")), std::string(""));
-    ASSERT_EQ(std::string(bbl.getString("third")), std::string("b"));
-    ASSERT_EQ(bbl.getType("fourth"), BBL::Type::Null);
+    ASSERT_EQ(std::string(bbl.getString("first").value()), std::string("a"));
+    ASSERT_EQ(std::string(bbl.getString("second").value()), std::string(""));
+    ASSERT_EQ(std::string(bbl.getString("third").value()), std::string("b"));
+    ASSERT_EQ(bbl.getType("fourth").value(), BBL::Type::Null);
 }
 
 // ========== Standard streams ==========
@@ -3444,9 +3448,9 @@ TEST(test_file_read_line_empty_lines) {
 TEST(test_std_streams_exist) {
     BblState bbl;
     BBL::addStdLib(bbl);
-    ASSERT_EQ(bbl.getType("stdin"), BBL::Type::UserData);
-    ASSERT_EQ(bbl.getType("stdout"), BBL::Type::UserData);
-    ASSERT_EQ(bbl.getType("stderr"), BBL::Type::UserData);
+    ASSERT_EQ(bbl.getType("stdin").value(), BBL::Type::UserData);
+    ASSERT_EQ(bbl.getType("stdout").value(), BBL::Type::UserData);
+    ASSERT_EQ(bbl.getType("stderr").value(), BBL::Type::UserData);
 }
 
 TEST(test_std_stream_close_noop) {
@@ -3465,9 +3469,9 @@ TEST(test_os_getenv) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= h (getenv \"HOME\"))");
-    ASSERT_EQ(bbl.get("h").type, BBL::Type::String);
+    ASSERT_EQ(bbl.get("h").value().type, BBL::Type::String);
     bbl.exec("(= n (getenv \"BBL_NONEXISTENT_VAR_XYZ\"))");
-    ASSERT_EQ(bbl.get("n").type, BBL::Type::Null);
+    ASSERT_EQ(bbl.get("n").value().type, BBL::Type::Null);
 }
 
 TEST(test_os_setenv_getenv) {
@@ -3475,24 +3479,24 @@ TEST(test_os_setenv_getenv) {
     BBL::addStdLib(bbl);
     bbl.exec("(setenv \"BBL_TEST_VAR\" \"hello\")");
     bbl.exec("(= v (getenv \"BBL_TEST_VAR\"))");
-    ASSERT_EQ(std::string(bbl.getString("v")), std::string("hello"));
+    ASSERT_EQ(std::string(bbl.getString("v").value()), std::string("hello"));
     bbl.exec("(unsetenv \"BBL_TEST_VAR\")");
     bbl.exec("(= v2 (getenv \"BBL_TEST_VAR\"))");
-    ASSERT_EQ(bbl.get("v2").type, BBL::Type::Null);
+    ASSERT_EQ(bbl.get("v2").value().type, BBL::Type::Null);
 }
 
 TEST(test_os_time) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= t (time))");
-    ASSERT_TRUE(bbl.getInt("t") > 1700000000);
+    ASSERT_TRUE(bbl.getInt("t").value() > 1700000000);
 }
 
 TEST(test_os_clock) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= c (clock))");
-    ASSERT_TRUE(bbl.getFloat("c") >= 0.0);
+    ASSERT_TRUE(bbl.getFloat("c").value() >= 0.0);
 }
 
 TEST(test_os_sleep) {
@@ -3506,22 +3510,22 @@ TEST(test_os_execute) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= r (execute \"true\"))");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)0);
 }
 
 TEST(test_os_getcwd) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= d (getcwd))");
-    ASSERT_EQ(bbl.get("d").type, BBL::Type::String);
-    ASSERT_TRUE(std::string(bbl.getString("d")).size() > 0);
+    ASSERT_EQ(bbl.get("d").value().type, BBL::Type::String);
+    ASSERT_TRUE(std::string(bbl.getString("d").value()).size() > 0);
 }
 
 TEST(test_os_getpid) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= p (getpid))");
-    ASSERT_TRUE(bbl.getInt("p") > 0);
+    ASSERT_TRUE(bbl.getInt("p").value() > 0);
 }
 
 TEST(test_os_chdir_getcwd) {
@@ -3530,10 +3534,10 @@ TEST(test_os_chdir_getcwd) {
     bbl.exec("(= orig (getcwd))");
     bbl.exec("(chdir \"/tmp\")");
     bbl.exec("(= now (getcwd))");
-    std::string now = bbl.getString("now");
+    std::string now = bbl.getString("now").value();
     ASSERT_TRUE(now.find("/tmp") != std::string::npos);
     // chdir back
-    std::string orig = bbl.getString("orig");
+    std::string orig = bbl.getString("orig").value();
     bbl.exec("(chdir \"" + orig + "\")");
 }
 
@@ -3541,19 +3545,19 @@ TEST(test_os_mkdir_remove) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= ok (mkdir \"/tmp/bbl_test_mkdir_12345\"))");
-    ASSERT_EQ(bbl.getBool("ok"), true);
+    ASSERT_EQ(bbl.getBool("ok").value(), true);
     bbl.exec("(= ok2 (remove \"/tmp/bbl_test_mkdir_12345\"))");
-    ASSERT_EQ(bbl.getBool("ok2"), true);
+    ASSERT_EQ(bbl.getBool("ok2").value(), true);
 }
 
 TEST(test_os_rename) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= src (tmpname))");
-    std::string src = bbl.getString("src");
+    std::string src = bbl.getString("src").value();
     std::string dst = src + ".renamed";
     bbl.exec("(= r (rename \"" + src + "\" \"" + dst + "\"))");
-    ASSERT_EQ(bbl.getBool("r"), true);
+    ASSERT_EQ(bbl.getBool("r").value(), true);
     ::remove(dst.c_str());
 }
 
@@ -3561,8 +3565,8 @@ TEST(test_os_tmpname) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= t (tmpname))");
-    ASSERT_EQ(bbl.get("t").type, BBL::Type::String);
-    std::string path = bbl.getString("t");
+    ASSERT_EQ(bbl.get("t").value().type, BBL::Type::String);
+    std::string path = bbl.getString("t").value();
     ASSERT_TRUE(path.size() > 0);
     ::remove(path.c_str());
 }
@@ -3571,7 +3575,7 @@ TEST(test_os_date) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= d (date))");
-    std::string d = bbl.getString("d");
+    std::string d = bbl.getString("d").value();
     // Check that the date contains the current year
     time_t now = time(nullptr);
     struct tm* tm = localtime(&now);
@@ -3583,58 +3587,58 @@ TEST(test_os_difftime) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= t (time)) (= d (difftime t t))");
-    ASSERT_NEAR(bbl.getFloat("d"), 0.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("d").value(), 0.0, 0.001);
 }
 
 TEST(test_os_stat) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= s (stat \"/tmp\"))");
-    ASSERT_EQ(bbl.get("s").type, BBL::Type::Table);
+    ASSERT_EQ(bbl.get("s").value().type, BBL::Type::Table);
     bbl.exec("(= isdir s.is-dir)");
-    ASSERT_EQ(bbl.getBool("isdir"), true);
+    ASSERT_EQ(bbl.getBool("isdir").value(), true);
     bbl.exec("(= n (stat \"/nonexistent_xyz_bbl_test\"))");
-    ASSERT_EQ(bbl.get("n").type, BBL::Type::Null);
+    ASSERT_EQ(bbl.get("n").value().type, BBL::Type::Null);
 }
 
 TEST(test_os_glob) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= g (glob \"/tmp/*\"))");
-    ASSERT_EQ(bbl.get("g").type, BBL::Type::Table);
+    ASSERT_EQ(bbl.get("g").value().type, BBL::Type::Table);
     bbl.exec("(= t (typeof (glob \"/tmp/*\")))");
-    ASSERT_EQ(std::string(bbl.getString("t")), std::string("table"));
+    ASSERT_EQ(std::string(bbl.getString("t").value()), std::string("table"));
 }
 
 TEST(test_os_spawn) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= p (spawn \"echo hello\")) (= out (p:read)) (= code (p:wait))");
-    std::string out = bbl.getString("out");
+    std::string out = bbl.getString("out").value();
     ASSERT_TRUE(out.find("hello") != std::string::npos);
-    ASSERT_EQ(bbl.getInt("code"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("code").value(), (int64_t)0);
     // read after wait should return empty string, not crash
     bbl.exec("(= out2 (p:read))");
-    ASSERT_EQ(std::string(bbl.getString("out2")), std::string(""));
+    ASSERT_EQ(std::string(bbl.getString("out2").value()), std::string(""));
     // double wait should return -1
     bbl.exec("(= code2 (p:wait))");
-    ASSERT_EQ(bbl.getInt("code2"), (int64_t)-1);
+    ASSERT_EQ(bbl.getInt("code2").value(), (int64_t)-1);
 }
 
 TEST(test_os_spawn_readline) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= p (spawn \"printf 'a\\nb\\n'\")) (= a (p:read-line)) (= b (p:read-line)) (= c (p:read-line)) (p:wait)");
-    ASSERT_EQ(std::string(bbl.getString("a")), std::string("a"));
-    ASSERT_EQ(std::string(bbl.getString("b")), std::string("b"));
-    ASSERT_EQ(bbl.get("c").type, BBL::Type::Null);
+    ASSERT_EQ(std::string(bbl.getString("a").value()), std::string("a"));
+    ASSERT_EQ(std::string(bbl.getString("b").value()), std::string("b"));
+    ASSERT_EQ(bbl.get("c").value().type, BBL::Type::Null);
 }
 
 TEST(test_os_spawn_detached) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(= pid (spawn-detached \"sleep 0\"))");
-    ASSERT_TRUE(bbl.getInt("pid") > 0);
+    ASSERT_TRUE(bbl.getInt("pid").value() > 0);
 }
 
 // ========== Script-Defined Structs ==========
@@ -3644,12 +3648,12 @@ TEST(test_script_struct_basic) {
     BBL::addStdLib(bbl);
     bbl.exec("(struct Pixel uint8 r uint8 g uint8 b uint8 a)");
     bbl.exec("(= p (Pixel 255 128 0 200))");
-    ASSERT_EQ(bbl.getType("p"), BBL::Type::Struct);
+    ASSERT_EQ(bbl.getType("p").value(), BBL::Type::Struct);
     bbl.exec("(= r p.r) (= g p.g) (= b p.b) (= a p.a)");
-    ASSERT_EQ(bbl.getInt("r"), (int64_t)255);
-    ASSERT_EQ(bbl.getInt("g"), (int64_t)128);
-    ASSERT_EQ(bbl.getInt("b"), (int64_t)0);
-    ASSERT_EQ(bbl.getInt("a"), (int64_t)200);
+    ASSERT_EQ(bbl.getInt("r").value(), (int64_t)255);
+    ASSERT_EQ(bbl.getInt("g").value(), (int64_t)128);
+    ASSERT_EQ(bbl.getInt("b").value(), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("a").value(), (int64_t)200);
 }
 
 TEST(test_script_struct_all_types) {
@@ -3673,27 +3677,27 @@ TEST(test_script_struct_all_types) {
         "(= s (AllTypes true -1 200 -300 60000 -100000 3000000000 -9999999 12345678 1.5 2.5))"
     );
     bbl.exec("(= vb s.b)");
-    ASSERT_EQ(bbl.get("vb").boolVal, true);
+    ASSERT_EQ(bbl.get("vb").value().boolVal, true);
     bbl.exec("(= vi8 s.i8)");
-    ASSERT_EQ(bbl.getInt("vi8"), (int64_t)-1);
+    ASSERT_EQ(bbl.getInt("vi8").value(), (int64_t)-1);
     bbl.exec("(= vu8 s.u8)");
-    ASSERT_EQ(bbl.getInt("vu8"), (int64_t)200);
+    ASSERT_EQ(bbl.getInt("vu8").value(), (int64_t)200);
     bbl.exec("(= vi16 s.i16)");
-    ASSERT_EQ(bbl.getInt("vi16"), (int64_t)-300);
+    ASSERT_EQ(bbl.getInt("vi16").value(), (int64_t)-300);
     bbl.exec("(= vu16 s.u16)");
-    ASSERT_EQ(bbl.getInt("vu16"), (int64_t)60000);
+    ASSERT_EQ(bbl.getInt("vu16").value(), (int64_t)60000);
     bbl.exec("(= vi32 s.i32)");
-    ASSERT_EQ(bbl.getInt("vi32"), (int64_t)-100000);
+    ASSERT_EQ(bbl.getInt("vi32").value(), (int64_t)-100000);
     bbl.exec("(= vu32 s.u32)");
-    ASSERT_EQ(bbl.getInt("vu32"), (int64_t)3000000000);
+    ASSERT_EQ(bbl.getInt("vu32").value(), (int64_t)3000000000);
     bbl.exec("(= vi64 s.i64)");
-    ASSERT_EQ(bbl.getInt("vi64"), (int64_t)-9999999);
+    ASSERT_EQ(bbl.getInt("vi64").value(), (int64_t)-9999999);
     bbl.exec("(= vu64 s.u64)");
-    ASSERT_EQ(bbl.getInt("vu64"), (int64_t)12345678);
+    ASSERT_EQ(bbl.getInt("vu64").value(), (int64_t)12345678);
     bbl.exec("(= vf32 s.f32)");
-    ASSERT_NEAR(bbl.getFloat("vf32"), 1.5, 0.001);
+    ASSERT_NEAR(bbl.getFloat("vf32").value(), 1.5, 0.001);
     bbl.exec("(= vf64 s.f64)");
-    ASSERT_NEAR(bbl.getFloat("vf64"), 2.5, 0.001);
+    ASSERT_NEAR(bbl.getFloat("vf64").value(), 2.5, 0.001);
 }
 
 TEST(test_script_struct_write) {
@@ -3701,8 +3705,8 @@ TEST(test_script_struct_write) {
     BBL::addStdLib(bbl);
     bbl.exec("(struct Point int32 x int32 y)");
     bbl.exec("(= p (Point 10 20)) (= p.x 99) (= rx p.x) (= ry p.y)");
-    ASSERT_EQ(bbl.getInt("rx"), (int64_t)99);
-    ASSERT_EQ(bbl.getInt("ry"), (int64_t)20);
+    ASSERT_EQ(bbl.getInt("rx").value(), (int64_t)99);
+    ASSERT_EQ(bbl.getInt("ry").value(), (int64_t)20);
 }
 
 TEST(test_script_struct_nested) {
@@ -3712,10 +3716,10 @@ TEST(test_script_struct_nested) {
     bbl.exec("(struct Rect Vec2 min Vec2 max)");
     bbl.exec("(= r (Rect (Vec2 1 2) (Vec2 3 4)))");
     bbl.exec("(= mx r.min.x) (= my r.min.y) (= xx r.max.x) (= xy r.max.y)");
-    ASSERT_NEAR(bbl.getFloat("mx"), 1.0, 0.001);
-    ASSERT_NEAR(bbl.getFloat("my"), 2.0, 0.001);
-    ASSERT_NEAR(bbl.getFloat("xx"), 3.0, 0.001);
-    ASSERT_NEAR(bbl.getFloat("xy"), 4.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("mx").value(), 1.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("my").value(), 2.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("xx").value(), 3.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("xy").value(), 4.0, 0.001);
 }
 
 TEST(test_script_struct_vector) {
@@ -3724,10 +3728,10 @@ TEST(test_script_struct_vector) {
     bbl.exec("(struct V2 float32 x float32 y)");
     bbl.exec("(= v (vector V2 (V2 1 2) (V2 3 4) (V2 5 6)))");
     bbl.exec("(= n (v:length))");
-    ASSERT_EQ(bbl.getInt("n"), (int64_t)3);
+    ASSERT_EQ(bbl.getInt("n").value(), (int64_t)3);
     bbl.exec("(= x0 (v:at 0).x) (= y2 (v:at 2).y)");
-    ASSERT_NEAR(bbl.getFloat("x0"), 1.0, 0.001);
-    ASSERT_NEAR(bbl.getFloat("y2"), 6.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("x0").value(), 1.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("y2").value(), 6.0, 0.001);
 }
 
 TEST(test_script_struct_sizeof) {
@@ -3735,13 +3739,13 @@ TEST(test_script_struct_sizeof) {
     BBL::addStdLib(bbl);
     bbl.exec("(struct Pixel uint8 r uint8 g uint8 b uint8 a)");
     bbl.exec("(= sz1 (sizeof Pixel))");
-    ASSERT_EQ(bbl.getInt("sz1"), (int64_t)4);
+    ASSERT_EQ(bbl.getInt("sz1").value(), (int64_t)4);
     bbl.exec("(= p (Pixel 1 2 3 4)) (= sz2 (sizeof p))");
-    ASSERT_EQ(bbl.getInt("sz2"), (int64_t)4);
+    ASSERT_EQ(bbl.getInt("sz2").value(), (int64_t)4);
     // Larger struct
     bbl.exec("(struct Big float64 a float64 b int32 c)");
     bbl.exec("(= sz3 (sizeof Big))");
-    ASSERT_EQ(bbl.getInt("sz3"), (int64_t)20);
+    ASSERT_EQ(bbl.getInt("sz3").value(), (int64_t)20);
 }
 
 TEST(test_script_struct_packed_layout) {
@@ -3750,11 +3754,11 @@ TEST(test_script_struct_packed_layout) {
     // float32(4) + uint8(1) + float64(8) = 13 bytes, no padding
     bbl.exec("(struct Packed float32 a uint8 b float64 c)");
     bbl.exec("(= sz (sizeof Packed))");
-    ASSERT_EQ(bbl.getInt("sz"), (int64_t)13);
+    ASSERT_EQ(bbl.getInt("sz").value(), (int64_t)13);
     bbl.exec("(= p (Packed 1.0 42 3.14)) (= pa p.a) (= pb p.b) (= pc p.c)");
-    ASSERT_NEAR(bbl.getFloat("pa"), 1.0, 0.001);
-    ASSERT_EQ(bbl.getInt("pb"), (int64_t)42);
-    ASSERT_NEAR(bbl.getFloat("pc"), 3.14, 0.001);
+    ASSERT_NEAR(bbl.getFloat("pa").value(), 1.0, 0.001);
+    ASSERT_EQ(bbl.getInt("pb").value(), (int64_t)42);
+    ASSERT_NEAR(bbl.getFloat("pc").value(), 3.14, 0.001);
 }
 
 TEST(test_script_struct_overflow) {
@@ -3763,9 +3767,9 @@ TEST(test_script_struct_overflow) {
     // 256 in uint8 wraps to 0, 300 wraps to 44
     bbl.exec("(struct Wrap uint8 v)");
     bbl.exec("(= w (Wrap 256)) (= v1 w.v)");
-    ASSERT_EQ(bbl.getInt("v1"), (int64_t)0);
+    ASSERT_EQ(bbl.getInt("v1").value(), (int64_t)0);
     bbl.exec("(= w2 (Wrap 300)) (= v2 w2.v)");
-    ASSERT_EQ(bbl.getInt("v2"), (int64_t)44);
+    ASSERT_EQ(bbl.getInt("v2").value(), (int64_t)44);
 }
 
 TEST(test_script_struct_errors) {
@@ -3811,12 +3815,12 @@ TEST(test_structbuilder_new_types) {
     bbl.registerStruct(builder);
     bbl.exec("(= s (TestPacked 255 -1 65535 -1000 4000000000 999))");
     bbl.exec("(= va s.a) (= vb s.b) (= vc s.c) (= vd s.d) (= ve s.e) (= vf s.f)");
-    ASSERT_EQ(bbl.getInt("va"), (int64_t)255);
-    ASSERT_EQ(bbl.getInt("vb"), (int64_t)-1);
-    ASSERT_EQ(bbl.getInt("vc"), (int64_t)65535);
-    ASSERT_EQ(bbl.getInt("vd"), (int64_t)-1000);
-    ASSERT_EQ(bbl.getInt("ve"), (int64_t)4000000000);
-    ASSERT_EQ(bbl.getInt("vf"), (int64_t)999);
+    ASSERT_EQ(bbl.getInt("va").value(), (int64_t)255);
+    ASSERT_EQ(bbl.getInt("vb").value(), (int64_t)-1);
+    ASSERT_EQ(bbl.getInt("vc").value(), (int64_t)65535);
+    ASSERT_EQ(bbl.getInt("vd").value(), (int64_t)-1000);
+    ASSERT_EQ(bbl.getInt("ve").value(), (int64_t)4000000000);
+    ASSERT_EQ(bbl.getInt("vf").value(), (int64_t)999);
 }
 
 TEST(test_script_struct_closure) {
@@ -3829,7 +3833,7 @@ TEST(test_script_struct_closure) {
         "(= p (make-pt 5 10))"
         "(= rx p.x)"
     );
-    ASSERT_NEAR(bbl.getFloat("rx"), 5.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("rx").value(), 5.0, 0.001);
 }
 
 // ========== Binary ↔ Vector Tests ==========
@@ -3842,7 +3846,7 @@ TEST(test_binary_from_vector) {
         "(= b (binary v))"
         "(= blen (b:length))"
     );
-    ASSERT_EQ(bbl.getInt("blen"), 24);  // 3 * sizeof(int64_t)
+    ASSERT_EQ(bbl.getInt("blen").value(), 24);  // 3 * sizeof(int64_t)
 }
 
 TEST(test_binary_from_struct) {
@@ -3855,11 +3859,11 @@ TEST(test_binary_from_struct) {
         "(= blen (b:length))"
         "(= r (b:at 0)) (= g (b:at 1)) (= bl (b:at 2)) (= a (b:at 3))"
     );
-    ASSERT_EQ(bbl.getInt("blen"), 4);
-    ASSERT_EQ(bbl.getInt("r"), 255);
-    ASSERT_EQ(bbl.getInt("g"), 128);
-    ASSERT_EQ(bbl.getInt("bl"), 0);
-    ASSERT_EQ(bbl.getInt("a"), 200);
+    ASSERT_EQ(bbl.getInt("blen").value(), 4);
+    ASSERT_EQ(bbl.getInt("r").value(), 255);
+    ASSERT_EQ(bbl.getInt("g").value(), 128);
+    ASSERT_EQ(bbl.getInt("bl").value(), 0);
+    ASSERT_EQ(bbl.getInt("a").value(), 200);
 }
 
 TEST(test_binary_from_size) {
@@ -3873,10 +3877,10 @@ TEST(test_binary_from_size) {
         "(= byte0 (b10:at 0))"
         "(= byte9 (b10:at 9))"
     );
-    ASSERT_EQ(bbl.getInt("len0"), 0);
-    ASSERT_EQ(bbl.getInt("len10"), 10);
-    ASSERT_EQ(bbl.getInt("byte0"), 0);
-    ASSERT_EQ(bbl.getInt("byte9"), 0);
+    ASSERT_EQ(bbl.getInt("len0").value(), 0);
+    ASSERT_EQ(bbl.getInt("len10").value(), 10);
+    ASSERT_EQ(bbl.getInt("byte0").value(), 0);
+    ASSERT_EQ(bbl.getInt("byte9").value(), 0);
 }
 
 TEST(test_vector_from_binary) {
@@ -3890,10 +3894,10 @@ TEST(test_vector_from_binary) {
         "(= a (v2:at 0)) (= b2 (v2:at 1)) (= c (v2:at 2))"
         "(= len (v2:length))"
     );
-    ASSERT_EQ(bbl.getInt("len"), 3);
-    ASSERT_EQ(bbl.getInt("a"), 42);
-    ASSERT_EQ(bbl.getInt("b2"), -7);
-    ASSERT_EQ(bbl.getInt("c"), 1000);
+    ASSERT_EQ(bbl.getInt("len").value(), 3);
+    ASSERT_EQ(bbl.getInt("a").value(), 42);
+    ASSERT_EQ(bbl.getInt("b2").value(), -7);
+    ASSERT_EQ(bbl.getInt("c").value(), 1000);
 }
 
 TEST(test_vector_from_binary_struct) {
@@ -3907,10 +3911,10 @@ TEST(test_vector_from_binary_struct) {
         "(= x0 v2.0.x) (= y0 v2.0.y)"
         "(= x1 v2.1.x) (= y1 v2.1.y)"
     );
-    ASSERT_NEAR(bbl.getFloat("x0"), 1.0, 0.001);
-    ASSERT_NEAR(bbl.getFloat("y0"), 2.0, 0.001);
-    ASSERT_NEAR(bbl.getFloat("x1"), 3.0, 0.001);
-    ASSERT_NEAR(bbl.getFloat("y1"), 4.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("x0").value(), 1.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("y0").value(), 2.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("x1").value(), 3.0, 0.001);
+    ASSERT_NEAR(bbl.getFloat("y1").value(), 4.0, 0.001);
 }
 
 TEST(test_binary_at_set) {
@@ -3924,10 +3928,10 @@ TEST(test_binary_at_set) {
         "(b:set 3 -1)"    // truncation: -1 → 255
         "(= v0 (b:at 0)) (= v1 (b:at 1)) (= v2 (b:at 2)) (= v3 (b:at 3))"
     );
-    ASSERT_EQ(bbl.getInt("v0"), 65);
-    ASSERT_EQ(bbl.getInt("v1"), 255);
-    ASSERT_EQ(bbl.getInt("v2"), 0);
-    ASSERT_EQ(bbl.getInt("v3"), 255);
+    ASSERT_EQ(bbl.getInt("v0").value(), 65);
+    ASSERT_EQ(bbl.getInt("v1").value(), 255);
+    ASSERT_EQ(bbl.getInt("v2").value(), 0);
+    ASSERT_EQ(bbl.getInt("v3").value(), 255);
 }
 
 TEST(test_binary_slice) {
@@ -3943,11 +3947,11 @@ TEST(test_binary_slice) {
         "(= empty (b:slice 3 0))"
         "(= elen (empty:length))"
     );
-    ASSERT_EQ(bbl.getInt("slen"), 3);
-    ASSERT_EQ(bbl.getInt("s0"), 20);
-    ASSERT_EQ(bbl.getInt("s1"), 30);
-    ASSERT_EQ(bbl.getInt("s2"), 40);
-    ASSERT_EQ(bbl.getInt("elen"), 0);
+    ASSERT_EQ(bbl.getInt("slen").value(), 3);
+    ASSERT_EQ(bbl.getInt("s0").value(), 20);
+    ASSERT_EQ(bbl.getInt("s1").value(), 30);
+    ASSERT_EQ(bbl.getInt("s2").value(), 40);
+    ASSERT_EQ(bbl.getInt("elen").value(), 0);
 }
 
 TEST(test_binary_resize) {
@@ -3965,11 +3969,11 @@ TEST(test_binary_resize) {
         "(= len2 (b:length))"
         "(= b0_2 (b:at 0))"
     );
-    ASSERT_EQ(bbl.getInt("len"), 8);
-    ASSERT_EQ(bbl.getInt("b0"), 99);   // preserved
-    ASSERT_EQ(bbl.getInt("b4"), 0);    // zero-filled
-    ASSERT_EQ(bbl.getInt("len2"), 2);
-    ASSERT_EQ(bbl.getInt("b0_2"), 99); // still preserved
+    ASSERT_EQ(bbl.getInt("len").value(), 8);
+    ASSERT_EQ(bbl.getInt("b0").value(), 99);   // preserved
+    ASSERT_EQ(bbl.getInt("b4").value(), 0);    // zero-filled
+    ASSERT_EQ(bbl.getInt("len2").value(), 2);
+    ASSERT_EQ(bbl.getInt("b0_2").value(), 99); // still preserved
 }
 
 TEST(test_binary_copy_from) {
@@ -3991,14 +3995,14 @@ TEST(test_binary_copy_from) {
         "(dest2:copy-from src1)"
         "(= f (dest2:at 0)) (= g (dest2:at 1)) (= h (dest2:at 2))"
     );
-    ASSERT_EQ(bbl.getInt("a"), 11);
-    ASSERT_EQ(bbl.getInt("b"), 22);
-    ASSERT_EQ(bbl.getInt("c"), 33);
-    ASSERT_EQ(bbl.getInt("d"), 44);
-    ASSERT_EQ(bbl.getInt("e"), 55);
-    ASSERT_EQ(bbl.getInt("f"), 11);
-    ASSERT_EQ(bbl.getInt("g"), 22);
-    ASSERT_EQ(bbl.getInt("h"), 33);
+    ASSERT_EQ(bbl.getInt("a").value(), 11);
+    ASSERT_EQ(bbl.getInt("b").value(), 22);
+    ASSERT_EQ(bbl.getInt("c").value(), 33);
+    ASSERT_EQ(bbl.getInt("d").value(), 44);
+    ASSERT_EQ(bbl.getInt("e").value(), 55);
+    ASSERT_EQ(bbl.getInt("f").value(), 11);
+    ASSERT_EQ(bbl.getInt("g").value(), 22);
+    ASSERT_EQ(bbl.getInt("h").value(), 33);
 }
 
 TEST(test_binary_errors) {
