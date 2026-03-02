@@ -73,8 +73,13 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
             BblValue& rb = R(B); BblValue& rc = R(C);
             if (rb.type == BBL::Type::Int && rc.type == BBL::Type::Int)
                 R(A) = BblValue::makeInt(rb.intVal + rc.intVal);
-            else if (rb.type == BBL::Type::String)
-                R(A) = BblValue::makeString(state.allocString(rb.stringVal->data + valToStr(state, rc)));
+            else if (rb.type == BBL::Type::String) {
+                if (A == B) {
+                    rb.stringVal->data += valToStr(state, rc);
+                } else {
+                    R(A) = BblValue::makeString(state.allocString(rb.stringVal->data + valToStr(state, rc)));
+                }
+            }
             else
                 R(A) = BblValue::makeFloat(toFloat(rb) + toFloat(rc));
             break;
