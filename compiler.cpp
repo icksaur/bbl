@@ -277,9 +277,8 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
                     uint8_t reg = cs.allocReg();
                     cs.localRegs[symId] = reg;
                     if (isFnDef) compileFn(state, cs, node.children[2], target.stringVal, reg);
-                    else compileExpr(state, cs, node.children[2], reg);
-                    if (dest != reg) cs.chunk.emitABC(OP_MOVE, dest, reg, 0, node.line);
-                    return dest;
+                    else compileInto(state, cs, node.children[2], reg);
+                    return reg;
                 }
                 // Top-level global
                 if (isFnDef) compileFn(state, cs, node.children[2], target.stringVal, dest);
@@ -290,9 +289,8 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
             }
             // Existing local
             if (isFnDef) compileFn(state, cs, node.children[2], target.stringVal, static_cast<uint8_t>(localReg));
-            else compileExpr(state, cs, node.children[2], static_cast<uint8_t>(localReg));
-            if (dest != static_cast<uint8_t>(localReg))
-                cs.chunk.emitABC(OP_MOVE, dest, static_cast<uint8_t>(localReg), 0, node.line);
+            else compileInto(state, cs, node.children[2], static_cast<uint8_t>(localReg));
+            return static_cast<uint8_t>(localReg);
             return dest;
         } else if (target.type == NodeType::DotAccess) {
             uint8_t savedNext = cs.nextReg;
@@ -582,10 +580,16 @@ static void compileFn(BblState& state, CompilerState& cs, const AstNode& node, c
     fnCs.arity = static_cast<int>(paramList.children.size());
 
     uint8_t resultReg = fnCs.allocReg();
+    uint8_t lastReg = resultReg;
     for (size_t i = 2; i < node.children.size(); i++)
-        compileExpr(state, fnCs, node.children[i], resultReg);
-    if (node.children.size() <= 2)
+        lastReg = compileExpr(state, fnCs, node.children[i], resultReg);
+    if (node.children.size() <= 2) {
         fnCs.chunk.emitABC(OP_LOADNULL, resultReg, 0, 0, node.line);
+        lastReg = resultReg;
+    }
+    if (lastReg != resultReg) {
+        fnCs.chunk.emitABC(OP_MOVE, resultReg, lastReg, 0, node.line);
+    }
 
     fnCs.chunk.emitABC(OP_RETURN, resultReg, 0, 0, node.line);
     fnCs.chunk.numRegs = fnCs.maxRegs;
@@ -608,10 +612,15 @@ Chunk compile(BblState& state, const std::vector<AstNode>& nodes) {
     cs.allocReg(); // R[0] reserved
 
     uint8_t resultReg = cs.allocReg();
+    uint8_t lastReg = resultReg;
     for (size_t i = 0; i < nodes.size(); i++)
-        compileExpr(state, cs, nodes[i], resultReg);
-    if (nodes.empty())
+        lastReg = compileExpr(state, cs, nodes[i], resultReg);
+    if (nodes.empty()) {
         cs.chunk.emitABC(OP_LOADNULL, resultReg, 0, 0, 0);
+        lastReg = resultReg;
+    }
+    if (lastReg != resultReg)
+        cs.chunk.emitABC(OP_MOVE, resultReg, lastReg, 0, nodes.empty() ? 0 : nodes.back().line);
     cs.chunk.emitABC(OP_RETURN, resultReg, 0, 0, nodes.empty() ? 0 : nodes.back().line);
     cs.chunk.numRegs = cs.maxRegs;
 
