@@ -456,6 +456,7 @@ struct BblState {
     std::vector<BblStruct*> allocatedStructs;
     std::vector<BblVec*> allocatedVectors;
     std::vector<BblTable*> allocatedTables;
+    std::vector<BblTable*> freeTablePool;
     std::vector<BblUserData*> allocatedUserDatas;
     std::vector<BblClosure*> allocatedClosures;
     std::unique_ptr<VmState> vm;
