@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Threads REQUIRED)
 
-add_library(bbl_lib STATIC bbl.cpp compiler.cpp vm.cpp disasm.cpp)
+add_library(bbl_lib STATIC bbl.cpp compiler.cpp vm.cpp disasm.cpp jit.cpp)
 target_include_directories(bbl_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(bbl_lib PUBLIC Threads::Threads)
 

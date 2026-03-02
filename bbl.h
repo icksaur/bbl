@@ -487,6 +487,7 @@ struct BblState {
     std::string scriptDir;
     bool allowOpenFilesystem = false;
     bool useBytecode = false;
+    bool useJit = false;
 
     // Flow control (break/continue state flag)
     static constexpr uint8_t FlowNone = 0;

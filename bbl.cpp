@@ -18,6 +18,7 @@
 #include <glob.h>
 #include "compiler.h"
 #include "vm.h"
+#include "jit.h"
 
 // ---------- BblValue ----------
 
@@ -2599,6 +2600,11 @@ void BblState::exec(const std::string& source) {
     auto nodes = parse(lexer);
     if (useBytecode) {
         Chunk chunk = compile(*this, nodes);
+        if (useJit) {
+            auto result = jitExecute(*this, chunk);
+            (void)result;
+            return;
+        }
         auto result = vmExecute(*this, chunk);
         if (result != INTERPRET_OK)
             throw BBL::Error{"bytecode execution failed"};
@@ -2620,6 +2626,9 @@ BblValue BblState::execExpr(const std::string& source) {
     auto nodes = parse(lexer);
     if (useBytecode) {
         Chunk chunk = compile(*this, nodes);
+        if (useJit) {
+            return jitExecute(*this, chunk);
+        }
         auto result = vmExecute(*this, chunk);
         if (result != INTERPRET_OK)
             throw BBL::Error{"bytecode execution failed"};
