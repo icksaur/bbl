@@ -1,5 +1,5 @@
 local i = 0
-while i < 100000 do
+while i < 1000000 do
     local t = { k = i }
     i = i + 1
 end
