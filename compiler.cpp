@@ -1,150 +1,125 @@
 #include "compiler.h"
 #include "bbl.h"
 #include "vm.h"
-#include <stdexcept>
-
-int CompilerState::resolveLocal(uint32_t symbolId) const {
-    for (int i = static_cast<int>(locals.size()) - 1; i >= 0; i--) {
-        if (locals[i].symbolId == symbolId) return i;
-    }
-    return -1;
-}
 
 int CompilerState::resolveCapture(uint32_t symbolId) {
     if (!enclosing) return -1;
-
     int local = enclosing->resolveLocal(symbolId);
     if (local != -1) {
-        for (size_t i = 0; i < captures.size(); i++) {
-            if (captures[i].srcType == 0 && captures[i].srcIdx == static_cast<uint16_t>(local))
+        for (size_t i = 0; i < captures.size(); i++)
+            if (captures[i].srcType == 0 && captures[i].srcIdx == static_cast<uint8_t>(local))
                 return static_cast<int>(i);
-        }
-        captures.push_back({0, static_cast<uint16_t>(local)});
+        captures.push_back({0, static_cast<uint8_t>(local)});
         return static_cast<int>(captures.size() - 1);
     }
-
     int cap = enclosing->resolveCapture(symbolId);
     if (cap != -1) {
-        for (size_t i = 0; i < captures.size(); i++) {
-            if (captures[i].srcType == 1 && captures[i].srcIdx == static_cast<uint16_t>(cap))
+        for (size_t i = 0; i < captures.size(); i++)
+            if (captures[i].srcType == 1 && captures[i].srcIdx == static_cast<uint8_t>(cap))
                 return static_cast<int>(i);
-        }
-        captures.push_back({1, static_cast<uint16_t>(cap)});
+        captures.push_back({1, static_cast<uint8_t>(cap)});
         return static_cast<int>(captures.size() - 1);
     }
-
     return -1;
 }
 
-static void emitConstant(CompilerState& cs, const BblValue& val, int line) {
-    size_t idx = cs.chunk.addConstant(val);
-    cs.chunk.emit(OP_CONSTANT, line);
-    cs.chunk.emitU16(static_cast<uint16_t>(idx), line);
+static uint8_t compileExpr(BblState& state, CompilerState& cs, const AstNode& node, uint8_t dest);
+static void compileInto(BblState& state, CompilerState& cs, const AstNode& node, uint8_t dest) {
+    uint8_t r = compileExpr(state, cs, node, dest);
+    if (r != dest) cs.chunk.emitABC(OP_MOVE, dest, r, 0, node.line);
+}
+static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& node, uint8_t dest);
+static void compileFn(BblState& state, CompilerState& cs, const AstNode& node, const std::string& assignName, uint8_t dest);
+
+static uint8_t addSymConst(BblState& state, CompilerState& cs, uint32_t symId) {
+    return static_cast<uint8_t>(cs.chunk.addConstant(BblValue::makeInt(static_cast<int64_t>(symId))));
 }
 
-static int emitJump(CompilerState& cs, OpCode op, int line) {
-    cs.chunk.emit(op, line);
+static uint8_t addStrConst(BblState& state, CompilerState& cs, const std::string& s) {
+    return static_cast<uint8_t>(cs.chunk.addConstant(BblValue::makeString(state.intern(s))));
+}
+
+static int emitJump(CompilerState& cs, uint8_t op, uint8_t A, int line) {
     int offset = static_cast<int>(cs.chunk.code.size());
-    cs.chunk.emitU16(0xffff, line);
+    cs.chunk.emitAsBx(op, A, 0, line);
     return offset;
 }
 
 static void patchJump(CompilerState& cs, int offset) {
-    int jump = static_cast<int>(cs.chunk.code.size()) - offset - 2;
-    cs.chunk.patchU16(offset, static_cast<uint16_t>(jump));
+    int jump = static_cast<int>(cs.chunk.code.size()) - offset - 1;
+    cs.chunk.patchsBx(offset, jump);
 }
 
-static bool compileNode(BblState& state, CompilerState& cs, const AstNode& node);
-static bool compileList(BblState& state, CompilerState& cs, const AstNode& node);
-
-static void emitGetVar(BblState& state, CompilerState& cs, uint32_t symId, int line) {
-    int slot = cs.resolveLocal(symId);
-    if (slot != -1) {
-        cs.chunk.emit(OP_GET_LOCAL, line);
-        cs.chunk.emitU16(static_cast<uint16_t>(slot), line);
-        return;
-    }
-    int cap = cs.resolveCapture(symId);
-    if (cap != -1) {
-        cs.chunk.emit(OP_GET_CAPTURE, line);
-        cs.chunk.emit(static_cast<uint8_t>(cap), line);
-        return;
-    }
-    size_t idx = cs.chunk.addConstant(BblValue::makeInt(static_cast<int64_t>(symId)));
-    cs.chunk.emit(OP_GET_GLOBAL, line);
-    cs.chunk.emitU16(static_cast<uint16_t>(idx), line);
-}
-
-static bool emitSetVar(BblState& state, CompilerState& cs, uint32_t symId, int line, bool define) {
-    int slot = cs.resolveLocal(symId);
-    if (slot != -1) {
-        cs.chunk.emit(OP_SET_LOCAL, line);
-        cs.chunk.emitU16(static_cast<uint16_t>(slot), line);
-        return false;
-    }
-    if (!define) {
-        int cap = cs.resolveCapture(symId);
-        if (cap != -1) {
-            cs.chunk.emit(OP_SET_CAPTURE, line);
-            cs.chunk.emit(static_cast<uint8_t>(cap), line);
-            return false;
-        }
-    }
-    if (define && cs.scopeDepth > 0) {
-        cs.locals.push_back({symId, cs.scopeDepth});
-        return true; // value stays on stack as local slot
-    }
-    size_t idx = cs.chunk.addConstant(BblValue::makeInt(static_cast<int64_t>(symId)));
-    cs.chunk.emit(OP_SET_GLOBAL, line);
-    cs.chunk.emitU16(static_cast<uint16_t>(idx), line);
-    return false;
-}
-
-static bool compileNode(BblState& state, CompilerState& cs, const AstNode& node) {
+static uint8_t compileExpr(BblState& state, CompilerState& cs, const AstNode& node, uint8_t dest) {
     switch (node.type) {
-        case NodeType::IntLiteral:
-            emitConstant(cs, BblValue::makeInt(node.intVal), node.line);
-            return false;
-        case NodeType::FloatLiteral:
-            emitConstant(cs, BblValue::makeFloat(node.floatVal), node.line);
-            return false;
-        case NodeType::StringLiteral:
-            emitConstant(cs, BblValue::makeString(state.intern(node.stringVal)), node.line);
-            return false;
+        case NodeType::IntLiteral: {
+            int64_t v = node.intVal;
+            if (v >= -32768 && v <= 32767) {
+                cs.chunk.emitAsBx(OP_LOADINT, dest, static_cast<int>(v), node.line);
+            } else {
+                uint16_t idx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeInt(v)));
+                cs.chunk.emitABx(OP_LOADK, dest, idx, node.line);
+            }
+            return dest;
+        }
+        case NodeType::FloatLiteral: {
+            uint16_t idx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeFloat(node.floatVal)));
+            cs.chunk.emitABx(OP_LOADK, dest, idx, node.line);
+            return dest;
+        }
+        case NodeType::StringLiteral: {
+            uint16_t idx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeString(state.intern(node.stringVal))));
+            cs.chunk.emitABx(OP_LOADK, dest, idx, node.line);
+            return dest;
+        }
         case NodeType::BoolLiteral:
-            cs.chunk.emit(node.boolVal ? OP_TRUE : OP_FALSE, node.line);
-            return false;
+            cs.chunk.emitABC(OP_LOADBOOL, dest, node.boolVal ? 1 : 0, 0, node.line);
+            return dest;
         case NodeType::NullLiteral:
-            cs.chunk.emit(OP_NULL, node.line);
-            return false;
+            cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
+            return dest;
         case NodeType::BinaryLiteral: {
             BblBinary* bin = state.allocBinary(node.binaryData);
-            emitConstant(cs, BblValue::makeBinary(bin), node.line);
-            return false;
+            uint16_t idx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeBinary(bin)));
+            cs.chunk.emitABx(OP_LOADK, dest, idx, node.line);
+            return dest;
         }
         case NodeType::Symbol: {
             uint32_t symId = state.resolveSymbol(node.stringVal);
-            emitGetVar(state, cs, symId, node.line);
-            return false;
+            int lr = cs.resolveLocal(symId);
+            if (lr != -1) return static_cast<uint8_t>(lr);
+            int cap = cs.resolveCapture(symId);
+            if (cap != -1) {
+                cs.chunk.emitABC(OP_GETCAPTURE, dest, static_cast<uint8_t>(cap), 0, node.line);
+                return dest;
+            }
+            uint16_t kidx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeInt(static_cast<int64_t>(symId))));
+            cs.chunk.emitABx(OP_GETGLOBAL, dest, kidx, node.line);
+            return dest;
         }
         case NodeType::List:
-            return compileList(state, cs, node);
+            return compileList(state, cs, node, dest);
         case NodeType::DotAccess: {
-            compileNode(state, cs, node.children[0]);
-            if (!node.stringVal.empty()) {
-                size_t idx = cs.chunk.addConstant(BblValue::makeString(state.intern(node.stringVal)));
-                cs.chunk.emit(OP_GET_FIELD, node.line);
-                cs.chunk.emitU16(static_cast<uint16_t>(idx), node.line);
-            } else {
-                emitConstant(cs, BblValue::makeInt(node.intVal), node.line);
-                cs.chunk.emit(OP_GET_INDEX, node.line);
+            uint8_t objReg = compileExpr(state, cs, node.children[0], dest);
+            if (objReg != dest) {
+                cs.chunk.emitABC(OP_MOVE, dest, objReg, 0, node.line);
+                objReg = dest;
             }
-            return false;
+            if (!node.stringVal.empty()) {
+                uint8_t nameIdx = addStrConst(state, cs, node.stringVal);
+                cs.chunk.emitABC(OP_GETFIELD, dest, objReg, nameIdx, node.line);
+            } else {
+                uint8_t idxReg = cs.allocReg();
+                cs.chunk.emitAsBx(OP_LOADINT, idxReg, static_cast<int>(node.intVal), node.line);
+                cs.chunk.emitABC(OP_GETINDEX, dest, objReg, idxReg, node.line);
+                cs.freeReg();
+            }
+            return dest;
         }
         case NodeType::ColonAccess:
             throw BBL::Error{"colon access must be called as a method"};
     }
-    return false;
+    return dest;
 }
 
 static OpCode arithOp(const std::string& name) {
@@ -156,7 +131,7 @@ static OpCode arithOp(const std::string& name) {
     if (name == "band") return OP_BAND;
     if (name == "bor") return OP_BOR;
     if (name == "bxor") return OP_BXOR;
-    return OP_NULL; // sentinel
+    return OP_LOADNULL;
 }
 
 static OpCode cmpOp(const std::string& name) {
@@ -166,459 +141,454 @@ static OpCode cmpOp(const std::string& name) {
     if (name == ">") return OP_GT;
     if (name == "<=") return OP_LTE;
     if (name == ">=") return OP_GTE;
-    return OP_NULL;
+    return OP_LOADNULL;
 }
 
-static void compileFn(BblState& state, CompilerState& cs, const AstNode& node, const std::string& assignName);
-
-static bool compileList(BblState& state, CompilerState& cs, const AstNode& node) {
+static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& node, uint8_t dest) {
     if (node.children.empty()) {
-        cs.chunk.emit(OP_NULL, node.line);
-        return false;
+        cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
+        return dest;
     }
-
     auto& head = node.children[0];
 
+    // Method call: (obj:method args...)
     if (head.type == NodeType::ColonAccess) {
-        compileNode(state, cs, head.children[0]);
-        for (size_t i = 1; i < node.children.size(); i++)
-            compileNode(state, cs, node.children[i]);
-        size_t nameIdx = cs.chunk.addConstant(BblValue::makeString(state.intern(head.stringVal)));
-        cs.chunk.emit(OP_METHOD_CALL, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(nameIdx), node.line);
-        cs.chunk.emit(static_cast<uint8_t>(node.children.size() - 1), node.line);
-        return false;
+        uint8_t base = dest;
+        uint8_t savedNext = cs.nextReg;
+        if (base < cs.nextReg) base = cs.allocReg();
+        cs.freeRegsTo(base);
+
+        compileInto(state, cs, head.children[0], base);
+        if (cs.nextReg <= base) cs.nextReg = base + 1;
+        uint8_t argc = static_cast<uint8_t>(node.children.size() - 1);
+        for (size_t i = 1; i < node.children.size(); i++) {
+            uint8_t argReg = cs.allocReg();
+            compileInto(state, cs, node.children[i], argReg);
+        }
+        uint8_t nameIdx = addStrConst(state, cs, head.stringVal);
+        cs.chunk.emitABC(OP_MCALL, base, argc, nameIdx, node.line);
+        cs.freeRegsTo(savedNext);
+        if (base != dest) {
+            cs.chunk.emitABC(OP_MOVE, dest, base, 0, node.line);
+        }
+        return dest;
     }
 
     if (head.type != NodeType::Symbol) {
-        compileNode(state, cs, head);
-        for (size_t i = 1; i < node.children.size(); i++)
-            compileNode(state, cs, node.children[i]);
-        cs.chunk.emit(OP_CALL, node.line);
-        cs.chunk.emit(static_cast<uint8_t>(node.children.size() - 1), node.line);
-        return false;
+        // Dynamic call
+        uint8_t base = dest;
+        uint8_t savedNext = cs.nextReg;
+        if (base < cs.nextReg) base = cs.allocReg();
+        cs.freeRegsTo(base);
+
+        compileInto(state, cs, head, base);
+        uint8_t argc = static_cast<uint8_t>(node.children.size() - 1);
+        for (size_t i = 1; i < node.children.size(); i++) {
+            uint8_t argReg = cs.allocReg();
+            compileInto(state, cs, node.children[i], argReg);
+        }
+        cs.chunk.emitABC(OP_CALL, base, argc, 1, node.line);
+        cs.freeRegsTo(savedNext);
+        if (base != dest) cs.chunk.emitABC(OP_MOVE, dest, base, 0, node.line);
+        return dest;
     }
 
     const std::string& op = head.stringVal;
 
+    // Arithmetic: chained binary ops
     OpCode aop = arithOp(op);
-    if (aop != OP_NULL) {
+    if (aop != OP_LOADNULL) {
         if (node.children.size() < 3) throw BBL::Error{"'" + op + "' requires at least 2 arguments"};
-        compileNode(state, cs, node.children[1]);
+        uint8_t savedNext = cs.nextReg;
+        uint8_t regA = compileExpr(state, cs, node.children[1], dest);
         for (size_t i = 2; i < node.children.size(); i++) {
-            compileNode(state, cs, node.children[i]);
-            cs.chunk.emit(aop, node.line);
+            if (aop == OP_ADD && node.children[i].type == NodeType::IntLiteral && node.children.size() == 3) {
+                uint8_t kidx = static_cast<uint8_t>(cs.chunk.addConstant(BblValue::makeInt(node.children[i].intVal)));
+                cs.chunk.emitABC(OP_ADDK, dest, regA, kidx, node.line);
+            } else {
+                uint8_t regB = cs.allocReg();
+                uint8_t actualB = compileExpr(state, cs, node.children[i], regB);
+                cs.chunk.emitABC(aop, dest, regA, actualB, node.line);
+            }
+            regA = dest;
+            cs.freeRegsTo(savedNext > dest + 1 ? savedNext : dest + 1);
         }
-        return false;
+        return dest;
     }
 
+    // Comparisons
     OpCode cop = cmpOp(op);
-    if (cop != OP_NULL) {
+    if (cop != OP_LOADNULL) {
         if (node.children.size() != 3) throw BBL::Error{"'" + op + "' requires exactly 2 arguments"};
-        compileNode(state, cs, node.children[1]);
-        compileNode(state, cs, node.children[2]);
-        cs.chunk.emit(cop, node.line);
-        return false;
+        uint8_t savedNext = cs.nextReg;
+        uint8_t regA = compileExpr(state, cs, node.children[1], cs.allocReg());
+        uint8_t regB = compileExpr(state, cs, node.children[2], cs.allocReg());
+        cs.chunk.emitABC(cop, dest, regA, regB, node.line);
+        cs.freeRegsTo(savedNext);
+        return dest;
     }
 
     if (op == "shl" || op == "shr") {
         if (node.children.size() != 3) throw BBL::Error{"'" + op + "' requires exactly 2 arguments"};
-        compileNode(state, cs, node.children[1]);
-        compileNode(state, cs, node.children[2]);
-        cs.chunk.emit(op == "shl" ? OP_SHL : OP_SHR, node.line);
-        return false;
+        uint8_t savedNext = cs.nextReg;
+        uint8_t regA = compileExpr(state, cs, node.children[1], cs.allocReg());
+        uint8_t regB = compileExpr(state, cs, node.children[2], cs.allocReg());
+        cs.chunk.emitABC(op == "shl" ? OP_SHL : OP_SHR, dest, regA, regB, node.line);
+        cs.freeRegsTo(savedNext);
+        return dest;
     }
 
     if (op == "bnot") {
-        if (node.children.size() != 2) throw BBL::Error{"'bnot' requires exactly 1 argument"};
-        compileNode(state, cs, node.children[1]);
-        cs.chunk.emit(OP_BNOT, node.line);
-        return false;
+        uint8_t regA = compileExpr(state, cs, node.children[1], dest);
+        cs.chunk.emitABC(OP_BNOT, dest, regA, 0, node.line);
+        return dest;
     }
 
     if (op == "not") {
-        if (node.children.size() != 2) throw BBL::Error{"'not' requires exactly 1 argument"};
-        compileNode(state, cs, node.children[1]);
-        cs.chunk.emit(OP_NOT, node.line);
-        return false;
+        uint8_t regA = compileExpr(state, cs, node.children[1], dest);
+        cs.chunk.emitABC(OP_NOT, dest, regA, 0, node.line);
+        return dest;
     }
 
+    // Assignment
     if (op == "=") {
         if (node.children.size() < 3) throw BBL::Error{"'=' requires at least 2 arguments"};
         auto& target = node.children[1];
 
         if (target.type == NodeType::Symbol) {
             uint32_t symId = state.resolveSymbol(target.stringVal);
+            int localReg = cs.resolveLocal(symId);
+
             bool isFnDef = node.children[2].type == NodeType::List &&
                            !node.children[2].children.empty() &&
                            node.children[2].children[0].type == NodeType::Symbol &&
                            node.children[2].children[0].stringVal == "fn";
 
-            if (isFnDef) {
-                compileFn(state, cs, node.children[2], target.stringVal);
-            } else {
-                compileNode(state, cs, node.children[2]);
-            }
-
-            bool exists = cs.resolveLocal(symId) != -1;
-            if (!exists && cs.enclosing) {
+            if (localReg == -1) {
                 int cap = cs.resolveCapture(symId);
-                if (cap != -1) exists = true;
+                if (cap != -1) {
+                    if (isFnDef) compileFn(state, cs, node.children[2], target.stringVal, dest);
+                    else compileExpr(state, cs, node.children[2], dest);
+                    cs.chunk.emitABC(OP_SETCAPTURE, dest, static_cast<uint8_t>(cap), 0, node.line);
+                    return dest;
+                }
+                // New local or global
+                if (cs.scopeDepth > 0 || cs.enclosing) {
+                    uint8_t reg = cs.allocReg();
+                    cs.localRegs[symId] = reg;
+                    if (isFnDef) compileFn(state, cs, node.children[2], target.stringVal, reg);
+                    else compileExpr(state, cs, node.children[2], reg);
+                    if (dest != reg) cs.chunk.emitABC(OP_MOVE, dest, reg, 0, node.line);
+                    return dest;
+                }
+                // Top-level global
+                if (isFnDef) compileFn(state, cs, node.children[2], target.stringVal, dest);
+                else compileExpr(state, cs, node.children[2], dest);
+                uint16_t kidx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeInt(static_cast<int64_t>(symId))));
+                cs.chunk.emitABx(OP_SETGLOBAL, dest, kidx, node.line);
+                return dest;
             }
-            bool isNewLocal = emitSetVar(state, cs, symId, node.line, !exists);
-            if (isNewLocal) return true;
+            // Existing local
+            if (isFnDef) compileFn(state, cs, node.children[2], target.stringVal, static_cast<uint8_t>(localReg));
+            else compileExpr(state, cs, node.children[2], static_cast<uint8_t>(localReg));
+            if (dest != static_cast<uint8_t>(localReg))
+                cs.chunk.emitABC(OP_MOVE, dest, static_cast<uint8_t>(localReg), 0, node.line);
+            return dest;
         } else if (target.type == NodeType::DotAccess) {
+            uint8_t savedNext = cs.nextReg;
+            uint8_t valReg = compileExpr(state, cs, node.children[2], cs.allocReg());
+            uint8_t objReg = compileExpr(state, cs, target.children[0], cs.allocReg());
             if (!target.stringVal.empty()) {
-                // SET_FIELD expects: [val, obj] (obj on top)
-                compileNode(state, cs, node.children[2]); // value
-                compileNode(state, cs, target.children[0]); // object
-                size_t idx = cs.chunk.addConstant(BblValue::makeString(state.intern(target.stringVal)));
-                cs.chunk.emit(OP_SET_FIELD, node.line);
-                cs.chunk.emitU16(static_cast<uint16_t>(idx), node.line);
+                uint8_t nameIdx = addStrConst(state, cs, target.stringVal);
+                cs.chunk.emitABC(OP_SETFIELD, valReg, objReg, nameIdx, node.line);
             } else {
-                // SET_INDEX expects: [obj, idx, val] (val on top)
-                compileNode(state, cs, target.children[0]); // object
-                emitConstant(cs, BblValue::makeInt(target.intVal), node.line); // index
-                compileNode(state, cs, node.children[2]); // value
-                cs.chunk.emit(OP_SET_INDEX, node.line);
+                uint8_t idxReg = cs.allocReg();
+                cs.chunk.emitAsBx(OP_LOADINT, idxReg, static_cast<int>(target.intVal), node.line);
+                cs.chunk.emitABC(OP_SETINDEX, valReg, objReg, idxReg, node.line);
             }
+            if (dest != valReg) cs.chunk.emitABC(OP_MOVE, dest, valReg, 0, node.line);
+            cs.freeRegsTo(savedNext);
+            return dest;
         } else {
             throw BBL::Error{"invalid assignment target"};
         }
-        return false;
     }
 
+    // Control flow
     if (op == "if") {
-        compileNode(state, cs, node.children[1]);
-        int elseJump = emitJump(cs, OP_JUMP_IF_FALSE, node.line);
-        compileNode(state, cs, node.children[2]);
+        uint8_t condReg = compileExpr(state, cs, node.children[1], dest);
+        int elseJump = emitJump(cs, OP_JMPFALSE, condReg, node.line);
+        compileInto(state, cs, node.children[2], dest);
         if (node.children.size() > 3) {
-            int endJump = emitJump(cs, OP_JUMP, node.line);
+            int endJump = emitJump(cs, OP_JMP, 0, node.line);
             patchJump(cs, elseJump);
-            compileNode(state, cs, node.children[3]);
+            compileInto(state, cs, node.children[3], dest);
             patchJump(cs, endJump);
         } else {
-            int endJump = emitJump(cs, OP_JUMP, node.line);
+            int endJump = emitJump(cs, OP_JMP, 0, node.line);
             patchJump(cs, elseJump);
-            cs.chunk.emit(OP_NULL, node.line);
+            cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
             patchJump(cs, endJump);
         }
-        return false;
+        return dest;
     }
 
     if (op == "loop") {
         CompilerState::LoopInfo loopInfo;
         loopInfo.start = static_cast<int>(cs.chunk.code.size());
-        loopInfo.scopeDepthAtLoop = cs.scopeDepth;
         cs.loops.push_back(loopInfo);
 
-        compileNode(state, cs, node.children[1]);
-        int exitJump = emitJump(cs, OP_JUMP_IF_FALSE, node.line);
+        uint8_t condReg = cs.allocReg();
+        compileExpr(state, cs, node.children[1], condReg);
+        int exitJump = emitJump(cs, OP_JMPFALSE, condReg, node.line);
+        cs.freeReg();
 
-        for (size_t i = 2; i < node.children.size(); i++) {
-            compileNode(state, cs, node.children[i]);
-            cs.chunk.emit(OP_POP, node.line);
-        }
+        for (size_t i = 2; i < node.children.size(); i++)
+            compileExpr(state, cs, node.children[i], dest);
 
-        int loopOffset = static_cast<int>(cs.chunk.code.size()) - cs.loops.back().start + 3;
-        cs.chunk.emit(OP_LOOP, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(loopOffset), node.line);
+        int loopOffset = static_cast<int>(cs.chunk.code.size()) - cs.loops.back().start + 1;
+        cs.chunk.emitAsBx(OP_LOOP, 0, loopOffset, node.line);
 
         patchJump(cs, exitJump);
-        cs.chunk.emit(OP_NULL, node.line);
+        cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
 
         for (int br : cs.loops.back().breaks) patchJump(cs, br);
         cs.loops.pop_back();
-        return false;
+        return dest;
     }
 
     if (op == "each") {
-        if (node.children.size() < 4)
-            throw BBL::Error{"'each' requires variable, container, and body"};
+        if (node.children.size() < 4) throw BBL::Error{"'each' requires variable, container, and body"};
+        uint32_t varSym = state.resolveSymbol(node.children[1].stringVal);
+        uint8_t savedNext = cs.nextReg;
 
-        auto& varNode = node.children[1];
-        uint32_t varSym = state.resolveSymbol(varNode.stringVal);
-
-        // Reserve slots for each's internal locals by pushing nulls
-        int containerSlot = static_cast<int>(cs.locals.size());
-        cs.locals.push_back({state.resolveSymbol("__each_container__"), cs.scopeDepth});
-        int lenSlot = static_cast<int>(cs.locals.size());
-        cs.locals.push_back({state.resolveSymbol("__each_len__"), cs.scopeDepth});
-        int idxSlot = static_cast<int>(cs.locals.size());
-        cs.locals.push_back({state.resolveSymbol("__each_i__"), cs.scopeDepth});
-        int elemSlot = static_cast<int>(cs.locals.size());
-        cs.locals.push_back({varSym, cs.scopeDepth});
-
-        // Push placeholder nulls to reserve stack space for these locals
-        cs.chunk.emit(OP_NULL, node.line);  // container
-        cs.chunk.emit(OP_NULL, node.line);  // len
-        cs.chunk.emit(OP_NULL, node.line);  // i
-        cs.chunk.emit(OP_NULL, node.line);  // elem
-
-        // Store container
-        compileNode(state, cs, node.children[2]);
-        cs.chunk.emit(OP_SET_LOCAL, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(containerSlot), node.line);
-        cs.chunk.emit(OP_POP, node.line);
-
-        // Store length
-        cs.chunk.emit(OP_GET_LOCAL, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(containerSlot), node.line);
-        cs.chunk.emit(OP_LENGTH, node.line);
-        cs.chunk.emit(OP_SET_LOCAL, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(lenSlot), node.line);
-        cs.chunk.emit(OP_POP, node.line);
-
-        // Init index to 0
-        emitConstant(cs, BblValue::makeInt(0), node.line);
-        cs.chunk.emit(OP_SET_LOCAL, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(idxSlot), node.line);
-        cs.chunk.emit(OP_POP, node.line);
+        uint8_t containerReg = cs.allocReg();
+        compileExpr(state, cs, node.children[2], containerReg);
+        uint8_t lenReg = cs.allocReg();
+        cs.chunk.emitABC(OP_LENGTH, lenReg, containerReg, 0, node.line);
+        uint8_t idxReg = cs.allocReg();
+        cs.chunk.emitAsBx(OP_LOADINT, idxReg, 0, node.line);
+        uint8_t elemReg = cs.allocReg();
+        cs.localRegs[varSym] = elemReg;
 
         CompilerState::LoopInfo loopInfo;
         loopInfo.start = static_cast<int>(cs.chunk.code.size());
-        loopInfo.scopeDepthAtLoop = cs.scopeDepth;
         cs.loops.push_back(loopInfo);
 
-        cs.chunk.emit(OP_GET_LOCAL, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(idxSlot), node.line);
-        cs.chunk.emit(OP_GET_LOCAL, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(lenSlot), node.line);
-        cs.chunk.emit(OP_LT, node.line);
-        int exitJump = emitJump(cs, OP_JUMP_IF_FALSE, node.line);
+        uint8_t cmpReg = cs.allocReg();
+        cs.chunk.emitABC(OP_LT, cmpReg, idxReg, lenReg, node.line);
+        int exitJump = emitJump(cs, OP_JMPFALSE, cmpReg, node.line);
+        cs.freeReg();
 
-        cs.chunk.emit(OP_GET_LOCAL, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(containerSlot), node.line);
-        cs.chunk.emit(OP_GET_LOCAL, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(idxSlot), node.line);
-        cs.chunk.emit(OP_GET_INDEX, node.line);
-        cs.chunk.emit(OP_SET_LOCAL, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(elemSlot), node.line);
-        cs.chunk.emit(OP_POP, node.line);
+        cs.chunk.emitABC(OP_GETINDEX, elemReg, containerReg, idxReg, node.line);
+        for (size_t i = 3; i < node.children.size(); i++)
+            compileExpr(state, cs, node.children[i], dest);
 
-        for (size_t i = 3; i < node.children.size(); i++) {
-            compileNode(state, cs, node.children[i]);
-            cs.chunk.emit(OP_POP, node.line);
-        }
+        uint8_t oneConst = static_cast<uint8_t>(cs.chunk.addConstant(BblValue::makeInt(1)));
+        cs.chunk.emitABC(OP_ADDK, idxReg, idxReg, oneConst, node.line);
 
-        cs.chunk.emit(OP_GET_LOCAL, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(idxSlot), node.line);
-        emitConstant(cs, BblValue::makeInt(1), node.line);
-        cs.chunk.emit(OP_ADD, node.line);
-        cs.chunk.emit(OP_SET_LOCAL, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(idxSlot), node.line);
-        cs.chunk.emit(OP_POP, node.line);
-
-        int loopOffset = static_cast<int>(cs.chunk.code.size()) - cs.loops.back().start + 3;
-        cs.chunk.emit(OP_LOOP, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(loopOffset), node.line);
+        int loopOffset = static_cast<int>(cs.chunk.code.size()) - cs.loops.back().start + 1;
+        cs.chunk.emitAsBx(OP_LOOP, 0, loopOffset, node.line);
 
         patchJump(cs, exitJump);
-        cs.chunk.emit(OP_NULL, node.line);
-
+        cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
         for (int br : cs.loops.back().breaks) patchJump(cs, br);
         cs.loops.pop_back();
-        return false;
+        cs.freeRegsTo(savedNext);
+        return dest;
     }
 
     if (op == "do") {
         if (node.children.size() <= 1) {
-            cs.chunk.emit(OP_NULL, node.line);
-            return false;
+            cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
+            return dest;
         }
-        bool prevLocal = false;
-        for (size_t i = 1; i < node.children.size(); i++) {
-            if (i > 1 && !prevLocal) cs.chunk.emit(OP_POP, node.line);
-            prevLocal = compileNode(state, cs, node.children[i]);
-        }
-        return false;
+        for (size_t i = 1; i < node.children.size(); i++)
+            compileExpr(state, cs, node.children[i], dest);
+        return dest;
     }
 
     if (op == "and") {
-        compileNode(state, cs, node.children[1]);
-        int endJump = emitJump(cs, OP_AND, node.line);
-        compileNode(state, cs, node.children[2]);
+        compileExpr(state, cs, node.children[1], dest);
+        int endJump = emitJump(cs, OP_AND, dest, node.line);
+        compileExpr(state, cs, node.children[2], dest);
         patchJump(cs, endJump);
-        return false;
+        return dest;
     }
 
     if (op == "or") {
-        compileNode(state, cs, node.children[1]);
-        int endJump = emitJump(cs, OP_OR, node.line);
-        compileNode(state, cs, node.children[2]);
+        compileExpr(state, cs, node.children[1], dest);
+        int endJump = emitJump(cs, OP_OR, dest, node.line);
+        compileExpr(state, cs, node.children[2], dest);
         patchJump(cs, endJump);
-        return false;
+        return dest;
     }
 
     if (op == "fn") {
-        compileFn(state, cs, node, "");
-        return false;
+        compileFn(state, cs, node, "", dest);
+        return dest;
     }
 
     if (op == "break") {
         if (cs.loops.empty()) throw BBL::Error{"'break' outside of loop"};
-        int br = emitJump(cs, OP_JUMP, node.line);
+        int br = emitJump(cs, OP_JMP, 0, node.line);
         cs.loops.back().breaks.push_back(br);
-        cs.chunk.emit(OP_NULL, node.line);
-        return false;
+        cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
+        return dest;
     }
 
     if (op == "continue") {
         if (cs.loops.empty()) throw BBL::Error{"'continue' outside of loop"};
-        int loopOffset = static_cast<int>(cs.chunk.code.size()) - cs.loops.back().start + 3;
-        cs.chunk.emit(OP_LOOP, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(loopOffset), node.line);
-        return false;
+        int loopOffset = static_cast<int>(cs.chunk.code.size()) - cs.loops.back().start + 1;
+        cs.chunk.emitAsBx(OP_LOOP, 0, loopOffset, node.line);
+        return dest;
     }
 
     if (op == "try") {
         if (node.children.size() < 4) throw BBL::Error{"'try' requires body and catch"};
-        int tryJump = emitJump(cs, OP_TRY_BEGIN, node.line);
-
-        compileNode(state, cs, node.children[1]);
-        cs.chunk.emit(OP_TRY_END, node.line);
-        int endJump = emitJump(cs, OP_JUMP, node.line);
-
+        int tryJump = emitJump(cs, OP_TRYBEGIN, dest, node.line);
+        compileExpr(state, cs, node.children[1], dest);
+        cs.chunk.emitABC(OP_TRYEND, 0, 0, 0, node.line);
+        int endJump = emitJump(cs, OP_JMP, 0, node.line);
         patchJump(cs, tryJump);
 
-        auto& catchVar = node.children[2];
-        uint32_t catchSym = state.resolveSymbol(catchVar.stringVal);
-        int catchSlot = static_cast<int>(cs.locals.size());
-        cs.locals.push_back({catchSym, cs.scopeDepth});
+        uint32_t catchSym = state.resolveSymbol(node.children[2].stringVal);
+        uint8_t catchReg = cs.allocReg();
+        cs.localRegs[catchSym] = catchReg;
+        // Error value will be placed in dest by the VM, move to catchReg
+        if (catchReg != dest) cs.chunk.emitABC(OP_MOVE, catchReg, dest, 0, node.line);
 
-        cs.chunk.emit(OP_SET_LOCAL, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(catchSlot), node.line);
-        cs.chunk.emit(OP_POP, node.line);
-
-        compileNode(state, cs, node.children[3]);
+        compileExpr(state, cs, node.children[3], dest);
         patchJump(cs, endJump);
-        return false;
-    }
-
-    if (op == "with") {
-        throw BBL::Error{"'with' not yet implemented in bytecode"};
+        return dest;
     }
 
     if (op == "vector") {
         if (node.children.size() < 2) throw BBL::Error{"'vector' requires a type name"};
-        emitConstant(cs, BblValue::makeString(state.intern(node.children[1].stringVal)), node.line);
-        for (size_t i = 2; i < node.children.size(); i++)
-            compileNode(state, cs, node.children[i]);
-        cs.chunk.emit(OP_VECTOR, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(node.children.size() - 2), node.line);
-        return false;
+        uint8_t savedNext = cs.nextReg;
+        uint8_t base = dest;
+        if (base < cs.nextReg) { base = cs.allocReg(); cs.freeRegsTo(base); }
+        if (cs.nextReg <= base) cs.nextReg = base + 1;
+        uint8_t typeIdx = addStrConst(state, cs, node.children[1].stringVal);
+        uint8_t argc = static_cast<uint8_t>(node.children.size() - 2);
+        for (size_t i = 2; i < node.children.size(); i++) {
+            uint8_t argReg = cs.allocReg();
+            compileInto(state, cs, node.children[i], argReg);
+        }
+        cs.chunk.emitABC(OP_VECTOR, base, argc, typeIdx, node.line);
+        cs.freeRegsTo(savedNext);
+        if (base != dest) cs.chunk.emitABC(OP_MOVE, dest, base, 0, node.line);
+        return dest;
     }
 
     if (op == "table") {
-        size_t pairCount = (node.children.size() - 1) / 2;
-        for (size_t i = 1; i < node.children.size(); i++)
-            compileNode(state, cs, node.children[i]);
-        cs.chunk.emit(OP_TABLE, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(pairCount), node.line);
-        return false;
+        uint8_t savedNext = cs.nextReg;
+        uint8_t base = dest;
+        if (base < cs.nextReg) { base = cs.allocReg(); cs.freeRegsTo(base); }
+        if (cs.nextReg <= base) cs.nextReg = base + 1;
+        uint8_t pairCount = static_cast<uint8_t>((node.children.size() - 1) / 2);
+        for (size_t i = 1; i < node.children.size(); i++) {
+            uint8_t argReg = cs.allocReg();
+            compileInto(state, cs, node.children[i], argReg);
+        }
+        cs.chunk.emitABC(OP_TABLE, base, pairCount, 0, node.line);
+        cs.freeRegsTo(savedNext);
+        if (base != dest) cs.chunk.emitABC(OP_MOVE, dest, base, 0, node.line);
+        return dest;
     }
 
     if (op == "struct") {
-        // struct declaration must be handled at runtime (StructBuilder API requires C++ type info)
-        // Fall through to tree-walker for declaration
-        throw BBL::Error{"'struct' declarations in bytecode mode must use tree-walker (define structs before enabling --bytecode)"};
+        throw BBL::Error{"'struct' declarations must use tree-walker (define structs before --bytecode)"};
     }
 
     if (op == "binary") {
-        if (node.children.size() != 2) throw BBL::Error{"'binary' requires exactly 1 argument"};
-        compileNode(state, cs, node.children[1]);
-        cs.chunk.emit(OP_BINARY, node.line);
-        return false;
+        uint8_t srcReg = compileExpr(state, cs, node.children[1], dest);
+        cs.chunk.emitABC(OP_BINARY, dest, srcReg, 0, node.line);
+        return dest;
     }
 
     if (op == "sizeof") {
-        if (node.children.size() != 2) throw BBL::Error{"'sizeof' requires exactly 1 argument"};
-        size_t idx = cs.chunk.addConstant(BblValue::makeString(state.intern(node.children[1].stringVal)));
-        cs.chunk.emit(OP_SIZEOF, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(idx), node.line);
-        return false;
+        uint8_t nameIdx = addStrConst(state, cs, node.children[1].stringVal);
+        cs.chunk.emitABC(OP_SIZEOF, dest, nameIdx, 0, node.line);
+        return dest;
     }
 
     if (op == "exec") {
-        if (node.children.size() != 2) throw BBL::Error{"'exec' requires exactly 1 argument"};
-        compileNode(state, cs, node.children[1]);
-        cs.chunk.emit(OP_EXEC, node.line);
-        return false;
+        uint8_t srcReg = compileExpr(state, cs, node.children[1], dest);
+        cs.chunk.emitABC(OP_EXEC, dest, srcReg, 0, node.line);
+        return dest;
     }
 
     if (op == "execfile") {
-        if (node.children.size() != 2) throw BBL::Error{"'execfile' requires exactly 1 argument"};
-        compileNode(state, cs, node.children[1]);
-        cs.chunk.emit(OP_EXECFILE, node.line);
-        return false;
+        uint8_t srcReg = compileExpr(state, cs, node.children[1], dest);
+        cs.chunk.emitABC(OP_EXECFILE, dest, srcReg, 0, node.line);
+        return dest;
     }
 
-    // Check if it's a struct constructor
+    // Struct constructor
     auto it = state.structDescs.find(op);
     if (it != state.structDescs.end()) {
-        for (size_t i = 1; i < node.children.size(); i++)
-            compileNode(state, cs, node.children[i]);
-        size_t idx = cs.chunk.addConstant(BblValue::makeString(state.intern(op)));
-        cs.chunk.emit(OP_STRUCT, node.line);
-        cs.chunk.emitU16(static_cast<uint16_t>(idx), node.line);
-        cs.chunk.emit(static_cast<uint8_t>(node.children.size() - 1), node.line);
-        return false;
+        uint8_t savedNext = cs.nextReg;
+        uint8_t base = dest;
+        if (base < cs.nextReg) { base = cs.allocReg(); cs.freeRegsTo(base); }
+        uint8_t nameIdx = addStrConst(state, cs, op);
+        uint8_t argc = static_cast<uint8_t>(node.children.size() - 1);
+        for (size_t i = 1; i < node.children.size(); i++) {
+            uint8_t argReg = cs.allocReg();
+            compileInto(state, cs, node.children[i], argReg);
+        }
+        cs.chunk.emitABC(OP_STRUCT, base, argc, nameIdx, node.line);
+        cs.freeRegsTo(savedNext);
+        if (base != dest) cs.chunk.emitABC(OP_MOVE, dest, base, 0, node.line);
+        return dest;
     }
 
     // Regular function call
-    compileNode(state, cs, head);
-    for (size_t i = 1; i < node.children.size(); i++)
-        compileNode(state, cs, node.children[i]);
+    uint8_t base = dest;
+    uint8_t savedNext = cs.nextReg;
+    if (base < cs.nextReg) { base = cs.allocReg(); cs.freeRegsTo(base); }
 
+    compileInto(state, cs, head, base);
+    if (cs.nextReg <= base) cs.nextReg = base + 1;
+    uint8_t argc = static_cast<uint8_t>(node.children.size() - 1);
+    for (size_t i = 1; i < node.children.size(); i++) {
+        uint8_t argReg = cs.allocReg();
+        compileInto(state, cs, node.children[i], argReg);
+    }
     bool isTailCall = node.isTailCall && !cs.fnName.empty();
-    cs.chunk.emit(isTailCall ? OP_TAIL_CALL : OP_CALL, node.line);
-    cs.chunk.emit(static_cast<uint8_t>(node.children.size() - 1), node.line);
-    return false;
+    cs.chunk.emitABC(isTailCall ? OP_TAILCALL : OP_CALL, base, argc, 1, node.line);
+    cs.freeRegsTo(savedNext);
+    if (base != dest) cs.chunk.emitABC(OP_MOVE, dest, base, 0, node.line);
+    return dest;
 }
 
-static void compileFn(BblState& state, CompilerState& cs, const AstNode& node, const std::string& assignName) {
+static void compileFn(BblState& state, CompilerState& cs, const AstNode& node, const std::string& assignName, uint8_t dest) {
     CompilerState fnCs;
     fnCs.enclosing = &cs;
     fnCs.scopeDepth = 1;
     fnCs.fnName = assignName;
 
-    if (node.children.size() < 3)
-        throw BBL::Error{"fn requires a parameter list and body"};
-
+    if (node.children.size() < 3) throw BBL::Error{"fn requires a parameter list and body"};
     auto& paramList = node.children[1];
-    if (paramList.type != NodeType::List)
-        throw BBL::Error{"fn: first argument must be a parameter list"};
+    if (paramList.type != NodeType::List) throw BBL::Error{"fn: first argument must be a parameter list"};
 
-    // Slot 0 is reserved for the callee value on the stack
-    fnCs.locals.push_back({0, 1});
-
+    fnCs.allocReg(); // R[0] = callee
     for (auto& p : paramList.children) {
-        if (p.type != NodeType::Symbol)
-            throw BBL::Error{"fn: parameter must be a symbol"};
+        if (p.type != NodeType::Symbol) throw BBL::Error{"fn: parameter must be a symbol"};
         uint32_t symId = state.resolveSymbol(p.stringVal);
-        fnCs.locals.push_back({symId, 1});
+        uint8_t reg = fnCs.allocReg();
+        fnCs.localRegs[symId] = reg;
     }
     fnCs.arity = static_cast<int>(paramList.children.size());
 
-    bool prevWasLocalDef = false;
-    for (size_t i = 2; i < node.children.size(); i++) {
-        if (i > 2 && !prevWasLocalDef) fnCs.chunk.emit(OP_POP, node.children[i].line);
-        prevWasLocalDef = compileNode(state, fnCs, node.children[i]);
-    }
-    if (node.children.size() <= 2) {
-        fnCs.chunk.emit(OP_NULL, node.line);
-    } else if (prevWasLocalDef) {
-        // Last expression was a local def — push its value as the return value
-        int lastSlot = static_cast<int>(fnCs.locals.size()) - 1;
-        fnCs.chunk.emit(OP_GET_LOCAL, node.line);
-        fnCs.chunk.emitU16(static_cast<uint16_t>(lastSlot), node.line);
-    }
-    fnCs.chunk.emit(OP_RETURN, node.line);
+    uint8_t resultReg = fnCs.allocReg();
+    for (size_t i = 2; i < node.children.size(); i++)
+        compileExpr(state, fnCs, node.children[i], resultReg);
+    if (node.children.size() <= 2)
+        fnCs.chunk.emitABC(OP_LOADNULL, resultReg, 0, 0, node.line);
 
-    if (!assignName.empty()) {
-        // Tail call marking is done at AST level via node.isTailCall
-        // The compiler checks node.isTailCall when emitting CALL instructions
-    }
+    fnCs.chunk.emitABC(OP_RETURN, resultReg, 0, 0, node.line);
+    fnCs.chunk.numRegs = fnCs.maxRegs;
 
     BblClosure* proto = new BblClosure();
     proto->chunk = std::move(fnCs.chunk);
@@ -626,27 +596,24 @@ static void compileFn(BblState& state, CompilerState& cs, const AstNode& node, c
     proto->name = assignName;
     state.allocatedClosures.push_back(proto);
 
-    size_t protoIdx = cs.chunk.addConstant(BblValue::makeClosure(proto));
-    cs.chunk.emit(OP_CLOSURE, node.line);
-    cs.chunk.emitU16(static_cast<uint16_t>(protoIdx), node.line);
-    cs.chunk.emit(static_cast<uint8_t>(fnCs.captures.size()), node.line);
+    uint16_t protoIdx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeClosure(proto)));
+    cs.chunk.emitABx(OP_CLOSURE, dest, protoIdx, node.line);
 
-    for (auto& cap : fnCs.captures) {
-        cs.chunk.emit(cap.srcType, node.line);
-        cs.chunk.emitU16(cap.srcIdx, node.line);
-    }
+    proto->captureDescs = std::move(fnCs.captures);
 }
 
 Chunk compile(BblState& state, const std::vector<AstNode>& nodes) {
     CompilerState cs;
     cs.scopeDepth = 0;
+    cs.allocReg(); // R[0] reserved
 
-    for (size_t i = 0; i < nodes.size(); i++) {
-        if (i > 0) cs.chunk.emit(OP_POP, nodes[i].line);
-        compileNode(state, cs, nodes[i]);
-    }
-    if (nodes.empty()) cs.chunk.emit(OP_NULL, 0);
-    cs.chunk.emit(OP_RETURN, nodes.empty() ? 0 : nodes.back().line);
+    uint8_t resultReg = cs.allocReg();
+    for (size_t i = 0; i < nodes.size(); i++)
+        compileExpr(state, cs, nodes[i], resultReg);
+    if (nodes.empty())
+        cs.chunk.emitABC(OP_LOADNULL, resultReg, 0, 0, 0);
+    cs.chunk.emitABC(OP_RETURN, resultReg, 0, 0, nodes.empty() ? 0 : nodes.back().line);
+    cs.chunk.numRegs = cs.maxRegs;
 
     return std::move(cs.chunk);
 }

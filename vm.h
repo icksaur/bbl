@@ -12,15 +12,17 @@ struct BblClosure {
     int arity = 0;
     std::string name;
     std::vector<BblValue> captures;
+    std::vector<CaptureInfo> captureDescs;
     bool marked = false;
 };
 
 struct CallFrame {
     Chunk* chunk = nullptr;
-    uint8_t* ip = nullptr;
-    BblValue* slots = nullptr;
+    uint32_t* ip = nullptr;
+    BblValue* regs = nullptr;
     BblClosure* closure = nullptr;
     int line = 0;
+    uint8_t numRegs = 0;
 };
 
 constexpr int VM_MAX_FRAMES = 256;

@@ -6,17 +6,19 @@
 
 struct BblValue;
 
-enum OpCode : uint8_t {
-    OP_CONSTANT,
-    OP_NULL,
-    OP_TRUE,
-    OP_FALSE,
+struct CaptureInfo {
+    uint8_t srcType; // 0 = LOCAL, 1 = CAPTURE
+    uint8_t srcIdx;
+};
 
-    OP_POP,
-    OP_DUP,
-    OP_POPN,
+enum OpCode : uint8_t {
+    OP_LOADK,
+    OP_LOADNULL,
+    OP_LOADBOOL,
+    OP_LOADINT,
 
     OP_ADD,
+    OP_ADDK,
     OP_SUB,
     OP_MUL,
     OP_DIV,
@@ -38,16 +40,15 @@ enum OpCode : uint8_t {
 
     OP_NOT,
 
-    OP_GET_LOCAL,
-    OP_SET_LOCAL,
-    OP_GET_CAPTURE,
-    OP_SET_CAPTURE,
-    OP_GET_GLOBAL,
-    OP_SET_GLOBAL,
+    OP_MOVE,
+    OP_GETGLOBAL,
+    OP_SETGLOBAL,
+    OP_GETCAPTURE,
+    OP_SETCAPTURE,
 
-    OP_JUMP,
-    OP_JUMP_IF_FALSE,
-    OP_JUMP_IF_TRUE,
+    OP_JMP,
+    OP_JMPFALSE,
+    OP_JMPTRUE,
     OP_LOOP,
 
     OP_AND,
@@ -55,7 +56,7 @@ enum OpCode : uint8_t {
 
     OP_CLOSURE,
     OP_CALL,
-    OP_TAIL_CALL,
+    OP_TAILCALL,
     OP_RETURN,
 
     OP_VECTOR,
@@ -63,16 +64,14 @@ enum OpCode : uint8_t {
     OP_STRUCT,
     OP_BINARY,
 
-    OP_GET_FIELD,
-    OP_SET_FIELD,
-    OP_GET_INDEX,
-    OP_SET_INDEX,
-    OP_METHOD_CALL,
+    OP_GETFIELD,
+    OP_SETFIELD,
+    OP_GETINDEX,
+    OP_SETINDEX,
+    OP_MCALL,
 
-    OP_TRY_BEGIN,
-    OP_TRY_END,
-    OP_WITH_BEGIN,
-    OP_WITH_END,
+    OP_TRYBEGIN,
+    OP_TRYEND,
 
     OP_LENGTH,
     OP_SIZEOF,
@@ -80,29 +79,67 @@ enum OpCode : uint8_t {
     OP_EXECFILE,
 };
 
+// 32-bit instruction encoding
+// iABC:  op(8) | A(8) | B(8) | C(8)
+// iABx:  op(8) | A(8) | Bx(16)
+// iAsBx: op(8) | A(8) | sBx(16)  (sBx stored as unsigned + bias)
+
+constexpr int SBXBIAS = 32767;
+
+inline uint32_t encodeABC(uint8_t op, uint8_t A, uint8_t B, uint8_t C) {
+    return static_cast<uint32_t>(op) | (static_cast<uint32_t>(A) << 8) |
+           (static_cast<uint32_t>(B) << 16) | (static_cast<uint32_t>(C) << 24);
+}
+
+inline uint32_t encodeABx(uint8_t op, uint8_t A, uint16_t Bx) {
+    return static_cast<uint32_t>(op) | (static_cast<uint32_t>(A) << 8) |
+           (static_cast<uint32_t>(Bx) << 16);
+}
+
+inline uint32_t encodeAsBx(uint8_t op, uint8_t A, int sBx) {
+    uint16_t usBx = static_cast<uint16_t>(sBx + SBXBIAS);
+    return encodeABx(op, A, usBx);
+}
+
+inline uint8_t decodeOP(uint32_t inst)  { return inst & 0xFF; }
+inline uint8_t decodeA(uint32_t inst)   { return (inst >> 8) & 0xFF; }
+inline uint8_t decodeB(uint32_t inst)   { return (inst >> 16) & 0xFF; }
+inline uint8_t decodeC(uint32_t inst)   { return (inst >> 24) & 0xFF; }
+inline uint16_t decodeBx(uint32_t inst) { return (inst >> 16) & 0xFFFF; }
+inline int decodesBx(uint32_t inst)     { return static_cast<int>(decodeBx(inst)) - SBXBIAS; }
+
 struct Chunk {
-    std::vector<uint8_t> code;
+    std::vector<uint32_t> code;
     std::vector<BblValue> constants;
     std::vector<int> lines;
+    uint8_t numRegs = 2;
 
-    void emit(uint8_t byte, int line) {
-        code.push_back(byte);
+    void emitABC(uint8_t op, uint8_t A, uint8_t B, uint8_t C, int line) {
+        code.push_back(encodeABC(op, A, B, C));
         lines.push_back(line);
     }
 
-    void emitU16(uint16_t val, int line) {
-        emit(static_cast<uint8_t>((val >> 8) & 0xff), line);
-        emit(static_cast<uint8_t>(val & 0xff), line);
+    void emitABx(uint8_t op, uint8_t A, uint16_t Bx, int line) {
+        code.push_back(encodeABx(op, A, Bx));
+        lines.push_back(line);
+    }
+
+    void emitAsBx(uint8_t op, uint8_t A, int sBx, int line) {
+        code.push_back(encodeAsBx(op, A, sBx));
+        lines.push_back(line);
     }
 
     size_t addConstant(const BblValue& val);
 
-    void patchU16(size_t offset, uint16_t val) {
-        code[offset]     = static_cast<uint8_t>((val >> 8) & 0xff);
-        code[offset + 1] = static_cast<uint8_t>(val & 0xff);
+    void patchsBx(size_t offset, int sBx) {
+        uint8_t op = decodeOP(code[offset]);
+        uint8_t A = decodeA(code[offset]);
+        code[offset] = encodeAsBx(op, A, sBx);
     }
 
-    uint16_t readU16(size_t offset) const {
-        return static_cast<uint16_t>((code[offset] << 8) | code[offset + 1]);
+    void patchBx(size_t offset, uint16_t Bx) {
+        uint8_t op = decodeOP(code[offset]);
+        uint8_t A = decodeA(code[offset]);
+        code[offset] = encodeABx(op, A, Bx);
     }
 };
