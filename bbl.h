@@ -254,6 +254,11 @@ struct BblTable {
     bool marked = false;
     std::vector<BblValue> order;
 
+    // Inline storage for small tables (≤2 entries) — avoids hash bucket allocation
+    static constexpr size_t INLINE_MAX = 2;
+    Entry inlineEntries[INLINE_MAX];
+    bool useInline = true;
+
     ~BblTable() { delete[] buckets; }
     BblTable() = default;
     BblTable(const BblTable&) = delete;

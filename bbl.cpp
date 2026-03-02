@@ -83,12 +83,39 @@ static void tableGrow(BblTable* tbl) {
 
 std::expected<BblValue, BBL::GetError> BblTable::get(const BblValue& key) const {
     if (count == 0) return std::unexpected(BBL::GetError::NotFound);
+    if (useInline) {
+        for (size_t i = 0; i < count; i++)
+            if (bblValueKeyEqual(inlineEntries[i].key, key)) return inlineEntries[i].val;
+        return std::unexpected(BBL::GetError::NotFound);
+    }
     auto* e = tableFindEntry(buckets, capacity, key);
     if (!e || !e->occupied || e->tombstone) return std::unexpected(BBL::GetError::NotFound);
     return e->val;
 }
 
 void BblTable::set(const BblValue& key, const BblValue& val) {
+    if (useInline) {
+        for (size_t i = 0; i < count; i++) {
+            if (bblValueKeyEqual(inlineEntries[i].key, key)) {
+                inlineEntries[i].val = val;
+                return;
+            }
+        }
+        if (count < INLINE_MAX) {
+            inlineEntries[count] = {key, val, true, false};
+            count++;
+            order.push_back(key);
+            if (key.type == BBL::Type::Int && key.intVal >= nextIntKey) nextIntKey = key.intVal + 1;
+            return;
+        }
+        // Overflow: migrate to hash table
+        useInline = false;
+        tableGrow(this);
+        for (size_t i = 0; i < INLINE_MAX; i++) {
+            auto* e = tableFindEntry(buckets, capacity, inlineEntries[i].key);
+            *e = inlineEntries[i];
+        }
+    }
     if (capacity == 0 || count + 1 > capacity * 3 / 4) tableGrow(this);
     auto* e = tableFindEntry(buckets, capacity, key);
     bool isNew = !e->occupied || e->tombstone;
@@ -106,12 +133,29 @@ void BblTable::set(const BblValue& key, const BblValue& val) {
 
 bool BblTable::has(const BblValue& key) const {
     if (count == 0) return false;
+    if (useInline) {
+        for (size_t i = 0; i < count; i++)
+            if (bblValueKeyEqual(inlineEntries[i].key, key)) return true;
+        return false;
+    }
     auto* e = tableFindEntry(buckets, capacity, key);
     return e && e->occupied && !e->tombstone;
 }
 
 bool BblTable::del(const BblValue& key) {
     if (count == 0) return false;
+    if (useInline) {
+        for (size_t i = 0; i < count; i++) {
+            if (bblValueKeyEqual(inlineEntries[i].key, key)) {
+                inlineEntries[i] = inlineEntries[count - 1];
+                count--;
+                for (auto it = order.begin(); it != order.end(); ++it)
+                    if (bblValueKeyEqual(*it, key)) { order.erase(it); break; }
+                return true;
+            }
+        }
+        return false;
+    }
     auto* e = tableFindEntry(buckets, capacity, key);
     if (!e || !e->occupied || e->tombstone) return false;
     e->tombstone = true;
@@ -674,13 +718,8 @@ BblTable* BblState::allocTable() {
         t->nextIntKey = 0;
         t->marked = false;
         t->order.clear();
-        // Clear buckets
-        if (t->buckets) {
-            for (size_t i = 0; i < t->capacity; i++) {
-                t->buckets[i].occupied = false;
-                t->buckets[i].tombstone = false;
-            }
-        }
+        t->useInline = true;
+        // Don't clear buckets — they'll only be used when useInline becomes false
     } else {
         t = new BblTable{};
     }
@@ -748,13 +787,22 @@ static void gcMark(BblValue& val) {
         case BBL::Type::Table:
             if (val.tableVal && !val.tableVal->marked) {
                 val.tableVal->marked = true;
-                for (size_t i = 0; i < val.tableVal->capacity; i++) {
-                    auto& e = val.tableVal->buckets[i];
-                    if (e.occupied && !e.tombstone) {
-                        BblValue km = e.key;
-                        BblValue vm = e.val;
+                if (val.tableVal->useInline) {
+                    for (size_t i = 0; i < val.tableVal->count; i++) {
+                        BblValue km = val.tableVal->inlineEntries[i].key;
+                        BblValue vm = val.tableVal->inlineEntries[i].val;
                         gcMark(km);
                         gcMark(vm);
+                    }
+                } else {
+                    for (size_t i = 0; i < val.tableVal->capacity; i++) {
+                        auto& e = val.tableVal->buckets[i];
+                        if (e.occupied && !e.tombstone) {
+                            BblValue km = e.key;
+                            BblValue vm = e.val;
+                            gcMark(km);
+                            gcMark(vm);
+                        }
                     }
                 }
             }
