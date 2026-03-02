@@ -3,370 +3,266 @@ Status: proposed
 
 ## Goal
 
-Eliminate interpreter dispatch overhead entirely by compiling bytecode to
-native x86-64 machine code at runtime using the copy-and-patch technique.
-Each bytecode instruction maps to a pre-compiled native code "stencil" (a
-small blob of machine code with holes for operands).  At runtime, the JIT
-copies the stencils sequentially into an executable buffer and patches in
-the concrete operand values.  No LLVM, no register allocator, no
-optimization passes.
+Compile bytecode to native x86-64 machine code at runtime by copying
+pre-compiled instruction templates (stencils) and patching in concrete
+register offsets and constants.  Eliminates all dispatch overhead.
 
-Expected result: match or exceed Lua 5.4 on all benchmarks.  Approach
-LuaJIT interpreter speed on tight loops.
+Expected: match LuaJIT interpreter speed on arithmetic loops (~2-3ms
+for loop_arith vs current 6ms).
 
 ---
 
-## Background
+## BblValue layout
 
-### Current state
+Verified via offsetof:
 
-BBL has a stack-based bytecode VM with computed-goto dispatch.  The hot
-loop in `loop_arith` executes 13 instructions per iteration.  Each
-instruction costs ~2 cycles of dispatch overhead (computed goto on modern
-x86).  That's ~26 cycles of pure dispatch per loop iteration, plus the
-actual work.
+    offset 0: type     (BBL::Type, 4 bytes)
+    offset 4: isCFn    (bool, 1 byte)
+    offset 5: isClosure (bool, 1 byte)
+    offset 8: intVal / floatVal / stringVal / etc (union, 8 bytes)
+    sizeof(BblValue) = 16
 
-Lua 5.4's register VM does the same work in ~5 instructions (~10 cycles
-dispatch).  LuaJIT's interpreter uses hand-written assembly with zero
-dispatch overhead in straight-line code.
-
-### What is copy-and-patch
-
-The key insight: the C++ compiler already knows how to generate machine
-code for each bytecode handler.  If we compile each handler as a separate
-function, we get an object file containing native code plus relocation
-records (holes where operands go).  At runtime, we just `memcpy` the
-machine code and fill in the holes.
-
-For BBL, we simplify further: instead of parsing object files at build
-time, we hand-write small native code templates (stencils) for each
-opcode.  Each stencil is a `constexpr uint8_t[]` array with placeholder
-bytes that get patched with concrete values at JIT time.
-
-This is sometimes called a "template JIT" or "macro assembler JIT" — the
-simplest possible JIT that eliminates dispatch without any optimization.
-
-### Why this approach
-
-| Approach | Dispatch cost | Code quality | Complexity |
-|----------|--------------|--------------|------------|
-| Switch interpreter | ~5 cycles/op | N/A | Very low |
-| Computed goto | ~2 cycles/op | N/A | Low |
-| **Copy-and-patch** | **0 cycles/op** | Low (no optimization) | **Medium** |
-| Optimizing JIT | 0 cycles/op | High | Very high |
-
-Copy-and-patch eliminates ALL dispatch overhead.  The generated code is a
-straight sequence of native instructions — no indirect jumps, no branch
-mispredictions, no opcode decoding.  The CPU sees ordinary machine code.
-
-The code quality is "low" in the sense that we don't do register
-allocation across instructions (each stencil manages its own stack
-accesses).  But for BBL's use case this is fine — the dispatch overhead
-was the bottleneck, not the per-instruction code quality.
+All stencils use these offsets.  Register R[i] is at byte offset
+i * 16 from the register base pointer.
 
 ---
 
 ## Design
 
-### Architecture
+### Register convention
 
-```
-Bytecode (Chunk)
-    |
-    v
-JIT Compiler (jit.cpp)
-    |  for each instruction:
-    |    1. look up stencil for opcode
-    |    2. memcpy stencil into code buffer
-    |    3. patch operand holes with concrete values
-    |
-    v
-Executable buffer (mmap'd with PROT_EXEC)
-    |
-    v
-Direct function call → native execution → return result
-```
+JIT'd code uses callee-saved registers (safe across C helper calls):
+
+    rbx = BblValue* regs       (frame register file base)
+    r12 = BblState* state      (for C helper calls)
+    r13 = Chunk* chunk         (for constant pool access)
 
 ### Stencil format
 
-Each stencil is a struct:
-
 ```cpp
 struct Stencil {
-    const uint8_t* code;    // pre-compiled machine code bytes
-    size_t size;            // length in bytes
-    struct Patch {
-        uint8_t offset;     // byte offset within stencil to patch
-        uint8_t type;       // PATCH_IMM32, PATCH_IMM64, PATCH_REL32
-        uint8_t operand;    // which operand (0=first, 1=second, etc)
-    };
+    const uint8_t* code;
+    uint8_t size;
+    struct Patch { uint8_t offset; uint8_t type; };
     const Patch* patches;
-    size_t patchCount;
+    uint8_t patchCount;
+};
+
+enum PatchType : uint8_t {
+    PATCH_DISP32,   // 32-bit displacement (register byte offset)
+    PATCH_IMM32,    // 32-bit immediate value
+    PATCH_REL32,    // 32-bit relative jump/call target
+    PATCH_ABS64,    // 64-bit absolute address
 };
 ```
 
-### Calling convention
+### Stencil examples
 
-The JIT'd code uses a fixed register assignment:
+Notation: A_OFF = A*16, INTVAL = +8, TYPE = +0.
 
+**ADD R[A] = R[B] + R[C] (int fast-path):**
+```x86
+mov  rax, [rbx + B_OFF+8]       ; 48 8b 83 <B_OFF+8:disp32>
+add  rax, [rbx + C_OFF+8]       ; 48 03 83 <C_OFF+8:disp32>
+mov  [rbx + A_OFF+8], rax       ; 48 89 83 <A_OFF+8:disp32>
+mov  dword [rbx + A_OFF], 2     ; c7 83 <A_OFF:disp32> 02 00 00 00
 ```
-rbx = BblValue* stackTop   (callee-saved, persistent)
-r12 = BblValue* frameSlots (callee-saved, persistent)
-r13 = BblState* state      (callee-saved, persistent)
-rdi/rsi/rdx = scratch for function args
-rax = scratch for return values
+25 bytes, 3 displacement patches.
+
+**ADDI R[A] += sBx (int in-place):**
+```x86
+add  qword [rbx + A_OFF+8], imm ; 48 81 83 <A_OFF+8:disp32> <imm:imm32>
 ```
+11 bytes, 1 displacement + 1 immediate patch.
 
-Each stencil reads/writes the stack through `rbx` (stackTop) and `r12`
-(frame base).  Stencils that call C++ helper functions (like `intern()`
-for string ops) use the standard System V ABI with `r13` as the state
-pointer.
+**LTJMP — if R[A] < R[B], skip next stencil (continue loop):**
+The VM semantics: if (cond) skip next instruction.  In JIT'd code,
+"skip next instruction" means jump past the next stencil.
 
-### Example stencils
-
-**OP_CONSTANT (push constants[idx]):**
-```nasm
-; operand: idx (u16, patched to absolute pointer)
-mov  rax, 0x0000000000000000   ; patched: &chunk->constants[idx]
-mov  rdx, [rax]                ; load BblValue.intVal (first 8 bytes)
-mov  rcx, [rax+8]              ; load BblValue type+flags (next 8 bytes)
-mov  [rbx], rdx                ; store to stackTop
-mov  [rbx+8], rcx
-add  rbx, 24                   ; stackTop++ (sizeof BblValue = 24)
-; total: ~25 bytes, 5 instructions
+```x86
+mov  rax, [rbx + A_OFF+8]       ; load R[A].intVal
+cmp  rax, [rbx + B_OFF+8]       ; compare to R[B].intVal
+jl   <skip:rel32>                ; if A < B (cond TRUE), skip next stencil
 ```
+20 bytes.  The jl target is patched to the byte address after the
+next stencil (which is the JMP-to-exit).  If A >= B (cond FALSE),
+fall through to the JMP which exits the loop.
 
-**OP_ADD (int fast-path):**
-```nasm
-sub  rbx, 24                   ; pop b
-mov  eax, [rbx+16]             ; b.type
-sub  rbx, 24                   ; pop a
-mov  ecx, [rbx+16]             ; a.type
-cmp  eax, 2                    ; Type::Int == 2
-jne  .slow
-cmp  ecx, 2
-jne  .slow
-mov  rax, [rbx]                ; a.intVal
-add  rax, [rbx+24]             ; + b.intVal
-mov  [rbx], rax                ; result.intVal
-mov  dword [rbx+16], 2         ; result.type = Int
-add  rbx, 24                   ; push result
-jmp  .next                     ; fall through to next stencil
-.slow:
-; call C++ helper: jitSlowAdd(state, stackTop)
-mov  rdi, r13
-mov  rsi, rbx
-call 0x0000000000000000         ; patched: &jitSlowAdd
-add  rbx, 24                   ; helper leaves result at stackTop
-.next:
-; total: ~60 bytes
+**LOOP — backward jump + GC safe point:**
+```x86
+jmp  <loop_start:rel32>          ; e9 <rel32>
 ```
+5 bytes.  GC check: every 256th iteration, insert a call to
+jitGcSafePoint before the jmp.
 
-**OP_GET_LOCAL (push frame->slots[slot]):**
-```nasm
-; operand: slot (u16, patched to byte offset)
-mov  rax, [r12 + 0x0000]       ; patched: slot * 24
-mov  rdx, [r12 + 0x0000 + 8]   ; patched: slot * 24 + 8
-mov  [rbx], rax
-mov  [rbx+8], rdx
-add  rbx, 24
-; total: ~20 bytes
+**LOADINT R[A] = sBx:**
+```x86
+mov  qword [rbx + A_OFF+8], imm ; 48 c7 83 <A_OFF+8:disp32> <imm:imm32>
+mov  dword [rbx + A_OFF], 2     ; c7 83 <A_OFF:disp32> 02 00 00 00
 ```
+17 bytes, sets type=Int and intVal=imm.
 
-**OP_JUMP_IF_FALSE:**
-```nasm
-sub  rbx, 24                   ; pop condition
-mov  eax, [rbx+16]             ; type
-cmp  eax, 0                    ; Null?
-je   .falsy
-cmp  eax, 1                    ; Bool?
-jne  .truthy
-cmp  byte [rbx], 0             ; boolVal == false?
-je   .falsy
-.truthy:
-jmp  0x00000000                 ; patched: offset to next instruction (fall through)
-.falsy:
-jmp  0x00000000                 ; patched: offset to jump target
-; total: ~35 bytes
+**CALL — delegate to C helper:**
+```x86
+mov  rdi, r12                    ; state pointer
+lea  rsi, [rbx + A_OFF]         ; &R[A]
+mov  edx, argc                  ; argument count
+movabs rax, <&jitCallHelper>    ; 64-bit address
+call rax
 ```
+~25 bytes.  C helper handles all call mechanics.
 
-**OP_CALL (call function):**
-```nasm
-; Complex — delegates to C++ helper
-mov  rdi, r13                  ; state
-mov  rsi, rbx                  ; stackTop
-mov  edx, 0x00                 ; patched: argc
-call 0x0000000000000000         ; patched: &jitCallValue
-mov  rbx, rax                  ; helper returns new stackTop
-; total: ~25 bytes
-```
-
-### JIT compiler
+### JIT compilation
 
 ```cpp
-struct JitCode {
-    uint8_t* code;      // mmap'd executable buffer
-    size_t size;
-    size_t capacity;
-};
-
 JitCode jitCompile(BblState& state, Chunk& chunk) {
-    JitCode jit;
-    jit.capacity = chunk.code.size() * 64;  // ~64 bytes per instruction avg
-    jit.code = (uint8_t*)mmap(nullptr, jit.capacity,
-        PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    // Allocate writable buffer
+    size_t capacity = chunk.code.size() * 32 + 256;
+    uint8_t* buf = (uint8_t*)mmap(NULL, capacity,
+        PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0);
+    size_t pos = 0;
 
-    // Emit prologue: save callee-saved regs, set up rbx/r12/r13
-    emitPrologue(jit);
+    // Prologue: push callee-saved regs, set rbx/r12/r13
+    // ... ~20 bytes ...
 
-    // Map bytecode offset → native code offset (for jump patching)
-    std::vector<size_t> offsetMap(chunk.code.size(), 0);
+    // Map bytecode instruction index → native code offset
+    std::vector<size_t> nativeOffsets(chunk.code.size() + 1);
 
-    size_t ip = 0;
-    while (ip < chunk.code.size()) {
-        offsetMap[ip] = jit.size;
-        uint8_t op = chunk.code[ip++];
+    for (size_t i = 0; i < chunk.code.size(); i++) {
+        nativeOffsets[i] = pos;
+        uint32_t inst = chunk.code[i];
+        uint8_t op = decodeOP(inst);
+        uint8_t A = decodeA(inst), B = decodeB(inst), C = decodeC(inst);
+        int sBx = decodesBx(inst);
 
         switch (op) {
-        case OP_CONSTANT: {
-            uint16_t idx = readU16(chunk, ip); ip += 2;
-            BblValue* constPtr = &chunk.constants[idx];
-            emitStencil(jit, stencil_constant, {(uintptr_t)constPtr});
-            break;
-        }
         case OP_ADD:
-            emitStencil(jit, stencil_add, {(uintptr_t)&jitSlowAdd});
+            emitStencil(buf, pos, stencil_add, B*16+8, C*16+8, A*16+8, A*16);
             break;
-        case OP_GET_LOCAL: {
-            uint16_t slot = readU16(chunk, ip); ip += 2;
-            emitStencil(jit, stencil_get_local, {slot * sizeof(BblValue)});
+        case OP_ADDI:
+            emitStencil(buf, pos, stencil_addi, A*16+8, sBx);
             break;
-        }
-        case OP_JUMP_IF_FALSE: {
-            int16_t offset = (int16_t)readU16(chunk, ip); ip += 2;
-            size_t target = ip + offset;
-            // Record for later patching (target native offset not yet known)
-            addJumpPatch(jit, jit.size, target);
-            emitStencil(jit, stencil_jump_if_false, {0, 0}); // placeholders
+        case OP_LTJMP:
+            emitStencil(buf, pos, stencil_ltjmp, A*16+8, B*16+8);
+            // Patch jl target after emitting next stencil
+            recordForwardPatch(i, pos - 4);  // rel32 is last 4 bytes
             break;
-        }
+        case OP_JMP:
+            emitStencil(buf, pos, stencil_jmp);
+            recordJumpPatch(i, pos - 4, i + 1 + sBx);
+            break;
+        case OP_LOOP:
+            emitStencil(buf, pos, stencil_jmp);  // reuse jmp stencil
+            // Patch to nativeOffsets[i + 1 - sBx] (backward)
+            patchRel32(buf, pos - 4, nativeOffsets[i + 1 - sBx]);
+            break;
+        case OP_RETURN:
+            emitStencil(buf, pos, stencil_return, A*16+8);
+            break;
         // ... remaining opcodes ...
+        default:
+            // Fallback: call interpreter for unsupported opcodes
+            emitInterpreterFallback(buf, pos, i);
+            break;
         }
     }
+    nativeOffsets[chunk.code.size()] = pos;
 
-    // Second pass: patch all jump targets
-    for (auto& patch : jumpPatches) {
-        size_t nativeTarget = offsetMap[patch.bytecodeTarget];
-        patchRel32(jit, patch.nativeOffset, nativeTarget);
-    }
+    // Patch all forward jumps
+    for (auto& p : forwardPatches)
+        patchRel32(buf, p.patchOffset, nativeOffsets[p.targetInst]);
 
-    // Emit epilogue
-    emitEpilogue(jit);
-
-    // Make executable
-    mprotect(jit.code, jit.capacity, PROT_READ | PROT_EXEC);
-    return jit;
+    // Epilogue + make executable
+    // ... ~10 bytes ...
+    mprotect(buf, pos, PROT_READ|PROT_EXEC);
+    return { buf, pos, capacity };
 }
 ```
 
-### Helper functions
-
-Stencils for complex operations (string concat, method calls, GC, etc.)
-call C++ helper functions instead of inlining the logic.  These helpers
-use the standard C ABI:
-
-```cpp
-// Called from JIT stencils via patched CALL instruction
-extern "C" {
-    BblValue* jitSlowAdd(BblState* state, BblValue* stackTop);
-    BblValue* jitCallValue(BblState* state, BblValue* stackTop, int argc);
-    BblValue* jitGetGlobal(BblState* state, uint32_t symId, BblValue* stackTop);
-    void jitGcSafePoint(BblState* state);
-    // ... etc
-}
-```
-
-This keeps the stencils small and avoids duplicating complex logic (GC,
-string interning, type coercion) in assembly.
-
-### Execution model
+### Execution
 
 ```cpp
 BblValue jitExecute(BblState& state, Chunk& chunk) {
     JitCode jit = jitCompile(state, chunk);
-
-    // Call the JIT'd code as a function
-    typedef BblValue (*JitFn)(BblState*, BblValue*, BblValue*);
-    JitFn fn = (JitFn)jit.code;
-    BblValue result = fn(&state, state.vm->stack.data(), state.vm->stack.data());
-
-    munmap(jit.code, jit.capacity);
+    typedef BblValue (*JitFn)(BblValue* regs, BblState* state, Chunk* chunk);
+    JitFn fn = (JitFn)jit.buf;
+    BblValue result = fn(state.vm->stack.data(), &state, &chunk);
+    munmap(jit.buf, jit.capacity);
     return result;
 }
 ```
 
 ### Scope
 
-**Phase 1 — hot arithmetic path (~400 LOC):**
-Stencils for: CONSTANT, NULL, TRUE, FALSE, POP, GET_LOCAL, SET_LOCAL,
-ADD (int fast-path + slow call), SUB, MUL, DIV, MOD, LT, GT, LTE, GTE,
-EQ, NEQ, NOT, JUMP, JUMP_IF_FALSE, LOOP, RETURN.
+**Phase 1 — hot arithmetic path (~300 LOC):**
+Stencils: LOADK, LOADINT, LOADNULL, LOADBOOL, ADD, ADDI, SUB, SUBI,
+MUL, DIV, MOD, LTJMP, LEJMP, GTJMP, GEJMP, JMP, LOOP, MOVE, RETURN.
+Also ADDK (constant pool add).
 
-This covers the `loop_arith` benchmark.  Everything else falls back to
-the interpreter.
+Fallback to interpreter for: CALL, CLOSURE, MCALL, GETGLOBAL,
+SETGLOBAL, GETCAPTURE, SETCAPTURE, VECTOR, TABLE, GETFIELD, SETFIELD,
+GETINDEX, SETINDEX, TRYBEGIN, TRYEND, EXEC, EXECFILE, AND, OR,
+JMPFALSE, JMPTRUE, NOT, LT, GT, LTE, GTE, EQ, NEQ.
 
-**Phase 2 — function calls (~200 LOC):**
-Stencils for: CALL, CLOSURE, GET_CAPTURE, SET_CAPTURE, GET_GLOBAL,
-SET_GLOBAL, TAIL_CALL, AND, OR.
+This covers the loop_arith hot loop (LTJMP, ADD, ADDI, LOOP = 4
+stencils per iteration, ~62 bytes of native code, zero dispatch).
 
-**Phase 3 — collections and methods (~200 LOC):**
-Stencils that call C++ helpers for: VECTOR, TABLE, STRUCT, GET_FIELD,
-SET_FIELD, GET_INDEX, SET_INDEX, METHOD_CALL, LENGTH, BINARY.
+**Phase 2 — globals and calls (~200 LOC):**
+Add GETGLOBAL, SETGLOBAL, CALL, RETURN (with frame), GETCAPTURE,
+SETCAPTURE, CLOSURE.  These delegate to C helpers via stencils.
 
-Total: ~800 LOC across `jit.h`, `jit.cpp`, `stencils_x86_64.h`.
+**Phase 3 — full coverage (~200 LOC):**
+Remaining opcodes via C helper stencils.
+
+### Type guards
+
+Arithmetic stencils assume integer operands.  For correctness, each
+stencil includes a type check with a slow-path call:
+
+```x86
+cmp  dword [rbx + B_OFF], 2     ; check R[B].type == Int
+jne  slow
+cmp  dword [rbx + C_OFF], 2     ; check R[C].type == Int
+jne  slow
+; ... fast int path ...
+jmp  next
+slow:
+mov  rdi, r12                   ; call C helper for general case
+; ...
+next:
+```
+
+Adds ~15 bytes per arithmetic stencil.  Branch predictor learns
+that integers are the common case after 1-2 iterations.
 
 ---
 
-## Expected Performance
+## Expected performance
 
-The loop_arith hot loop currently executes 13 dispatches × ~2 cycles =
-~26 cycles of dispatch overhead per iteration.  With copy-and-patch,
-dispatch overhead drops to 0.  The actual work (2 adds, 1 compare,
-loads/stores) is ~10-15 cycles.
+loop_arith hot loop: 4 bytecode instructions, each ~11-25 bytes of
+native code, no dispatch = ~62 bytes total per iteration.  At ~15-20
+native instructions with zero dispatch overhead, expect ~2-3ms.
 
-| Benchmark | Current bytecode | After JIT (est.) | Lua 5.4 | LuaJIT |
-|-----------|-----------------|-----------------|---------|--------|
-| loop_arith (fn-wrapped) | 28 ms | ~5-8 ms | 12 ms | 2 ms |
-| function_calls | 19 ms | ~8-12 ms | 16 ms | 1 ms |
-
-On tight arithmetic loops, we should match or beat Lua 5.4.  Function
-call-heavy code will still be slower than LuaJIT (which has optimized
-call trampolines) but should match Lua 5.4.
+| Benchmark | Interpreter | JIT (est.) | LuaJIT |
+|-----------|-------------|-----------|--------|
+| loop_arith | 6 ms | ~2-3 ms | 5 ms |
 
 ---
 
 ## Risks
 
-| Risk | Impact | Mitigation |
-|------|--------|-----------|
-| x86-64 only | Medium | Keep interpreter as fallback; JIT is opt-in |
-| Security (W^X) | Low | mmap PROT_WRITE, mprotect PROT_EXEC after codegen |
-| Stencil correctness | High | Test each stencil against interpreter output |
-| Code size growth | Low | Stencils are ~30-60 bytes each; total < 3KB data |
-| GC interaction | Medium | JIT'd code calls jitGcSafePoint at OP_LOOP |
+| Risk | Mitigation |
+|------|-----------|
+| x86-64 only | Interpreter fallback; --no-jit flag |
+| W^X security | mmap WRITE, mprotect EXEC after codegen |
+| Stencil encoding bugs | Test each stencil against interpreter |
+| GC during JIT code | Safe points via counter + C helper call |
+| Code cache pressure | JIT code ~200 bytes per function |
 
 ---
 
 ## References
 
-1. Xu, H. and Kjolstad, F. "Copy-and-Patch Compilation" (OOPSLA 2021).
-   https://fredrikbk.com/publications/copy-and-patch.pdf
-
-2. Xu, H. "Building a baseline JIT for Lua using Copy-and-Patch" (2023).
-   https://sillycross.github.io/2023/05/12/2023-05-12/
-
-3. CPython 3.13 JIT (PEP 744) — uses copy-and-patch for Python bytecode.
-   https://docs.python.org/3.13/whatsnew/3.13.html
-
-4. Brandner et al. "Copy-and-Patch compilation: a fast compilation
-   algorithm for high-level languages and bytecode" — follow-up work.
+1. Xu & Kjolstad, "Copy-and-Patch Compilation" (OOPSLA 2021)
+2. CPython 3.13 JIT (PEP 744)
+3. Xu, "Building a baseline JIT for Lua" (2023)
