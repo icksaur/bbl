@@ -667,6 +667,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk) {
 
     std::vector<size_t> nativeOffsets(chunk.code.size() + 1, 0);
     std::vector<JumpPatch> patches;
+    std::unordered_map<uint8_t, BblClosure*> closureRegs;
 
     for (size_t i = 0; i < chunk.code.size(); i++) {
         nativeOffsets[i] = jit.size;
@@ -797,11 +798,59 @@ JitCode jitCompile(BblState& state, Chunk& chunk) {
             emitCallHelper2(jit.buf, jit.size, (void*)jitSetGlobal, symId, A);
             break;
         }
-        case OP_CALL:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitCall, A, B);
+        case OP_CALL: {
+            // Try to inline: check if base register holds a known closure
+            auto cit = closureRegs.find(A);
+            if (cit != closureRegs.end() && B == cit->second->arity) {
+                BblClosure* callee = cit->second;
+                // Inline the callee's bytecode with register remapping:
+                // Callee R[0] = callee (unused), R[1..arity] = args from caller R[A+1..A+argc]
+                // Callee's other regs mapped to caller regs above A+argc
+                uint8_t argBase = A + 1; // caller regs holding args
+                // For each callee instruction, remap registers
+                for (size_t ci = 0; ci < callee->chunk.code.size(); ci++) {
+                    uint32_t cinst = callee->chunk.code[ci];
+                    uint8_t cop = decodeOP(cinst);
+                    uint8_t cA = decodeA(cinst), cB = decodeB(cinst), cC = decodeC(cinst);
+                    int csBx = decodesBx(cinst);
+
+                    // Remap register: callee R[0] → skip, R[1..arity] → caller R[A+1..A+arity]
+                    // R[arity+1..] → caller R[A+arity+1..]
+                    auto remap = [&](uint8_t r) -> uint8_t {
+                        if (r == 0) return A; // callee slot (unused in practice)
+                        if (r <= callee->arity) return A + r; // param → arg register
+                        return A + r; // temp → above args
+                    };
+
+                    switch (cop) {
+                    case OP_ADD: emitAdd(jit.buf, jit.size, remap(cA), remap(cB), remap(cC)); break;
+                    case OP_SUB: emitSub(jit.buf, jit.size, remap(cA), remap(cB), remap(cC)); break;
+                    case OP_MUL: emitMul(jit.buf, jit.size, remap(cA), remap(cB), remap(cC)); break;
+                    case OP_ADDI: emitAddi(jit.buf, jit.size, remap(cA), csBx); break;
+                    case OP_SUBI: emitSubi(jit.buf, jit.size, remap(cA), csBx); break;
+                    case OP_MOVE: emitMove(jit.buf, jit.size, remap(cA), remap(cB)); break;
+                    case OP_LOADINT: emitLoadInt(jit.buf, jit.size, remap(cA), csBx); break;
+                    case OP_LOADK: emitLoadK(jit.buf, jit.size, remap(cA), &callee->chunk.constants[decodeBx(cinst)]); break;
+                    case OP_RETURN:
+                        // Inline return: move callee result to caller's base register
+                        if (remap(cA) != A) emitMove(jit.buf, jit.size, A, remap(cA));
+                        goto inline_done;
+                    default:
+                        // Can't inline this instruction — fall back to helper call
+                        emitCallHelper2(jit.buf, jit.size, (void*)jitCall, A, B);
+                        goto inline_done;
+                    }
+                }
+                inline_done:;
+            } else {
+                emitCallHelper2(jit.buf, jit.size, (void*)jitCall, A, B);
+            }
             break;
+        }
         case OP_CLOSURE:
             emitCallHelper3(jit.buf, jit.size, (void*)jitClosure, 0, A, Bx);
+            // Track that register A now holds this closure proto
+            closureRegs[A] = chunk.constants[Bx].closureVal;
             break;
 
         case OP_JMPFALSE: {
