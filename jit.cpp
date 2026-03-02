@@ -60,7 +60,7 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
         regs[base] = state->hasReturn ? state->returnValue : BblValue::makeNull();
     } else if (callee.type == BBL::Type::Fn && callee.isClosure) {
         BblClosure* closure = callee.closureVal;
-        std::vector<BblValue> calleeRegs(closure->chunk.numRegs);
+        BblValue calleeRegs[64];
         calleeRegs[0] = callee;
         for (int i = 0; i < argc; i++)
             calleeRegs[1 + i] = regs[base + 1 + i];
@@ -71,7 +71,7 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
         }
         typedef BblValue (*JitFn)(BblValue*, BblState*, Chunk*);
         JitFn fn = reinterpret_cast<JitFn>(closure->jitCache->buf);
-        regs[base] = fn(calleeRegs.data(), state, &closure->chunk);
+        regs[base] = fn(calleeRegs, state, &closure->chunk);
     } else if (callee.type == BBL::Type::Fn) {
         BblFn* fn = callee.fnVal;
         regs[base] = state->callFn(fn, &regs[base + 1], argc, 0);
