@@ -19,7 +19,9 @@ enum OpCode : uint8_t {
 
     OP_ADD,
     OP_ADDK,
+    OP_ADDI,
     OP_SUB,
+    OP_SUBI,
     OP_MUL,
     OP_DIV,
     OP_MOD,
@@ -37,6 +39,10 @@ enum OpCode : uint8_t {
     OP_GT,
     OP_LTE,
     OP_GTE,
+    OP_LTJMP,
+    OP_LEJMP,
+    OP_GTJMP,
+    OP_GEJMP,
 
     OP_NOT,
 

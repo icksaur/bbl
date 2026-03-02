@@ -202,10 +202,20 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
         uint8_t savedNext = cs.nextReg;
         uint8_t regA = compileExpr(state, cs, node.children[1], dest);
         for (size_t i = 2; i < node.children.size(); i++) {
-            if (aop == OP_ADD && node.children[i].type == NodeType::IntLiteral && node.children.size() == 3) {
-                uint8_t kidx = static_cast<uint8_t>(cs.chunk.addConstant(BblValue::makeInt(node.children[i].intVal)));
-                cs.chunk.emitABC(OP_ADDK, dest, regA, kidx, node.line);
-            } else {
+            bool emittedSpecial = false;
+            if (node.children[i].type == NodeType::IntLiteral && node.children.size() == 3) {
+                int64_t imm = node.children[i].intVal;
+                if (imm >= -32768 && imm <= 32767 && regA == dest) {
+                    if (aop == OP_ADD) {
+                        cs.chunk.emitAsBx(OP_ADDI, regA, static_cast<int>(imm), node.line);
+                        emittedSpecial = true;
+                    } else if (aop == OP_SUB) {
+                        cs.chunk.emitAsBx(OP_SUBI, regA, static_cast<int>(imm), node.line);
+                        emittedSpecial = true;
+                    }
+                }
+            }
+            if (!emittedSpecial) {
                 uint8_t regB = cs.allocReg();
                 uint8_t actualB = compileExpr(state, cs, node.children[i], regB);
                 cs.chunk.emitABC(aop, dest, regA, actualB, node.line);
@@ -336,22 +346,53 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
         loopInfo.start = static_cast<int>(cs.chunk.code.size());
         cs.loops.push_back(loopInfo);
 
-        uint8_t condReg = cs.allocReg();
-        compileExpr(state, cs, node.children[1], condReg);
-        int exitJump = emitJump(cs, OP_JMPFALSE, condReg, node.line);
-        cs.freeReg();
+        auto& cond = node.children[1];
+        bool fusedCmp = false;
+        if (cond.type == NodeType::List && cond.children.size() == 3 &&
+            cond.children[0].type == NodeType::Symbol) {
+            const std::string& cop = cond.children[0].stringVal;
+            OpCode fop = OP_LOADNULL;
+            if (cop == "<") fop = OP_LTJMP;
+            else if (cop == "<=") fop = OP_LEJMP;
+            else if (cop == ">") fop = OP_GTJMP;
+            else if (cop == ">=") fop = OP_GEJMP;
+            if (fop != OP_LOADNULL) {
+                uint8_t rA = compileExpr(state, cs, cond.children[1], cs.allocReg());
+                uint8_t rB = compileExpr(state, cs, cond.children[2], cs.allocReg());
+                cs.chunk.emitABC(fop, rA, rB, 0, node.line);
+                int exitJump = emitJump(cs, OP_JMP, 0, node.line);
+                cs.freeRegsTo(loopInfo.start == static_cast<int>(cs.chunk.code.size()) ? cs.nextReg : cs.nextReg);
 
-        for (size_t i = 2; i < node.children.size(); i++)
-            compileExpr(state, cs, node.children[i], dest);
+                for (size_t i = 2; i < node.children.size(); i++)
+                    compileExpr(state, cs, node.children[i], dest);
 
-        int loopOffset = static_cast<int>(cs.chunk.code.size()) - cs.loops.back().start + 1;
-        cs.chunk.emitAsBx(OP_LOOP, 0, loopOffset, node.line);
+                int loopOffset = static_cast<int>(cs.chunk.code.size()) - cs.loops.back().start + 1;
+                cs.chunk.emitAsBx(OP_LOOP, 0, loopOffset, node.line);
+                patchJump(cs, exitJump);
+                cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
+                for (int br : cs.loops.back().breaks) patchJump(cs, br);
+                cs.loops.pop_back();
+                fusedCmp = true;
+                return dest;
+            }
+        }
 
-        patchJump(cs, exitJump);
-        cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
+        if (!fusedCmp) {
+            uint8_t condReg = cs.allocReg();
+            compileExpr(state, cs, node.children[1], condReg);
+            int exitJump = emitJump(cs, OP_JMPFALSE, condReg, node.line);
+            cs.freeReg();
 
-        for (int br : cs.loops.back().breaks) patchJump(cs, br);
-        cs.loops.pop_back();
+            for (size_t i = 2; i < node.children.size(); i++)
+                compileExpr(state, cs, node.children[i], dest);
+
+            int loopOffset = static_cast<int>(cs.chunk.code.size()) - cs.loops.back().start + 1;
+            cs.chunk.emitAsBx(OP_LOOP, 0, loopOffset, node.line);
+            patchJump(cs, exitJump);
+            cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
+            for (int br : cs.loops.back().breaks) patchJump(cs, br);
+            cs.loops.pop_back();
+        }
         return dest;
     }
 

@@ -31,6 +31,8 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
     case OP_LOADINT:   printf("LOADINT   R%d %d", A, sBx); break;
     case OP_ADD:       printf("ADD       R%d R%d R%d", A, B, C); break;
     case OP_ADDK:      printf("ADDK      R%d R%d K%d", A, B, C); break;
+    case OP_ADDI:      printf("ADDI      R%d %d", A, sBx); break;
+    case OP_SUBI:      printf("SUBI      R%d %d", A, sBx); break;
     case OP_SUB:       printf("SUB       R%d R%d R%d", A, B, C); break;
     case OP_MUL:       printf("MUL       R%d R%d R%d", A, B, C); break;
     case OP_DIV:       printf("DIV       R%d R%d R%d", A, B, C); break;
@@ -47,6 +49,10 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
     case OP_GT:        printf("GT        R%d R%d R%d", A, B, C); break;
     case OP_LTE:       printf("LTE       R%d R%d R%d", A, B, C); break;
     case OP_GTE:       printf("GTE       R%d R%d R%d", A, B, C); break;
+    case OP_LTJMP:     printf("LTJMP     R%d R%d", A, B); break;
+    case OP_LEJMP:     printf("LEJMP     R%d R%d", A, B); break;
+    case OP_GTJMP:     printf("GTJMP     R%d R%d", A, B); break;
+    case OP_GEJMP:     printf("GEJMP     R%d R%d", A, B); break;
     case OP_NOT:       printf("NOT       R%d R%d", A, B); break;
     case OP_MOVE:      printf("MOVE      R%d R%d", A, B); break;
     case OP_GETGLOBAL: printf("GETGLOBAL R%d K%d", A, Bx); break;

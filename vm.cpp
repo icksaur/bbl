@@ -89,10 +89,26 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                 R(A) = BblValue::makeFloat(toFloat(rb) + toFloat(kc));
             break;
         }
+        case OP_ADDI: {
+            BblValue& ra = R(A);
+            if (ra.type == BBL::Type::Int)
+                ra.intVal += static_cast<int64_t>(sBx);
+            else
+                R(A) = BblValue::makeFloat(toFloat(ra) + static_cast<double>(sBx));
+            break;
+        }
         case OP_SUB: {
             BblValue& rb = R(B); BblValue& rc = R(C);
             if (rb.type == BBL::Type::Int && rc.type == BBL::Type::Int) R(A) = BblValue::makeInt(rb.intVal - rc.intVal);
             else R(A) = BblValue::makeFloat(toFloat(rb) - toFloat(rc));
+            break;
+        }
+        case OP_SUBI: {
+            BblValue& ra = R(A);
+            if (ra.type == BBL::Type::Int)
+                ra.intVal -= static_cast<int64_t>(sBx);
+            else
+                R(A) = BblValue::makeFloat(toFloat(ra) - static_cast<double>(sBx));
             break;
         }
         case OP_MUL: {
@@ -150,6 +166,42 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
             BblValue& rb = R(B); BblValue& rc = R(C);
             if (rb.type == BBL::Type::Int && rc.type == BBL::Type::Int) R(A) = BblValue::makeBool(rb.intVal >= rc.intVal);
             else R(A) = BblValue::makeBool(toFloat(rb) >= toFloat(rc));
+            break;
+        }
+
+        // Fused compare-and-jump: iABC where A,B are registers, sBx encoded in B<<8|C as signed
+        // Actually use next instruction for jump target: LTJMP A B followed by JMP sBx
+        // Simpler: LTJMP is iABC, if R[A] < R[B] then skip next instruction
+        case OP_LTJMP: {
+            BblValue& ra = R(A); BblValue& rb = R(B);
+            bool cond;
+            if (ra.type == BBL::Type::Int && rb.type == BBL::Type::Int) cond = ra.intVal < rb.intVal;
+            else cond = toFloat(ra) < toFloat(rb);
+            if (cond) frame->ip++; // skip the exit JMP, continue to body
+            break;
+        }
+        case OP_LEJMP: {
+            BblValue& ra = R(A); BblValue& rb = R(B);
+            bool cond;
+            if (ra.type == BBL::Type::Int && rb.type == BBL::Type::Int) cond = ra.intVal <= rb.intVal;
+            else cond = toFloat(ra) <= toFloat(rb);
+            if (cond) frame->ip++;
+            break;
+        }
+        case OP_GTJMP: {
+            BblValue& ra = R(A); BblValue& rb = R(B);
+            bool cond;
+            if (ra.type == BBL::Type::Int && rb.type == BBL::Type::Int) cond = ra.intVal > rb.intVal;
+            else cond = toFloat(ra) > toFloat(rb);
+            if (cond) frame->ip++;
+            break;
+        }
+        case OP_GEJMP: {
+            BblValue& ra = R(A); BblValue& rb = R(B);
+            bool cond;
+            if (ra.type == BBL::Type::Int && rb.type == BBL::Type::Int) cond = ra.intVal >= rb.intVal;
+            else cond = toFloat(ra) >= toFloat(rb);
+            if (cond) frame->ip++;
             break;
         }
 
