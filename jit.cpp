@@ -23,6 +23,16 @@ extern "C" {
     void jitGetCapture(BblValue* regs, BblState* state, uint8_t destReg, uint8_t capIdx);
     void jitSetCapture(BblValue* regs, BblState* state, uint8_t srcReg, uint8_t capIdx);
     void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint16_t protoIdx);
+    void jitTable(BblValue* regs, BblState* state, uint8_t destReg, uint8_t pairCount);
+    void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblString* methodStr);
+    void jitVector(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint8_t argc, uint8_t typeIdx);
+    void jitBinary(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
+    void jitLength(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
+    void jitGetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint8_t objReg, uint8_t nameIdx);
+    void jitSetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t valReg, uint8_t objReg, uint8_t nameIdx);
+    void jitGetIndex(BblValue* regs, BblState* state, uint8_t destReg, uint8_t objReg, uint8_t idxReg);
+    void jitSetIndex(BblValue* regs, BblState* state, uint8_t valReg, uint8_t objReg, uint8_t idxReg);
+    void jitExec(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
 }
 
 void jitGetGlobal(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg) {
@@ -92,6 +102,130 @@ void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, 
     state->allocatedClosures.push_back(closure);
     // No capture filling in JIT context (top-level closures have no captures)
     regs[destReg] = BblValue::makeClosure(closure);
+}
+
+void jitTable(BblValue* regs, BblState* state, uint8_t destReg, uint8_t pairCount) {
+    BblTable* tbl = state->allocTable();
+    for (int i = 0; i < pairCount; i++)
+        tbl->set(regs[destReg + 1 + i*2], regs[destReg + 2 + i*2]);
+    regs[destReg] = BblValue::makeTable(tbl);
+}
+
+void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblString* methodStr) {
+    BblValue receiver = regs[base];
+    std::vector<BblValue> args(argc);
+    for (int i = 0; i < argc; i++) args[i] = regs[base + 1 + i];
+
+    // Dispatch through the same method tables as the interpreter
+    if (receiver.type == BBL::Type::Table) {
+        BblTable* tbl = receiver.tableVal;
+        if (methodStr == state->m.get) regs[base] = tbl->get(args[0]).value_or(args.size() > 1 ? args[1] : BblValue::makeNull());
+        else if (methodStr == state->m.set) { tbl->set(args[0], args[1]); regs[base] = BblValue::makeNull(); }
+        else if (methodStr == state->m.has) regs[base] = BblValue::makeBool(tbl->has(args[0]));
+        else if (methodStr == state->m.del) { tbl->del(args[0]); regs[base] = BblValue::makeNull(); }
+        else if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(tbl->length()));
+        else if (methodStr == state->m.keys) {
+            BblTable* keys = state->allocTable(); int64_t i = 0;
+            for (auto& k : tbl->order) keys->set(BblValue::makeInt(i++), k);
+            regs[base] = BblValue::makeTable(keys);
+        } else if (methodStr == state->m.push) {
+            for (auto& a : args) { tbl->set(BblValue::makeInt(tbl->nextIntKey), a); tbl->nextIntKey++; }
+            regs[base] = BblValue::makeNull();
+        } else throw BBL::Error{"unknown table method: " + methodStr->data};
+    } else if (receiver.type == BBL::Type::Vector) {
+        BblVec* vec = receiver.vectorVal;
+        if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(vec->length()));
+        else if (methodStr == state->m.push) { for (auto& a : args) state->packValue(vec, a); regs[base] = BblValue::makeNull(); }
+        else if (methodStr == state->m.at) regs[base] = state->readVecElem(vec, static_cast<size_t>(args[0].intVal));
+        else if (methodStr == state->m.set) { state->writeVecElem(vec, static_cast<size_t>(args[0].intVal), args[1]); regs[base] = BblValue::makeNull(); }
+        else throw BBL::Error{"unknown vector method: " + methodStr->data};
+    } else if (receiver.type == BBL::Type::String) {
+        BblString* str = receiver.stringVal;
+        if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(str->data.size()));
+        else throw BBL::Error{"unknown string method: " + methodStr->data};
+    } else if (receiver.type == BBL::Type::Binary) {
+        BblBinary* bin = receiver.binaryVal;
+        if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(bin->length()));
+        else throw BBL::Error{"unknown binary method: " + methodStr->data};
+    } else throw BBL::Error{"cannot call method on " + std::string(typeName(receiver.type))};
+}
+
+void jitVector(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint8_t argc, uint8_t typeIdx) {
+    std::string elemType = chunk->constants[typeIdx].stringVal->data;
+    BBL::Type elemTypeTag = BBL::Type::Null;
+    size_t elemSize = 0;
+    auto dit = state->structDescs.find(elemType);
+    if (dit != state->structDescs.end()) { elemTypeTag = BBL::Type::Struct; elemSize = dit->second.totalSize; }
+    else if (elemType == "int" || elemType == "int64") { elemTypeTag = BBL::Type::Int; elemSize = 8; }
+    else if (elemType == "float" || elemType == "float64") { elemTypeTag = BBL::Type::Float; elemSize = 8; }
+    else if (elemType == "float32") { elemTypeTag = BBL::Type::Float; elemSize = 4; }
+    else if (elemType == "int32") { elemTypeTag = BBL::Type::Int; elemSize = 4; }
+    else throw BBL::Error{"unknown vector element type: " + elemType};
+    BblVec* vec = state->allocVector(elemType, elemTypeTag, elemSize);
+    for (int i = 0; i < argc; i++) state->packValue(vec, regs[destReg + 1 + i]);
+    regs[destReg] = BblValue::makeVector(vec);
+}
+
+void jitBinary(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
+    BblValue& arg = regs[srcReg];
+    if (arg.type == BBL::Type::Vector) regs[destReg] = BblValue::makeBinary(state->allocBinary(arg.vectorVal->data));
+    else if (arg.type == BBL::Type::Struct) regs[destReg] = BblValue::makeBinary(state->allocBinary(arg.structVal->data));
+    else if (arg.type == BBL::Type::Int) regs[destReg] = BblValue::makeBinary(state->allocBinary(std::vector<uint8_t>(static_cast<size_t>(arg.intVal), 0)));
+    else throw BBL::Error{"binary: invalid argument type"};
+}
+
+void jitLength(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
+    BblValue& obj = regs[srcReg];
+    if (obj.type == BBL::Type::Vector) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.vectorVal->length()));
+    else if (obj.type == BBL::Type::String) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.stringVal->data.size()));
+    else if (obj.type == BBL::Type::Binary) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.binaryVal->length()));
+    else if (obj.type == BBL::Type::Table) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.tableVal->length()));
+    else throw BBL::Error{"cannot get length"};
+}
+
+void jitGetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint8_t objReg, uint8_t nameIdx) {
+    BblValue& obj = regs[objReg];
+    std::string fieldName = chunk->constants[nameIdx].stringVal->data;
+    if (obj.type == BBL::Type::Struct) {
+        for (auto& fd : obj.structVal->desc->fields)
+            if (fd.name == fieldName) { regs[destReg] = state->readField(obj.structVal, fd); return; }
+        throw BBL::Error{"struct has no field '" + fieldName + "'"};
+    } else if (obj.type == BBL::Type::Table) {
+        regs[destReg] = obj.tableVal->get(BblValue::makeString(state->intern(fieldName))).value_or(BblValue::makeNull());
+    } else throw BBL::Error{"cannot access field"};
+}
+
+void jitSetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t valReg, uint8_t objReg, uint8_t nameIdx) {
+    BblValue& obj = regs[objReg];
+    std::string fieldName = chunk->constants[nameIdx].stringVal->data;
+    if (obj.type == BBL::Type::Struct) {
+        for (auto& fd : obj.structVal->desc->fields)
+            if (fd.name == fieldName) { state->writeField(obj.structVal, fd, regs[valReg]); return; }
+    } else if (obj.type == BBL::Type::Table) {
+        obj.tableVal->set(BblValue::makeString(state->intern(fieldName)), regs[valReg]);
+    }
+}
+
+void jitGetIndex(BblValue* regs, BblState* state, uint8_t destReg, uint8_t objReg, uint8_t idxReg) {
+    BblValue& obj = regs[objReg]; BblValue& idx = regs[idxReg];
+    if (obj.type == BBL::Type::Vector) regs[destReg] = state->readVecElem(obj.vectorVal, static_cast<size_t>(idx.intVal));
+    else if (obj.type == BBL::Type::Table) regs[destReg] = obj.tableVal->get(idx).value_or(BblValue::makeNull());
+    else throw BBL::Error{"cannot index"};
+}
+
+void jitSetIndex(BblValue* regs, BblState* state, uint8_t valReg, uint8_t objReg, uint8_t idxReg) {
+    BblValue& obj = regs[objReg]; BblValue& idx = regs[idxReg];
+    if (obj.type == BBL::Type::Vector) state->writeVecElem(obj.vectorVal, static_cast<size_t>(idx.intVal), regs[valReg]);
+    else if (obj.type == BBL::Type::Table) obj.tableVal->set(idx, regs[valReg]);
+}
+
+void jitExec(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
+    if (regs[srcReg].type != BBL::Type::String) throw BBL::Error{"exec: argument must be string"};
+    BblLexer lexer(regs[srcReg].stringVal->data.c_str());
+    auto nodes = parse(lexer);
+    BblValue result = BblValue::makeNull();
+    for (auto& n : nodes) result = state->eval(n, state->rootScope);
+    regs[destReg] = result;
 }
 
 static void emit(uint8_t* buf, size_t& pos, const void* data, size_t len) {
@@ -684,7 +818,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk) {
             // NOT falsy = truthy → jmp. We can negate by checking !isFalsy
             // Let's just emit comparison to null/bool/int and jump if NOT any of those
             // This is complex — fall through to default for now
-            goto unsupported;
+            break; // fallback to default
         }
 
         case OP_NOT:
@@ -693,7 +827,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk) {
             emitCmp(jit.buf, jit.size, A, B, B, 0x94); // sete (equal to self = always true, wrong)
             // Actually NOT is: R[A] = isFalsy(R[B])
             // Just call a helper for now
-            goto unsupported;
+            break; // fallback to default
 
         case OP_AND: {
             size_t p = emitJmpFalse(jit.buf, jit.size, A);
@@ -705,7 +839,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk) {
             // If truthy, skip (leave value). If falsy, continue.
             // This is the inverse of JMPFALSE — skip when NOT falsy
             // For simplicity, fall through
-            goto unsupported;
+            break; // fallback to default
         }
 
         case OP_EQ: emitCmp(jit.buf, jit.size, A, B, C, 0x94); break;  // sete
@@ -758,7 +892,64 @@ JitCode jitCompile(BblState& state, Chunk& chunk) {
             break;
         }
 
-        unsupported:
+        case OP_TABLE:
+            emitCallHelper2(jit.buf, jit.size, (void*)jitTable, A, B);
+            break;
+
+        case OP_MCALL: {
+            // Pass: regs(rdi=rbx), state(rsi=r12), base(edx=A), argc(ecx=B), methodStr(r8=pointer)
+            BblString* methodStr = chunk.constants[C].stringVal;
+            // mov rdi, rbx
+            uint8_t a1[] = { 0x48, 0x89, 0xdf }; emit(jit.buf, jit.size, a1, 3);
+            // mov rsi, r12
+            uint8_t a2[] = { 0x4c, 0x89, 0xe6 }; emit(jit.buf, jit.size, a2, 3);
+            // mov edx, A
+            uint8_t a3[] = { 0xba }; emit(jit.buf, jit.size, a3, 1); emit32(jit.buf, jit.size, A);
+            // mov ecx, B
+            uint8_t a4[] = { 0xb9 }; emit(jit.buf, jit.size, a4, 1); emit32(jit.buf, jit.size, B);
+            // movabs r8, methodStr
+            uint8_t movr8[] = { 0x49, 0xb8 }; emit(jit.buf, jit.size, movr8, 2);
+            emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>(methodStr));
+            // movabs rax, jitMcall
+            uint8_t movabs[] = { 0x48, 0xb8 }; emit(jit.buf, jit.size, movabs, 2);
+            emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>((void*)jitMcall));
+            // call rax
+            uint8_t call[] = { 0xff, 0xd0 }; emit(jit.buf, jit.size, call, 2);
+            break;
+        }
+
+        case OP_VECTOR:
+            emitCallHelper3(jit.buf, jit.size, (void*)jitVector, 0, A, static_cast<uint32_t>((B << 8) | C));
+            break;
+        case OP_BINARY:
+            emitCallHelper2(jit.buf, jit.size, (void*)jitBinary, A, B);
+            break;
+        case OP_LENGTH:
+            emitCallHelper2(jit.buf, jit.size, (void*)jitLength, A, B);
+            break;
+        case OP_GETFIELD:
+            emitCallHelper3(jit.buf, jit.size, (void*)jitGetField, 0, A, static_cast<uint32_t>((B << 8) | C));
+            break;
+        case OP_SETFIELD:
+            emitCallHelper3(jit.buf, jit.size, (void*)jitSetField, 0, A, static_cast<uint32_t>((B << 8) | C));
+            break;
+        case OP_GETINDEX:
+            emitCallHelper2(jit.buf, jit.size, (void*)jitGetIndex, static_cast<uint32_t>((A << 16) | (B << 8) | C), 0);
+            break;
+        case OP_SETINDEX:
+            emitCallHelper2(jit.buf, jit.size, (void*)jitSetIndex, static_cast<uint32_t>((A << 16) | (B << 8) | C), 0);
+            break;
+        case OP_EXEC:
+            emitCallHelper2(jit.buf, jit.size, (void*)jitExec, A, B);
+            break;
+        case OP_SIZEOF:
+        case OP_STRUCT:
+        case OP_TAILCALL:
+        case OP_GETCAPTURE:
+        case OP_SETCAPTURE:
+        case OP_TRYBEGIN:
+        case OP_TRYEND:
+        case OP_EXECFILE:
         default:
             // Unsupported opcode — fall back to interpreter
             // For now, just emit a return with null
