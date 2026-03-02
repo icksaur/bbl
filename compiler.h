@@ -13,6 +13,7 @@ struct BblClosure;
 struct CompilerState {
     Chunk chunk;
     std::unordered_map<uint32_t, uint8_t> localRegs;
+    std::unordered_map<uint32_t, const AstNode*> inlinableFns;
     std::vector<CaptureInfo> captures;
     int scopeDepth = 0;
     int arity = 0;

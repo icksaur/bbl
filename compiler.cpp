@@ -1,6 +1,7 @@
 #include "compiler.h"
 #include "bbl.h"
 #include "vm.h"
+#include <unordered_set>
 
 int CompilerState::resolveCapture(uint32_t symbolId) {
     if (!enclosing) return -1;
@@ -273,6 +274,15 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
                            !node.children[2].children.empty() &&
                            node.children[2].children[0].type == NodeType::Symbol &&
                            node.children[2].children[0].stringVal == "fn";
+
+            // Check if fn is small enough to inline at call sites
+            if (isFnDef) {
+                auto& fnNode = node.children[2];
+                // Inline if: has param list, body is 1 expression, no nested fn
+                if (fnNode.children.size() == 3 && fnNode.children[1].type == NodeType::List) {
+                    cs.inlinableFns[symId] = &node.children[2];
+                }
+            }
 
             if (localReg == -1) {
                 int cap = cs.resolveCapture(symId);
@@ -582,7 +592,58 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
         return dest;
     }
 
-    // Regular function call
+    // Regular function call — try compile-time inlining first
+    if (head.type == NodeType::Symbol) {
+        uint32_t symId = state.resolveSymbol(head.stringVal);
+        auto iit = cs.inlinableFns.find(symId);
+        // Don't inline recursive calls or functions currently being inlined
+        static thread_local std::unordered_set<uint32_t> inlining;
+        if (iit != cs.inlinableFns.end() && inlining.find(symId) == inlining.end()) {
+            inlining.insert(symId);
+            const AstNode* fnNode = iit->second;
+            auto& paramList = fnNode->children[1];
+            auto& body = fnNode->children[2];
+            size_t argc = node.children.size() - 1;
+
+            if (argc == paramList.children.size()) {
+                // Compile args into temp registers, map param symbols to those regs
+                uint8_t savedNext = cs.nextReg;
+                std::unordered_map<uint32_t, uint8_t> savedLocals;
+
+                // Compile each argument and bind to param name
+                for (size_t i = 0; i < argc; i++) {
+                    uint32_t paramSym = state.resolveSymbol(paramList.children[i].stringVal);
+                    uint8_t argReg = compileExpr(state, cs, node.children[i + 1], cs.allocReg());
+                    // Save and override the local mapping
+                    auto existing = cs.localRegs.find(paramSym);
+                    if (existing != cs.localRegs.end())
+                        savedLocals[paramSym] = existing->second;
+                    cs.localRegs[paramSym] = argReg;
+                }
+
+                // Compile the inlined body
+                uint8_t resultReg = compileExpr(state, cs, body, dest);
+                if (resultReg != dest)
+                    cs.chunk.emitABC(OP_MOVE, dest, resultReg, 0, node.line);
+
+                // Restore param mappings
+                for (size_t i = 0; i < argc; i++) {
+                    uint32_t paramSym = state.resolveSymbol(paramList.children[i].stringVal);
+                    auto sit = savedLocals.find(paramSym);
+                    if (sit != savedLocals.end())
+                        cs.localRegs[paramSym] = sit->second;
+                    else
+                        cs.localRegs.erase(paramSym);
+                }
+                cs.freeRegsTo(savedNext);
+                inlining.erase(symId);
+                return dest;
+            }
+            inlining.erase(symId);
+        }
+    }
+
+    // Regular function call (not inlined)
     uint8_t base = dest;
     uint8_t savedNext = cs.nextReg;
     if (base < cs.nextReg) { base = cs.allocReg(); cs.freeRegsTo(base); }
