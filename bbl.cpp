@@ -572,6 +572,16 @@ std::vector<AstNode> parse(BblLexer& lexer) {
 BblState::BblState() {
     rootScope.bindings = std::make_unique<std::unordered_map<uint32_t, BblValue>>();
     vm = std::make_unique<VmState>();
+
+    m.length = intern("length"); m.push = intern("push"); m.pop = intern("pop");
+    m.clear = intern("clear"); m.at = intern("at"); m.set = intern("set");
+    m.get = intern("get"); m.resize = intern("resize"); m.has = intern("has");
+    m.del = intern("delete"); m.keys = intern("keys"); m.find = intern("find");
+    m.contains = intern("contains"); m.starts_with = intern("starts-with");
+    m.ends_with = intern("ends-with"); m.slice = intern("slice");
+    m.split = intern("split"); m.replace = intern("replace");
+    m.upper = intern("upper"); m.lower = intern("lower"); m.trim = intern("trim");
+    m.copy_from = intern("copy-from");
 }
 
 BblState::~BblState() {

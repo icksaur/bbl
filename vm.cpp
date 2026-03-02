@@ -378,43 +378,43 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
 
             if (receiver.type == BBL::Type::Vector) {
                 BblVec* vec = receiver.vectorVal;
-                if (methodStr->data == "length") R(A) = BblValue::makeInt(static_cast<int64_t>(vec->length()));
-                else if (methodStr->data == "push") { for (int i = 0; i < nargs; i++) state.packValue(vec, argsBuf[i]); R(A) = BblValue::makeNull(); }
-                else if (methodStr->data == "pop") {
+                if (methodStr == state.m.length) R(A) = BblValue::makeInt(static_cast<int64_t>(vec->length()));
+                else if (methodStr == state.m.push) { for (int i = 0; i < nargs; i++) state.packValue(vec, argsBuf[i]); R(A) = BblValue::makeNull(); }
+                else if (methodStr == state.m.pop) {
                     if (vec->length() == 0) throw BBL::Error{"pop on empty vector"};
                     R(A) = state.readVecElem(vec, vec->length() - 1);
                     vec->data.resize(vec->data.size() - vec->elemSize);
-                } else if (methodStr->data == "clear") { vec->data.clear(); R(A) = BblValue::makeNull(); }
-                else if (methodStr->data == "at") R(A) = state.readVecElem(vec, static_cast<size_t>(argsBuf[0].intVal));
-                else if (methodStr->data == "set") { state.writeVecElem(vec, static_cast<size_t>(argsBuf[0].intVal), argsBuf[1]); R(A) = BblValue::makeNull(); }
-                else if (methodStr->data == "resize") { vec->data.resize(static_cast<size_t>(argsBuf[0].intVal) * vec->elemSize, 0); R(A) = BblValue::makeNull(); }
+                } else if (methodStr == state.m.clear) { vec->data.clear(); R(A) = BblValue::makeNull(); }
+                else if (methodStr == state.m.at) R(A) = state.readVecElem(vec, static_cast<size_t>(argsBuf[0].intVal));
+                else if (methodStr == state.m.set) { state.writeVecElem(vec, static_cast<size_t>(argsBuf[0].intVal), argsBuf[1]); R(A) = BblValue::makeNull(); }
+                else if (methodStr == state.m.resize) { vec->data.resize(static_cast<size_t>(argsBuf[0].intVal) * vec->elemSize, 0); R(A) = BblValue::makeNull(); }
                 else throw BBL::Error{"unknown vector method: " + methodStr->data};
             } else if (receiver.type == BBL::Type::String) {
                 BblString* str = receiver.stringVal;
-                if (methodStr->data == "length") R(A) = BblValue::makeInt(static_cast<int64_t>(str->data.size()));
-                else if (methodStr->data == "at") { R(A) = BblValue::makeString(state.intern(std::string(1, str->data[static_cast<size_t>(argsBuf[0].intVal)]))); }
-                else if (methodStr->data == "slice") {
+                if (methodStr == state.m.length) R(A) = BblValue::makeInt(static_cast<int64_t>(str->data.size()));
+                else if (methodStr == state.m.at) { R(A) = BblValue::makeString(state.intern(std::string(1, str->data[static_cast<size_t>(argsBuf[0].intVal)]))); }
+                else if (methodStr == state.m.slice) {
                     int64_t start = argsBuf[0].intVal;
                     int64_t len = static_cast<size_t>(nargs) > 1 ? argsBuf[1].intVal : static_cast<int64_t>(str->data.size()) - start;
                     R(A) = BblValue::makeString(state.intern(str->data.substr(static_cast<size_t>(start), static_cast<size_t>(len))));
-                } else if (methodStr->data == "find") {
+                } else if (methodStr == state.m.find) {
                     auto pos = str->data.find(argsBuf[0].stringVal->data);
                     R(A) = BblValue::makeInt(pos == std::string::npos ? -1 : static_cast<int64_t>(pos));
-                } else if (methodStr->data == "contains") R(A) = BblValue::makeBool(str->data.find(argsBuf[0].stringVal->data) != std::string::npos);
-                else if (methodStr->data == "starts-with") R(A) = BblValue::makeBool(str->data.starts_with(argsBuf[0].stringVal->data));
-                else if (methodStr->data == "ends-with") R(A) = BblValue::makeBool(str->data.ends_with(argsBuf[0].stringVal->data));
-                else if (methodStr->data == "upper") { std::string r = str->data; for (auto& c : r) c = static_cast<char>(toupper(c)); R(A) = BblValue::makeString(state.intern(r)); }
-                else if (methodStr->data == "lower") { std::string r = str->data; for (auto& c : r) c = static_cast<char>(tolower(c)); R(A) = BblValue::makeString(state.intern(r)); }
-                else if (methodStr->data == "trim") {
+                } else if (methodStr == state.m.contains) R(A) = BblValue::makeBool(str->data.find(argsBuf[0].stringVal->data) != std::string::npos);
+                else if (methodStr == state.m.starts_with) R(A) = BblValue::makeBool(str->data.starts_with(argsBuf[0].stringVal->data));
+                else if (methodStr == state.m.ends_with) R(A) = BblValue::makeBool(str->data.ends_with(argsBuf[0].stringVal->data));
+                else if (methodStr == state.m.upper) { std::string r = str->data; for (auto& c : r) c = static_cast<char>(toupper(c)); R(A) = BblValue::makeString(state.intern(r)); }
+                else if (methodStr == state.m.lower) { std::string r = str->data; for (auto& c : r) c = static_cast<char>(tolower(c)); R(A) = BblValue::makeString(state.intern(r)); }
+                else if (methodStr == state.m.trim) {
                     auto s = str->data.find_first_not_of(" \t\n\r");
                     auto e = str->data.find_last_not_of(" \t\n\r");
                     R(A) = BblValue::makeString(state.intern(s == std::string::npos ? "" : str->data.substr(s, e - s + 1)));
-                } else if (methodStr->data == "replace") {
+                } else if (methodStr == state.m.replace) {
                     std::string result = str->data, from = argsBuf[0].stringVal->data, to = argsBuf[1].stringVal->data;
                     size_t pos = 0;
                     while ((pos = result.find(from, pos)) != std::string::npos) { result.replace(pos, from.size(), to); pos += to.size(); }
                     R(A) = BblValue::makeString(state.intern(result));
-                } else if (methodStr->data == "split") {
+                } else if (methodStr == state.m.split) {
                     std::string delim = argsBuf[0].stringVal->data;
                     BblTable* tbl = state.allocTable();
                     size_t pos = 0; int64_t idx = 0;
@@ -429,14 +429,14 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                 } else throw BBL::Error{"unknown string method: " + methodStr->data};
             } else if (receiver.type == BBL::Type::Binary) {
                 BblBinary* bin = receiver.binaryVal;
-                if (methodStr->data == "length") R(A) = BblValue::makeInt(static_cast<int64_t>(bin->length()));
-                else if (methodStr->data == "at") R(A) = BblValue::makeInt(bin->data[static_cast<size_t>(argsBuf[0].intVal)]);
-                else if (methodStr->data == "set") { bin->data[static_cast<size_t>(argsBuf[0].intVal)] = static_cast<uint8_t>(argsBuf[1].intVal); R(A) = BblValue::makeNull(); }
-                else if (methodStr->data == "slice") {
+                if (methodStr == state.m.length) R(A) = BblValue::makeInt(static_cast<int64_t>(bin->length()));
+                else if (methodStr == state.m.at) R(A) = BblValue::makeInt(bin->data[static_cast<size_t>(argsBuf[0].intVal)]);
+                else if (methodStr == state.m.set) { bin->data[static_cast<size_t>(argsBuf[0].intVal)] = static_cast<uint8_t>(argsBuf[1].intVal); R(A) = BblValue::makeNull(); }
+                else if (methodStr == state.m.slice) {
                     size_t s = static_cast<size_t>(argsBuf[0].intVal), l = static_cast<size_t>(argsBuf[1].intVal);
                     R(A) = BblValue::makeBinary(state.allocBinary(std::vector<uint8_t>(bin->data.begin() + s, bin->data.begin() + s + l)));
-                } else if (methodStr->data == "resize") { bin->data.resize(static_cast<size_t>(argsBuf[0].intVal), 0); R(A) = BblValue::makeNull(); }
-                else if (methodStr->data == "copy-from") {
+                } else if (methodStr == state.m.resize) { bin->data.resize(static_cast<size_t>(argsBuf[0].intVal), 0); R(A) = BblValue::makeNull(); }
+                else if (methodStr == state.m.copy_from) {
                     BblBinary* src = argsBuf[0].binaryVal;
                     size_t dO = static_cast<size_t>(nargs) > 1 ? static_cast<size_t>(argsBuf[1].intVal) : 0;
                     size_t sO = static_cast<size_t>(nargs) > 2 ? static_cast<size_t>(argsBuf[2].intVal) : 0;
@@ -446,19 +446,19 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                 } else throw BBL::Error{"unknown binary method: " + methodStr->data};
             } else if (receiver.type == BBL::Type::Table) {
                 BblTable* tbl = receiver.tableVal;
-                if (methodStr->data == "length") R(A) = BblValue::makeInt(static_cast<int64_t>(tbl->length()));
-                else if (methodStr->data == "get") R(A) = tbl->get(argsBuf[0]).value_or(static_cast<size_t>(nargs) > 1 ? argsBuf[1] : BblValue::makeNull());
-                else if (methodStr->data == "set") { tbl->set(argsBuf[0], argsBuf[1]); R(A) = BblValue::makeNull(); }
-                else if (methodStr->data == "delete") { tbl->del(argsBuf[0]); R(A) = BblValue::makeNull(); }
-                else if (methodStr->data == "has") R(A) = BblValue::makeBool(tbl->has(argsBuf[0]));
-                else if (methodStr->data == "keys") {
+                if (methodStr == state.m.length) R(A) = BblValue::makeInt(static_cast<int64_t>(tbl->length()));
+                else if (methodStr == state.m.get) R(A) = tbl->get(argsBuf[0]).value_or(static_cast<size_t>(nargs) > 1 ? argsBuf[1] : BblValue::makeNull());
+                else if (methodStr == state.m.set) { tbl->set(argsBuf[0], argsBuf[1]); R(A) = BblValue::makeNull(); }
+                else if (methodStr == state.m.del) { tbl->del(argsBuf[0]); R(A) = BblValue::makeNull(); }
+                else if (methodStr == state.m.has) R(A) = BblValue::makeBool(tbl->has(argsBuf[0]));
+                else if (methodStr == state.m.keys) {
                     BblTable* keys = state.allocTable(); int64_t i = 0;
                     for (auto& k : tbl->order) keys->set(BblValue::makeInt(i++), k);
                     R(A) = BblValue::makeTable(keys);
-                } else if (methodStr->data == "push") {
+                } else if (methodStr == state.m.push) {
                     for (int i = 0; i < nargs; i++) { tbl->set(BblValue::makeInt(tbl->nextIntKey), argsBuf[i]); tbl->nextIntKey++; }
                     R(A) = BblValue::makeNull();
-                } else if (methodStr->data == "pop") {
+                } else if (methodStr == state.m.pop) {
                     bool found = false;
                     for (auto it = tbl->order.rbegin(); it != tbl->order.rend(); ++it) {
                         if (it->type == BBL::Type::Int) {
@@ -469,7 +469,7 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                         }
                     }
                     if (!found) throw BBL::Error{"pop: no integer keys"};
-                } else if (methodStr->data == "at") {
+                } else if (methodStr == state.m.at) {
                     size_t idx = static_cast<size_t>(argsBuf[0].intVal);
                     if (idx >= tbl->order.size()) throw BBL::Error{"table index out of range"};
                     R(A) = tbl->get(tbl->order[idx]).value_or(BblValue::makeNull());

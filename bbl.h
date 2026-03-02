@@ -494,6 +494,32 @@ struct BblState {
     static constexpr uint8_t FlowContinue = 2;
     uint8_t flowSignal = FlowNone;
 
+    // Pre-interned method name cache for O(1) dispatch
+    struct MethodNames {
+        BblString* length = nullptr;
+        BblString* push = nullptr;
+        BblString* pop = nullptr;
+        BblString* clear = nullptr;
+        BblString* at = nullptr;
+        BblString* set = nullptr;
+        BblString* get = nullptr;
+        BblString* resize = nullptr;
+        BblString* has = nullptr;
+        BblString* del = nullptr; // "delete"
+        BblString* keys = nullptr;
+        BblString* find = nullptr;
+        BblString* contains = nullptr;
+        BblString* starts_with = nullptr; // "starts-with"
+        BblString* ends_with = nullptr;   // "ends-with"
+        BblString* slice = nullptr;
+        BblString* split = nullptr;
+        BblString* replace = nullptr;
+        BblString* upper = nullptr;
+        BblString* lower = nullptr;
+        BblString* trim = nullptr;
+        BblString* copy_from = nullptr; // "copy-from"
+    } m;
+
     // Print capture (for testing)
     std::string* printCapture = nullptr;
 
