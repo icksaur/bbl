@@ -7,6 +7,8 @@
 #include <unordered_map>
 #include <vector>
 
+struct JitCode;
+
 struct BblClosure {
     Chunk chunk;
     int arity = 0;
@@ -14,6 +16,7 @@ struct BblClosure {
     std::vector<BblValue> captures;
     std::vector<CaptureInfo> captureDescs;
     bool marked = false;
+    JitCode* jitCache = nullptr;
 };
 
 struct CallFrame {
