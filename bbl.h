@@ -546,6 +546,7 @@ struct BblState {
     BblState& operator=(const BblState&) = delete;
 
     BblString* intern(const std::string& s);
+    BblString* allocString(std::string s);
     BblBinary* allocBinary(std::vector<uint8_t> data);
     BblFn* allocFn();
     BblStruct* allocStruct(StructDesc* desc);

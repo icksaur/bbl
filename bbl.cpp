@@ -627,6 +627,13 @@ BblString* BblState::intern(const std::string& s) {
     return str;
 }
 
+BblString* BblState::allocString(std::string s) {
+    auto* str = new BblString{std::move(s)};
+    allocatedStrings.push_back(str);
+    allocCount++;
+    return str;
+}
+
 BblBinary* BblState::allocBinary(std::vector<uint8_t> data) {
     auto* b = new BblBinary{std::move(data)};
     allocatedBinaries.push_back(b);
@@ -1538,7 +1545,7 @@ BblValue BblState::evalList(const AstNode& node, BblScope& scope) {
                         result += valueToString(right);
                     }
                 }
-                return BblValue::makeString(intern(result));
+                return BblValue::makeString(allocString(std::move(result)));
             }
 
             BblValue right = eval(node.children[2], scope);
