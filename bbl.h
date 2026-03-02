@@ -240,11 +240,26 @@ struct BblValue {
 };
 
 struct BblTable {
-    std::vector<std::pair<BblValue, BblValue>> entries;
+    struct Entry {
+        BblValue key;
+        BblValue val;
+        bool occupied = false;
+        bool tombstone = false;
+    };
+
+    Entry* buckets = nullptr;
+    size_t capacity = 0;
+    size_t count = 0;
     int64_t nextIntKey = 0;
     bool marked = false;
+    std::vector<BblValue> order;
 
-    size_t length() const { return entries.size(); }
+    ~BblTable() { delete[] buckets; }
+    BblTable() = default;
+    BblTable(const BblTable&) = delete;
+    BblTable& operator=(const BblTable&) = delete;
+
+    size_t length() const { return count; }
     std::expected<BblValue, BBL::GetError> get(const BblValue& key) const;
     void set(const BblValue& key, const BblValue& val);
     bool has(const BblValue& key) const;

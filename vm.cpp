@@ -452,15 +452,27 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                 else if (method == "has") R(A) = BblValue::makeBool(tbl->has(args[0]));
                 else if (method == "keys") {
                     BblTable* keys = state.allocTable(); int64_t i = 0;
-                    for (auto& [k, v] : tbl->entries) keys->set(BblValue::makeInt(i++), k);
+                    for (auto& k : tbl->order) keys->set(BblValue::makeInt(i++), k);
                     R(A) = BblValue::makeTable(keys);
                 } else if (method == "push") {
                     for (auto& a : args) { tbl->set(BblValue::makeInt(tbl->nextIntKey), a); tbl->nextIntKey++; }
                     R(A) = BblValue::makeNull();
                 } else if (method == "pop") {
-                    if (tbl->entries.empty()) throw BBL::Error{"pop on empty table"};
-                    R(A) = tbl->entries.back().second; tbl->entries.pop_back();
-                } else if (method == "at") R(A) = tbl->entries[static_cast<size_t>(args[0].intVal)].second;
+                    bool found = false;
+                    for (auto it = tbl->order.rbegin(); it != tbl->order.rend(); ++it) {
+                        if (it->type == BBL::Type::Int) {
+                            R(A) = tbl->get(*it).value_or(BblValue::makeNull());
+                            tbl->del(*it);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) throw BBL::Error{"pop: no integer keys"};
+                } else if (method == "at") {
+                    size_t idx = static_cast<size_t>(args[0].intVal);
+                    if (idx >= tbl->order.size()) throw BBL::Error{"table index out of range"};
+                    R(A) = tbl->get(tbl->order[idx]).value_or(BblValue::makeNull());
+                }
                 else throw BBL::Error{"unknown table method: " + method};
             } else if (receiver.type == BBL::Type::UserData) {
                 auto it = receiver.userdataVal->desc->methods.find(method);

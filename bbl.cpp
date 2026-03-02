@@ -25,46 +25,102 @@ static bool bblValueKeyEqual(const BblValue& a, const BblValue& b) {
     if (a.type != b.type) return false;
     if (a.type == BBL::Type::String) return a.stringVal == b.stringVal;
     if (a.type == BBL::Type::Int) return a.intVal == b.intVal;
+    if (a.type == BBL::Type::Float) return a.floatVal == b.floatVal;
+    if (a.type == BBL::Type::Bool) return a.boolVal == b.boolVal;
     return false;
 }
 
 // ---------- BblTable ----------
 
-std::expected<BblValue, BBL::GetError> BblTable::get(const BblValue& key) const {
-    for (auto& [k, v] : entries) {
-        if (bblValueKeyEqual(k, key)) return v;
+static size_t hashValue(const BblValue& v) {
+    switch (v.type) {
+        case BBL::Type::Int:    return std::hash<int64_t>{}(v.intVal);
+        case BBL::Type::String: return std::hash<const void*>{}(static_cast<const void*>(v.stringVal));
+        case BBL::Type::Float: {
+            uint64_t bits;
+            std::memcpy(&bits, &v.floatVal, 8);
+            return std::hash<uint64_t>{}(bits);
+        }
+        case BBL::Type::Bool:   return v.boolVal ? 1 : 0;
+        default:                return 0;
     }
-    return std::unexpected(BBL::GetError::NotFound);
+}
+
+static BblTable::Entry* tableFindEntry(BblTable::Entry* buckets, size_t cap, const BblValue& key) {
+    size_t idx = hashValue(key) & (cap - 1);
+    BblTable::Entry* firstTombstone = nullptr;
+    for (size_t i = 0; i < cap; i++) {
+        BblTable::Entry& e = buckets[(idx + i) & (cap - 1)];
+        if (!e.occupied && !e.tombstone) {
+            return firstTombstone ? firstTombstone : &e;
+        }
+        if (e.tombstone) {
+            if (!firstTombstone) firstTombstone = &e;
+            continue;
+        }
+        if (bblValueKeyEqual(e.key, key)) return &e;
+    }
+    return firstTombstone;
+}
+
+static void tableGrow(BblTable* tbl) {
+    size_t newCap = tbl->capacity < 8 ? 8 : tbl->capacity * 2;
+    auto* newBuckets = new BblTable::Entry[newCap];
+    for (size_t i = 0; i < tbl->capacity; i++) {
+        auto& e = tbl->buckets[i];
+        if (e.occupied && !e.tombstone) {
+            auto* dest = tableFindEntry(newBuckets, newCap, e.key);
+            dest->key = e.key;
+            dest->val = e.val;
+            dest->occupied = true;
+        }
+    }
+    delete[] tbl->buckets;
+    tbl->buckets = newBuckets;
+    tbl->capacity = newCap;
+}
+
+std::expected<BblValue, BBL::GetError> BblTable::get(const BblValue& key) const {
+    if (count == 0) return std::unexpected(BBL::GetError::NotFound);
+    auto* e = tableFindEntry(buckets, capacity, key);
+    if (!e || !e->occupied || e->tombstone) return std::unexpected(BBL::GetError::NotFound);
+    return e->val;
 }
 
 void BblTable::set(const BblValue& key, const BblValue& val) {
-    for (auto& [k, v] : entries) {
-        if (bblValueKeyEqual(k, key)) {
-            v = val;
-            return;
-        }
+    if (capacity == 0 || count + 1 > capacity * 3 / 4) tableGrow(this);
+    auto* e = tableFindEntry(buckets, capacity, key);
+    bool isNew = !e->occupied || e->tombstone;
+    e->key = key;
+    e->val = val;
+    e->occupied = true;
+    e->tombstone = false;
+    if (isNew) {
+        count++;
+        order.push_back(key);
     }
-    entries.emplace_back(key, val);
-    if (key.type == BBL::Type::Int && key.intVal >= nextIntKey) {
+    if (key.type == BBL::Type::Int && key.intVal >= nextIntKey)
         nextIntKey = key.intVal + 1;
-    }
 }
 
 bool BblTable::has(const BblValue& key) const {
-    for (auto& [k, v] : entries) {
-        if (bblValueKeyEqual(k, key)) return true;
-    }
-    return false;
+    if (count == 0) return false;
+    auto* e = tableFindEntry(buckets, capacity, key);
+    return e && e->occupied && !e->tombstone;
 }
 
 bool BblTable::del(const BblValue& key) {
-    for (auto it = entries.begin(); it != entries.end(); ++it) {
-        if (bblValueKeyEqual(it->first, key)) {
-            entries.erase(it);
-            return true;
-        }
+    if (count == 0) return false;
+    auto* e = tableFindEntry(buckets, capacity, key);
+    if (!e || !e->occupied || e->tombstone) return false;
+    e->tombstone = true;
+    e->key = BblValue::makeNull();
+    e->val = BblValue::makeNull();
+    count--;
+    for (auto it = order.begin(); it != order.end(); ++it) {
+        if (bblValueKeyEqual(*it, key)) { order.erase(it); break; }
     }
-    return false;
+    return true;
 }
 
 // ---------- BblValue eq ----------
@@ -654,11 +710,14 @@ static void gcMark(BblValue& val) {
         case BBL::Type::Table:
             if (val.tableVal && !val.tableVal->marked) {
                 val.tableVal->marked = true;
-                for (auto& [k, v] : val.tableVal->entries) {
-                    BblValue km = k;
-                    BblValue vm = v;
-                    gcMark(km);
-                    gcMark(vm);
+                for (size_t i = 0; i < val.tableVal->capacity; i++) {
+                    auto& e = val.tableVal->buckets[i];
+                    if (e.occupied && !e.tombstone) {
+                        BblValue km = e.key;
+                        BblValue vm = e.val;
+                        gcMark(km);
+                        gcMark(vm);
+                    }
                 }
             }
             break;
@@ -2409,7 +2468,7 @@ BblValue BblState::evalTableMethod(BblTable* tbl, const std::string& method,
     if (method == "keys") {
         BblTable* result = allocTable();
         int64_t idx = 0;
-        for (auto& [k, v] : tbl->entries) {
+        for (auto& k : tbl->order) {
             result->set(BblValue::makeInt(idx), k);
             idx++;
         }
@@ -2425,25 +2484,15 @@ BblValue BblState::evalTableMethod(BblTable* tbl, const std::string& method,
         return BblValue::makeNull();
     }
     if (method == "pop") {
-        // Find highest integer key
-        int64_t maxKey = -1;
-        size_t maxIdx = 0;
-        bool found = false;
-        for (size_t i = 0; i < tbl->entries.size(); i++) {
-            if (tbl->entries[i].first.type == BBL::Type::Int) {
-                if (!found || tbl->entries[i].first.intVal > maxKey) {
-                    maxKey = tbl->entries[i].first.intVal;
-                    maxIdx = i;
-                    found = true;
-                }
+        // Pop last integer key
+        for (auto it = tbl->order.rbegin(); it != tbl->order.rend(); ++it) {
+            if (it->type == BBL::Type::Int) {
+                BblValue val = tbl->get(*it).value_or(BblValue::makeNull());
+                tbl->del(*it);
+                return val;
             }
         }
-        if (!found) {
-            throw BBL::Error{"table.pop: no integer keys"};
-        }
-        BblValue val = tbl->entries[maxIdx].second;
-        tbl->entries.erase(tbl->entries.begin() + static_cast<ptrdiff_t>(maxIdx));
-        return val;
+        throw BBL::Error{"table.pop: no integer keys"};
     }
     if (method == "at") {
         if (node.children.size() < 2) {
@@ -2453,16 +2502,11 @@ BblValue BblState::evalTableMethod(BblTable* tbl, const std::string& method,
         if (idx.type != BBL::Type::Int) {
             throw BBL::Error{"table.at: index must be int"};
         }
-        // 0-based position among integer keys
         int64_t pos = idx.intVal;
-        int64_t count = 0;
-        for (auto& [k, v] : tbl->entries) {
-            if (k.type == BBL::Type::Int) {
-                if (count == pos) return v;
-                count++;
-            }
-        }
-        throw BBL::Error{"table.at: index " + std::to_string(pos) + " out of bounds"};
+        if (pos < 0 || static_cast<size_t>(pos) >= tbl->order.size())
+            throw BBL::Error{"table.at: index " + std::to_string(pos) + " out of bounds"};
+        BblValue key = tbl->order[static_cast<size_t>(pos)];
+        return tbl->get(key).value_or(BblValue::makeNull());
     }
     throw BBL::Error{"table has no method " + method};
 }
@@ -3965,11 +4009,11 @@ static int bblChildRecvVec(BblState* bbl);
 
 static BblMessage serializeMessage(BblState* bbl, BblTable* table, BblValue* vecArg) {
     BblMessage msg;
-    for (auto& entry : table->entries) {
-        if (entry.first.type != BBL::Type::String)
+    for (auto& k : table->order) {
+        if (k.type != BBL::Type::String)
             throw BBL::Error{"message key must be a string"};
+        auto val = table->get(k).value_or(BblValue::makeNull());
         MessageValue mv;
-        auto& val = entry.second;
         mv.type = val.type;
         switch (val.type) {
             case BBL::Type::Int:    mv.intVal = val.intVal; break;
@@ -3980,7 +4024,7 @@ static BblMessage serializeMessage(BblState* bbl, BblTable* table, BblValue* vec
             default:
                 throw BBL::Error{"message value must be int, float, bool, null, or string"};
         }
-        msg.entries.emplace_back(entry.first.stringVal->data, std::move(mv));
+        msg.entries.emplace_back(k.stringVal->data, std::move(mv));
     }
     if (vecArg) {
         if (vecArg->type == BBL::Type::Vector) {
