@@ -1,4 +1,5 @@
 #include "bbl.h"
+#include <sys/mman.h>
 #include <algorithm>
 #include <cerrno>
 #include <fstream>
@@ -915,7 +916,11 @@ void BblState::gc() {
 
     sweepPool(allocatedBinaries, noop);
     sweepPool(allocatedFns, noop);
-    sweepPool(allocatedClosures, noop);
+    sweepPool(allocatedClosures, [](BblClosure* c) {
+        if (c->chunk.traceCode) {
+            munmap(c->chunk.traceCode, c->chunk.traceCapacity);
+        }
+    });
     sweepPool(allocatedStructs, noop);
     sweepPool(allocatedVectors, noop);
     // Tables: recycle dead ones into free pool instead of deleting

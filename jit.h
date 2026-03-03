@@ -15,3 +15,26 @@ struct JitCode {
 JitCode jitCompile(BblState& state, Chunk& chunk);
 BblValue jitExecute(BblState& state, Chunk& chunk);
 void jitFree(JitCode& jit);
+
+struct TraceEntry {
+    uint32_t inst;
+    Chunk* chunk;
+    uint8_t regBase;
+};
+
+struct Trace {
+    std::vector<TraceEntry> entries;
+    Chunk* startChunk = nullptr;
+    size_t startPc = 0;
+    int maxRegs = 0;
+    bool valid = false;
+};
+
+struct TraceResult {
+    bool completed;     // true = trace ran to completion (looped back)
+    size_t exitPc;      // if !completed, resume interpreting here
+};
+
+Trace recordTrace(BblState& state, Chunk& chunk, size_t loopPc, BblValue* regs);
+JitCode compileTrace(BblState& state, Trace& trace);
+TraceResult executeTrace(JitCode& jit, BblValue* regs, BblState* state);

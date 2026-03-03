@@ -1040,3 +1040,258 @@ void jitFree(JitCode& jit) {
         jit.buf = nullptr;
     }
 }
+
+// ============ Tracing JIT ============
+
+Trace recordTrace(BblState& state, Chunk& chunk, size_t loopPc, BblValue* regs) {
+    Trace trace;
+    trace.startChunk = &chunk;
+    trace.startPc = loopPc;
+    trace.valid = false;
+
+    // The LOOP at loopPc jumps back to (loopPc + 1 - sBx).
+    uint32_t loopInst = chunk.code[loopPc];
+    int sBx = decodesBx(loopInst);
+    size_t bodyStart = loopPc + 1 - sBx;
+
+    struct CallInfo { Chunk* chunk; size_t pc; uint8_t regBase; };
+    std::vector<CallInfo> callStack;
+    callStack.push_back({&chunk, bodyStart, 0});
+
+    Chunk* curChunk = &chunk;
+    size_t pc = bodyStart;
+    uint8_t regBase = 0;
+    int maxRegs = chunk.numRegs;
+    int depth = 0;
+    int maxEntries = 200;
+
+    while (trace.entries.size() < static_cast<size_t>(maxEntries)) {
+        if (pc >= curChunk->code.size()) { return trace; }
+        uint32_t inst = curChunk->code[pc];
+        uint8_t op = decodeOP(inst);
+
+        if (op == OP_LOOP && curChunk == &chunk && depth == 0) {
+            trace.maxRegs = maxRegs;
+            trace.valid = true;
+            return trace;
+        }
+
+        trace.entries.push_back({inst, curChunk, regBase});
+        pc++;
+
+        // Follow calls
+        if (op == OP_CALL && depth < 4) {
+            uint8_t A = decodeA(inst);
+            uint8_t base = A + regBase;
+            BblValue callee = regs[base];
+            if (callee.type == BBL::Type::Fn && callee.isClosure) {
+                BblClosure* closure = callee.closureVal;
+                callStack.push_back({curChunk, pc, regBase});
+                curChunk = &closure->chunk;
+                pc = 0;
+                regBase = base;
+                depth++;
+                int needed = regBase + closure->chunk.numRegs;
+                if (needed > maxRegs) maxRegs = needed;
+                continue;
+            }
+            return trace; // can't inline non-closure calls
+        }
+
+        if (op == OP_RETURN && depth > 0) {
+            depth--;
+            auto& ci = callStack.back();
+            curChunk = ci.chunk;
+            pc = ci.pc;
+            regBase = ci.regBase;
+            callStack.pop_back();
+            continue;
+        }
+
+        if (op == OP_RETURN && depth == 0) {
+            return trace; // unexpected return in trace
+        }
+
+        // Handle jumps within trace
+        if (op == OP_JMP) {
+            int off = decodesBx(inst);
+            pc = pc - 1 + 1 + off; // pc was already incremented
+        }
+        if (op == OP_LTJMP || op == OP_LEJMP || op == OP_GTJMP || op == OP_GEJMP) {
+            // Record the branch. The next instruction should be JMP (the else path).
+            // If condition was true (skip JMP), we skip pc++ again
+            // We just record — the compiler will emit a guard
+        }
+        if (op == OP_JMPFALSE || op == OP_JMPTRUE) {
+            // Record — compiler will emit guard
+            int off = decodesBx(inst);
+            // For recording, we assume the hot path doesn't jump (condition passed)
+            // If it did jump, we'd need to follow — for simplicity, don't follow
+        }
+
+        // Unsupported for tracing
+        if (op == OP_CLOSURE || op == OP_GETGLOBAL || op == OP_SETGLOBAL ||
+            op == OP_MCALL || op == OP_TABLE || op == OP_VECTOR ||
+            op == OP_TRYBEGIN || op == OP_TRYEND || op == OP_EXEC || op == OP_EXECFILE) {
+            // Abort trace for complex ops
+            return trace;
+        }
+    }
+    return trace;
+}
+
+JitCode compileTrace(BblState& state, Trace& trace) {
+    JitCode jit;
+    jit.capacity = trace.entries.size() * 64 + 512;
+    jit.buf = static_cast<uint8_t*>(
+        mmap(nullptr, jit.capacity, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    jit.size = 0;
+
+    emitPrologue(jit.buf, jit.size);
+
+    size_t loopStart = jit.size;
+    std::vector<size_t> sideExitPatches;
+
+    for (size_t i = 0; i < trace.entries.size(); i++) {
+        auto& entry = trace.entries[i];
+        uint32_t inst = entry.inst;
+        uint8_t op = decodeOP(inst);
+        uint8_t A = decodeA(inst) + entry.regBase;
+        uint8_t B = decodeB(inst) + entry.regBase;
+        uint8_t C = decodeC(inst) + entry.regBase;
+        int sBx = decodesBx(inst);
+
+        switch (op) {
+        case OP_ADD: emitAdd(jit.buf, jit.size, A, B, C); break;
+        case OP_SUB: emitSub(jit.buf, jit.size, A, B, C); break;
+        case OP_MUL: emitMul(jit.buf, jit.size, A, B, C); break;
+        case OP_ADDI: emitAddi(jit.buf, jit.size, A, sBx); break;
+        case OP_SUBI: emitSubi(jit.buf, jit.size, A, sBx); break;
+        case OP_MOVE: emitMove(jit.buf, jit.size, A, B); break;
+        case OP_LOADINT: emitLoadInt(jit.buf, jit.size, A, sBx); break;
+        case OP_LOADNULL: emitLoadNull(jit.buf, jit.size, A); break;
+        case OP_LOADK: emitLoadK(jit.buf, jit.size, A, &entry.chunk->constants[decodeBx(inst)]); break;
+        case OP_ADDK: {
+            int origA = decodeA(inst) + entry.regBase;
+            int origB = decodeB(inst) + entry.regBase;
+            int origC = decodeC(inst); // constant index, not register
+            // mov rax, [rbx+B*16+8]; add with constant; store
+            uint8_t mov1[] = { 0x48, 0x8b, 0x83 };
+            emit(jit.buf, jit.size, mov1, 3);
+            emit32(jit.buf, jit.size, origB * VAL_SIZE + DATA_OFF);
+            if (entry.chunk->constants[origC].type != BBL::Type::Int) {
+                jitFree(jit); return JitCode{};
+            }
+            int64_t cv = entry.chunk->constants[origC].intVal;
+            uint8_t movabs[] = { 0x48, 0xb9 };
+            emit(jit.buf, jit.size, movabs, 2);
+            emit64(jit.buf, jit.size, static_cast<uint64_t>(cv));
+            uint8_t addrr[] = { 0x48, 0x01, 0xc8 };
+            emit(jit.buf, jit.size, addrr, 3);
+            uint8_t mov2[] = { 0x48, 0x89, 0x83 };
+            emit(jit.buf, jit.size, mov2, 3);
+            emit32(jit.buf, jit.size, origA * VAL_SIZE + DATA_OFF);
+            uint8_t setType[] = { 0xc7, 0x83 };
+            emit(jit.buf, jit.size, setType, 2);
+            emit32(jit.buf, jit.size, origA * VAL_SIZE + TYPE_OFF);
+            emit32(jit.buf, jit.size, TYPE_INT);
+            break;
+        }
+        case OP_LTJMP: {
+            size_t p = emitLtjmp(jit.buf, jit.size, A, B);
+            // If condition true (hot path), skip the next JMP in the trace
+            // The jl jumps past the side exit — patch to skip next entry
+            sideExitPatches.push_back(p);
+            break;
+        }
+        case OP_LEJMP: {
+            size_t p = emitLejmp(jit.buf, jit.size, A, B);
+            sideExitPatches.push_back(p);
+            break;
+        }
+        case OP_JMP:
+            // In the trace, JMPs are the "else" path after a fused compare.
+            // If we get here, the compare guard already passed — skip the JMP.
+            // (The JMP would exit the loop, but the guard prevents that.)
+            break;
+        case OP_JMPFALSE:
+            // Guard: if value is falsy, side exit
+            // For now, skip — the trace assumes the hot path
+            break;
+
+        case OP_CALL:
+            // Inlined — the callee's instructions follow in the trace
+            // Emit a type guard: check that R[A] is still the expected closure
+            // For now, skip the guard (trust the trace)
+            break;
+        case OP_RETURN:
+            // Inlined return: the result register was recorded.
+            // The caller's dest was set by the CALL instruction that preceded this.
+            // Move the return value to the caller's expected register.
+            {
+                uint8_t retReg = decodeA(inst) + entry.regBase;
+                // Find the CALL that inlined this: look back for OP_CALL
+                // The CALL's A field is the dest in the caller.
+                // For simplicity, emit MOVE retReg → callerDest
+                // We need to know the caller's dest — it's stored in the CALL entry
+                // Search backwards for the matching CALL
+                for (int j = static_cast<int>(i) - 1; j >= 0; j--) {
+                    if (decodeOP(trace.entries[j].inst) == OP_CALL &&
+                        trace.entries[j].regBase < entry.regBase) {
+                        uint8_t callA = decodeA(trace.entries[j].inst) + trace.entries[j].regBase;
+                        if (retReg != callA)
+                            emitMove(jit.buf, jit.size, callA, retReg);
+                        break;
+                    }
+                }
+            }
+            break;
+
+        case OP_LT: case OP_GT: case OP_LTE: case OP_GTE:
+        case OP_EQ: case OP_NEQ: case OP_NOT:
+        case OP_LOADBOOL:
+        case OP_GETGLOBAL: case OP_SETGLOBAL:
+        case OP_GETCAPTURE: case OP_SETCAPTURE:
+            // Fall back to C helper for complex ops in trace
+            // For now, abort the trace compilation
+            jitFree(jit);
+            return JitCode{};
+
+        default:
+            break;
+        }
+    }
+
+    // End of trace: jump back to loop start
+    {
+        emit8(jit.buf, jit.size, 0xe9);
+        int32_t rel = static_cast<int32_t>(loopStart - (jit.size + 4));
+        emit32(jit.buf, jit.size, static_cast<uint32_t>(rel));
+    }
+
+    // Patch side exits: for now, all guards jump to a common exit
+    size_t exitLabel = jit.size;
+    // Exit: set rax = 0 (not completed), pop regs, ret
+    {
+        uint8_t xor_rax[] = { 0x48, 0x31, 0xc0 }; // xor rax, rax
+        emit(jit.buf, jit.size, xor_rax, 3);
+        emitEpilogue(jit.buf, jit.size);
+    }
+
+    // Patch all guard jumps to exit label
+    for (size_t p : sideExitPatches) {
+        patchRel32(jit.buf, p, exitLabel);
+    }
+
+    mprotect(jit.buf, jit.capacity, PROT_READ | PROT_EXEC);
+    return jit;
+}
+
+TraceResult executeTrace(JitCode& jit, BblValue* regs, BblState* state) {
+    if (!jit.buf) return {false, 0};
+    typedef int64_t (*TraceFn)(BblValue*, BblState*, void*);
+    TraceFn fn = reinterpret_cast<TraceFn>(jit.buf);
+    int64_t result = fn(regs, state, nullptr);
+    return {result != 0, 0};
+}

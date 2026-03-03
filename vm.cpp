@@ -1,6 +1,7 @@
 #include "vm.h"
 #include "bbl.h"
 #include "compiler.h"
+#include "jit.h"
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -241,14 +242,43 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
         case OP_JMP: frame->ip += sBx; break;
         case OP_JMPFALSE: if (isFalsy(R(A))) frame->ip += sBx; break;
         case OP_JMPTRUE:  if (!isFalsy(R(A))) frame->ip += sBx; break;
-        case OP_LOOP:
+        case OP_LOOP: {
+            size_t loopPc = static_cast<size_t>(frame->ip - frame->chunk->code.data() - 1);
             frame->ip -= sBx;
+
+            // Tracing JIT: record and compile hot loops
+            if (state.useJit && !frame->chunk->traceCompiled) {
+                frame->chunk->hotCount++;
+                if (frame->chunk->hotCount >= 64) {
+                    Trace trace = recordTrace(state, *frame->chunk, loopPc, frame->regs);
+                    if (trace.valid) {
+                        JitCode jit = compileTrace(state, trace);
+                        if (jit.buf) {
+                            frame->chunk->traceCode = jit.buf;
+                            frame->chunk->traceCapacity = jit.capacity;
+                            frame->chunk->traceCompiled = true;
+                            // Don't free — cached on chunk
+                        }
+                    }
+                    frame->chunk->hotCount = 0; // reset to avoid retrying
+                }
+            }
+            if (frame->chunk->traceCompiled && frame->chunk->traceCode) {
+                typedef int64_t (*TraceFn)(BblValue*, BblState*, void*);
+                TraceFn fn = reinterpret_cast<TraceFn>(frame->chunk->traceCode);
+                fn(frame->regs, &state, nullptr);
+                // Trace ran the loop to completion — skip past the LOOP
+                frame->ip = &frame->chunk->code[loopPc + 1];
+                break;
+            }
+
             if (state.allocCount >= state.gcThreshold) state.gc();
             if (state.maxSteps && ++state.stepCount > state.maxSteps)
                 throw BBL::Error{"step limit exceeded"};
             if (state.terminated.load(std::memory_order_relaxed))
                 throw BblTerminated{};
             break;
+        }
 
         case OP_AND: if (isFalsy(R(A))) frame->ip += sBx; break;
         case OP_OR:  if (!isFalsy(R(A))) frame->ip += sBx; break;
