@@ -515,17 +515,20 @@ TEST(test_short_circuit_and) {
 
 TEST(test_and_type_error) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(and 1 true)"));
+    bbl.exec("(= x (and 1 true))");
+    ASSERT_TRUE(bbl.getBool("x").value());
 }
 
 TEST(test_or_type_error) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(or 0 1)"));
+    bbl.exec("(= x (or 0 1))");
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)1);
 }
 
 TEST(test_not_type_error) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(not 42)"));
+    bbl.exec("(= b (not 42))");
+    ASSERT_FALSE(bbl.getBool("b").value());
 }
 
 // ========== String Concat Tests ==========

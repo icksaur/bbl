@@ -35,6 +35,7 @@ extern "C" {
     void jitSetIndex(BblValue* regs, BblState* state, uint32_t packed, uint32_t unused);
     void jitExec(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
     void jitArith(BblValue* regs, BblState* state, uint8_t A, uint32_t packed);
+    void jitNot(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
 }
 
 static thread_local bool g_jitError = false;
@@ -294,6 +295,15 @@ void jitExec(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
     regs[destReg] = result;
 }
 
+void jitNot(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
+    (void)state;
+    BblValue& v = regs[srcReg];
+    bool falsy = (v.type() == BBL::Type::Null) ||
+                 (v.type() == BBL::Type::Bool && !v.boolVal()) ||
+                 (v.type() == BBL::Type::Int && v.intVal() == 0);
+    regs[destReg] = BblValue::makeBool(falsy);
+}
+
 static std::string jitValToStr(BblState& state, const BblValue& v) {
     switch (v.type()) {
         case BBL::Type::Null: return "null";
@@ -312,18 +322,21 @@ void jitArith(BblValue* regs, BblState* state, uint8_t A, uint32_t packed) {
     uint8_t C = packed & 0xFF;
     BblValue& rb = regs[B]; BblValue& rc = regs[C];
     auto toF = [](const BblValue& v) -> double {
-        return v.type() == BBL::Type::Int ? static_cast<double>(v.intVal()) : v.floatVal();
+        if (v.type() == BBL::Type::Int) return static_cast<double>(v.intVal());
+        return v.floatVal();
+    };
+    auto isNum = [](const BblValue& v) -> bool {
+        return v.type() == BBL::Type::Int || v.type() == BBL::Type::Float || v.isDouble();
     };
     if (op == 0) {
         if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
             regs[A] = BblValue::makeInt(rb.intVal() + rc.intVal());
         else if (rb.type() == BBL::Type::String) {
-            if (A == B)
-                rb.stringVal()->data += jitValToStr(*state, rc);
-            else
-                regs[A] = BblValue::makeString(state->allocString(rb.stringVal()->data + jitValToStr(*state, rc)));
-        } else
+            regs[A] = BblValue::makeString(state->allocString(rb.stringVal()->data + jitValToStr(*state, rc)));
+        } else if (isNum(rb) && isNum(rc))
             regs[A] = BblValue::makeFloat(toF(rb) + toF(rc));
+        else
+            JIT_ERROR(state, "type mismatch in addition");
     } else if (op == 1) {
         if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
             regs[A] = BblValue::makeInt(rb.intVal() - rc.intVal());
@@ -338,8 +351,11 @@ void jitArith(BblValue* regs, BblState* state, uint8_t A, uint32_t packed) {
         if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int) {
             if (rc.intVal() == 0) JIT_ERROR(state, "division by zero");
             regs[A] = BblValue::makeInt(rb.intVal() / rc.intVal());
-        } else
-            regs[A] = BblValue::makeFloat(toF(rb) / toF(rc));
+        } else {
+            double denom = toF(rc);
+            if (denom == 0.0) JIT_ERROR(state, "division by zero");
+            regs[A] = BblValue::makeFloat(toF(rb) / denom);
+        }
     } else {
         if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int) {
             if (rc.intVal() == 0) JIT_ERROR(state, "division by zero");
@@ -1082,12 +1098,8 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         }
 
         case OP_NOT:
-            // Load isFalsy result into R[A]
-            // Simplified: check type and set bool
-            emitCmp(jit.buf, jit.size, A, B, B, 0x94); // sete (equal to self = always true, wrong)
-            // Actually NOT is: R[A] = isFalsy(R[B])
-            // Just call a helper for now
-            break; // fallback to default
+            emitCallHelper2(jit.buf, jit.size, (void*)jitNot, A, B, &errorExitPatches);
+            break;
 
         case OP_AND: {
             size_t p = emitJmpFalse(jit.buf, jit.size, A);
@@ -1096,10 +1108,19 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
         case OP_OR: {
-            // If truthy, skip (leave value). If falsy, continue.
-            // This is the inverse of JMPFALSE — skip when NOT falsy
-            // For simplicity, fall through
-            break; // fallback to default
+            // If truthy (not falsy), skip — emit jmpFalse but invert
+            // Load value, check falsy conditions, if NONE match → truthy → jump
+            size_t p = emitJmpFalse(jit.buf, jit.size, A);
+            // emitJmpFalse jumps when falsy. For OR we want to jump when truthy.
+            // So: emit jmp to target (truthy path), patch falsy to fall through
+            int target = static_cast<int>(i) + 1 + sBx;
+            // Invert: emit unconditional jmp to target, patch falsy jump to here
+            emit8(jit.buf, jit.size, 0xe9);
+            size_t truthyJmp = jit.size;
+            emit32(jit.buf, jit.size, 0);
+            patchRel32(jit.buf, p, jit.size);
+            patches.push_back({truthyJmp, static_cast<size_t>(target)});
+            break;
         }
 
         case OP_EQ: emitCmp(jit.buf, jit.size, A, B, C, 0x94); break;  // sete
