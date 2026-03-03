@@ -1,0 +1,15 @@
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/bin/Release/net9.0/BblBench
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/bin/Release/net9.0/BblBench.deps.json
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/bin/Release/net9.0/BblBench.runtimeconfig.json
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/bin/Release/net9.0/BblBench.dll
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/bin/Release/net9.0/BblBench.pdb
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/obj/Release/net9.0/BblBench.GeneratedMSBuildEditorConfig.editorconfig
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/obj/Release/net9.0/BblBench.AssemblyInfoInputs.cache
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/obj/Release/net9.0/BblBench.AssemblyInfo.cs
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/obj/Release/net9.0/BblBench.csproj.CoreCompileInputs.cache
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/obj/Release/net9.0/BblBench.sourcelink.json
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/obj/Release/net9.0/BblBench.dll
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/obj/Release/net9.0/refint/BblBench.dll
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/obj/Release/net9.0/BblBench.pdb
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/obj/Release/net9.0/BblBench.genruntimeconfig.cache
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/obj/Release/net9.0/ref/BblBench.dll

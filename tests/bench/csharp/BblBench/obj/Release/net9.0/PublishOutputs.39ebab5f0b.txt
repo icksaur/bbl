@@ -1,0 +1,5 @@
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/bin/pub/BblBench
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/bin/pub/BblBench.dll
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/bin/pub/BblBench.deps.json
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/bin/pub/BblBench.runtimeconfig.json
+/home/carl/repo/bbl/tests/bench/csharp/BblBench/bin/pub/BblBench.pdb

@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "lwnGskA4+VI=",
+  "success": true,
+  "projectFilePath": "/home/carl/repo/bbl/tests/bench/csharp/BblBench/BblBench.csproj",
+  "expectedPackageFiles": [
+    "/home/carl/.nuget/packages/microsoft.aspnetcore.app.ref/9.0.12/microsoft.aspnetcore.app.ref.9.0.12.nupkg.sha512"
+  ],
+  "logs": []
+}
