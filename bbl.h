@@ -577,6 +577,7 @@ struct BblState {
         BblString* lower = nullptr;
         BblString* trim = nullptr;
         BblString* copy_from = nullptr; // "copy-from"
+        BblString* join = nullptr;
     } m;
 
     // Print capture (for testing)

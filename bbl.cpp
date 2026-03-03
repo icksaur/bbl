@@ -644,6 +644,7 @@ BblState::BblState() {
     m.split = intern("split"); m.replace = intern("replace");
     m.upper = intern("upper"); m.lower = intern("lower"); m.trim = intern("trim");
     m.copy_from = intern("copy-from");
+    m.join = intern("join");
 }
 
 BblState::~BblState() {
