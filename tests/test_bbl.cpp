@@ -11,7 +11,15 @@ int passed = 0, failed = 0;
 #define TEST(name) static void name()
 #define RUN(name) do { \
     std::cout << "  " << #name << std::endl; \
-    name(); \
+    try { name(); } catch (const BBL::Error& e) { \
+        std::cerr << "  FAIL: uncaught BBL::Error: " << e.what \
+                  << " in " << #name << std::endl; \
+        failed++; \
+    } catch (const std::exception& e) { \
+        std::cerr << "  FAIL: uncaught exception: " << e.what() \
+                  << " in " << #name << std::endl; \
+        failed++; \
+    } \
 } while(0)
 #define ASSERT_EQ(a, b) do { \
     auto _a = (a); auto _b = (b); \
@@ -629,7 +637,8 @@ TEST(test_args_table_multi) {
 
 TEST(test_if_non_bool_condition) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(if 42 (= x 1))"));
+    bbl.exec("(if 42 (= x 1))");
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)1);
 }
 
 TEST(test_loop_basic) {
@@ -646,7 +655,8 @@ TEST(test_loop_statement_returns_null) {
 
 TEST(test_loop_non_bool_condition) {
     BblState bbl;
-    ASSERT_THROW(bbl.exec("(loop 1 (= x 0))"));
+    bbl.exec("(= x 0) (= i 3) (loop i (= x (+ x 1)) (= i (- i 1)))");
+    ASSERT_EQ(bbl.getInt("x").value(), (int64_t)3);
 }
 
 // ========== Each Tests ==========

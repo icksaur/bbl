@@ -47,6 +47,13 @@ static thread_local std::string g_jitErrorMsg;
     return; \
 } while(0)
 
+#define JIT_TRY try {
+#define JIT_CATCH } catch (const BBL::Error& _e) { \
+    g_jitError = true; \
+    g_jitErrorMsg = _e.what; \
+    return; \
+}
+
 
 void jitGetGlobal(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg) {
     auto it = state->vm->globals.find(symId);
@@ -62,6 +69,7 @@ void jitSetGlobal(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcRe
 }
 
 void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
+    try {
     BblValue callee = regs[base];
     if (callee.type() == BBL::Type::Fn && callee.isCFn()) {
         state->callArgs.clear();
@@ -87,6 +95,9 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
         regs[base] = state->callFn(fn, &regs[base + 1], argc, 0);
     } else {
         JIT_ERROR(state, "not callable");
+    }
+    } catch (const BBL::Error& e) {
+        JIT_ERROR(state, e.what);
     }
 }
 
@@ -135,6 +146,7 @@ void jitTable(BblValue* regs, BblState* state, uint8_t destReg, uint8_t pairCoun
 }
 
 void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblString* methodStr) {
+    try {
     BblValue receiver = regs[base];
     BblValue* args = &regs[base + 1];
 
@@ -153,6 +165,11 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         } else if (methodStr == state->m.push) {
             for (int _i=0;_i<argc;_i++) { tbl->set(BblValue::makeInt(tbl->nextIntKey), args[_i]); }
             regs[base] = BblValue::makeNull();
+        } else if (methodStr == state->m.at) {
+            size_t idx = static_cast<size_t>(args[0].intVal());
+            if (idx >= tbl->order.size()) JIT_ERROR(state, "table index out of range");
+            BblValue key = tbl->order[idx];
+            regs[base] = tbl->get(key).value_or(BblValue::makeNull());
         } else JIT_ERROR(state, "unknown table method: " + methodStr->data);
     } else if (receiver.type() == BBL::Type::Vector) {
         BblVec* vec = receiver.vectorVal();
@@ -201,9 +218,13 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(bin->length()));
         else JIT_ERROR(state, "unknown binary method: " + methodStr->data);
     } else JIT_ERROR(state, "cannot call method on " + std::string(typeName(receiver.type())));
+    } catch (const BBL::Error& e) {
+        JIT_ERROR(state, e.what);
+    }
 }
 
 void jitVector(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint32_t packed) {
+    JIT_TRY
     uint8_t argc = (packed >> 8) & 0xFF;
     uint8_t typeIdx = packed & 0xFF;
     std::string elemType = chunk->constants[typeIdx].stringVal()->data;
@@ -219,26 +240,32 @@ void jitVector(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, u
     BblVec* vec = state->allocVector(elemType, elemTypeTag, elemSize);
     for (int i = 0; i < argc; i++) state->packValue(vec, regs[destReg + 1 + i]);
     regs[destReg] = BblValue::makeVector(vec);
+    JIT_CATCH
 }
 
 void jitBinary(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
+    JIT_TRY
     BblValue& arg = regs[srcReg];
     if (arg.type() == BBL::Type::Vector) regs[destReg] = BblValue::makeBinary(state->allocBinary(arg.vectorVal()->data));
     else if (arg.type() == BBL::Type::Struct) regs[destReg] = BblValue::makeBinary(state->allocBinary(arg.structVal()->data));
     else if (arg.type() == BBL::Type::Int) regs[destReg] = BblValue::makeBinary(state->allocBinary(std::vector<uint8_t>(static_cast<size_t>(arg.intVal()), 0)));
     else JIT_ERROR(state, "binary: invalid argument type");
+    JIT_CATCH
 }
 
 void jitLength(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
+    JIT_TRY
     BblValue& obj = regs[srcReg];
     if (obj.type() == BBL::Type::Vector) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.vectorVal()->length()));
     else if (obj.type() == BBL::Type::String) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.stringVal()->data.size()));
     else if (obj.type() == BBL::Type::Binary) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.binaryVal()->length()));
     else if (obj.type() == BBL::Type::Table) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.tableVal()->length()));
     else JIT_ERROR(state, "cannot get length");
+    JIT_CATCH
 }
 
 void jitGetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint32_t packed) {
+    JIT_TRY
     uint8_t objReg = (packed >> 8) & 0xFF;
     uint8_t nameIdx = packed & 0xFF;
     BblValue& obj = regs[objReg];
@@ -250,9 +277,11 @@ void jitGetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg,
     } else if (obj.type() == BBL::Type::Table) {
         regs[destReg] = obj.tableVal()->get(BblValue::makeString(state->intern(fieldName))).value_or(BblValue::makeNull());
     } else JIT_ERROR(state, "cannot access field");
+    JIT_CATCH
 }
 
 void jitSetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t valReg, uint32_t packed) {
+    JIT_TRY
     uint8_t objReg = (packed >> 8) & 0xFF;
     uint8_t nameIdx = packed & 0xFF;
     BblValue& obj = regs[objReg];
@@ -263,9 +292,11 @@ void jitSetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t valReg, 
     } else if (obj.type() == BBL::Type::Table) {
         obj.tableVal()->set(BblValue::makeString(state->intern(fieldName)), regs[valReg]);
     }
+    JIT_CATCH
 }
 
 void jitGetIndex(BblValue* regs, BblState* state, uint32_t packed, uint32_t unused) {
+    JIT_TRY
     (void)unused;
     uint8_t destReg = (packed >> 16) & 0xFF;
     uint8_t objReg = (packed >> 8) & 0xFF;
@@ -274,9 +305,11 @@ void jitGetIndex(BblValue* regs, BblState* state, uint32_t packed, uint32_t unus
     if (obj.type() == BBL::Type::Vector) regs[destReg] = state->readVecElem(obj.vectorVal(), static_cast<size_t>(idx.intVal()));
     else if (obj.type() == BBL::Type::Table) regs[destReg] = obj.tableVal()->get(idx).value_or(BblValue::makeNull());
     else JIT_ERROR(state, "cannot index");
+    JIT_CATCH
 }
 
 void jitSetIndex(BblValue* regs, BblState* state, uint32_t packed, uint32_t unused) {
+    JIT_TRY
     (void)unused;
     uint8_t valReg = (packed >> 16) & 0xFF;
     uint8_t objReg = (packed >> 8) & 0xFF;
@@ -284,15 +317,18 @@ void jitSetIndex(BblValue* regs, BblState* state, uint32_t packed, uint32_t unus
     BblValue& obj = regs[objReg]; BblValue& idx = regs[idxReg];
     if (obj.type() == BBL::Type::Vector) state->writeVecElem(obj.vectorVal(), static_cast<size_t>(idx.intVal()), regs[valReg]);
     else if (obj.type() == BBL::Type::Table) obj.tableVal()->set(idx, regs[valReg]);
+    JIT_CATCH
 }
 
 void jitExec(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
+    JIT_TRY
     if (regs[srcReg].type() != BBL::Type::String) JIT_ERROR(state, "exec: argument must be string");
     BblLexer lexer(regs[srcReg].stringVal()->data.c_str());
     auto nodes = parse(lexer);
     BblValue result = BblValue::makeNull();
     for (auto& n : nodes) result = state->eval(n, state->rootScope);
     regs[destReg] = result;
+    JIT_CATCH
 }
 
 void jitNot(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
@@ -882,9 +918,38 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             patchRel32(jit.buf, donePatch, jit.size);
             break;
         }
-        case OP_ADDI:
+        case OP_ADDI: {
+            // Type guard: if R[A] is int, fast path
+            uint8_t ld[] = { 0x48, 0x8b, 0x83 };
+            emit(jit.buf, jit.size, ld, 3);
+            emit32(jit.buf, jit.size, A * VAL_SIZE);
+            uint8_t movabs1[] = { 0x48, 0xb9 };
+            emit(jit.buf, jit.size, movabs1, 2);
+            emit64(jit.buf, jit.size, BblValue::TAG_MASK);
+            uint8_t andrr[] = { 0x48, 0x21, 0xc1 };
+            emit(jit.buf, jit.size, andrr, 3);
+            uint8_t movabs2[] = { 0x48, 0xba };
+            emit(jit.buf, jit.size, movabs2, 2);
+            emit64(jit.buf, jit.size, NB_TAG_INT);
+            uint8_t cmprr[] = { 0x48, 0x39, 0xd1 };
+            emit(jit.buf, jit.size, cmprr, 3);
+            uint8_t jne[] = { 0x0f, 0x85 };
+            emit(jit.buf, jit.size, jne, 2);
+            size_t slowPatch = jit.size;
+            emit32(jit.buf, jit.size, 0);
             emitAddi(jit.buf, jit.size, A, sBx);
+            emit8(jit.buf, jit.size, 0xe9);
+            size_t donePatch = jit.size;
+            emit32(jit.buf, jit.size, 0);
+            patchRel32(jit.buf, slowPatch, jit.size);
+            // Slow: synthesize ADD R[A] = R[A] + imm via helper
+            // Store imm in a temp register, then call jitArith
+            emitLoadInt(jit.buf, jit.size, A + 1 < 255 ? A + 1 : A, sBx);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A,
+                static_cast<uint32_t>((0 << 16) | (A << 8) | (A + 1 < 255 ? A + 1 : A)), &errorExitPatches);
+            patchRel32(jit.buf, donePatch, jit.size);
             break;
+        }
         case OP_ADDK: {
             int64_t cv = chunk.constants[C].intVal();
             // Unbox B
