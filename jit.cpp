@@ -1,6 +1,7 @@
 #include "jit.h"
 #include "bbl.h"
 #include "vm.h"
+#include <cmath>
 #include <cstring>
 #include <set>
 #include <vector>
@@ -25,22 +26,33 @@ extern "C" {
     void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint16_t protoIdx);
     void jitTable(BblValue* regs, BblState* state, uint8_t destReg, uint8_t pairCount);
     void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblString* methodStr);
-    void jitVector(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint8_t argc, uint8_t typeIdx);
+    void jitVector(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint32_t packed);
     void jitBinary(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
     void jitLength(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
-    void jitGetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint8_t objReg, uint8_t nameIdx);
-    void jitSetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t valReg, uint8_t objReg, uint8_t nameIdx);
-    void jitGetIndex(BblValue* regs, BblState* state, uint8_t destReg, uint8_t objReg, uint8_t idxReg);
-    void jitSetIndex(BblValue* regs, BblState* state, uint8_t valReg, uint8_t objReg, uint8_t idxReg);
+    void jitGetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint32_t packed);
+    void jitSetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t valReg, uint32_t packed);
+    void jitGetIndex(BblValue* regs, BblState* state, uint32_t packed, uint32_t unused);
+    void jitSetIndex(BblValue* regs, BblState* state, uint32_t packed, uint32_t unused);
     void jitExec(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
+    void jitArith(BblValue* regs, BblState* state, uint8_t A, uint32_t packed);
 }
+
+static thread_local bool g_jitError = false;
+static thread_local std::string g_jitErrorMsg;
+
+#define JIT_ERROR(state, msg) do { \
+    g_jitError = true; \
+    g_jitErrorMsg = (msg); \
+    return; \
+} while(0)
+
 
 void jitGetGlobal(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg) {
     auto it = state->vm->globals.find(symId);
     if (it != state->vm->globals.end()) { regs[destReg] = it->second; return; }
     auto* val = state->rootScope.lookup(symId);
     if (val) { regs[destReg] = *val; return; }
-    throw BBL::Error{"undefined variable"};
+    JIT_ERROR(state, "undefined variable");
 }
 
 void jitSetGlobal(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg) {
@@ -68,24 +80,25 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
         typedef BblValue (*JitFn)(BblValue*, BblState*, Chunk*);
         JitFn fn = reinterpret_cast<JitFn>(closure->jitCache->buf);
         regs[base] = fn(&regs[base], state, &closure->chunk);
+        if (g_jitError) return;
     } else if (callee.type() == BBL::Type::Fn) {
         BblFn* fn = callee.fnVal();
         regs[base] = state->callFn(fn, &regs[base + 1], argc, 0);
     } else {
-        throw BBL::Error{"not callable"};
+        JIT_ERROR(state, "not callable");
     }
 }
 
 void jitGetCapture(BblValue* regs, BblState* state, uint8_t destReg, uint8_t capIdx) {
     (void)state;
-    if (!regs[0].isClosure()) throw BBL::Error{"no closure for capture"};
+    if (!regs[0].isClosure()) JIT_ERROR(state, "no closure for capture");
     BblClosure* closure = regs[0].closureVal();
     regs[destReg] = closure->captures[capIdx];
 }
 
 void jitSetCapture(BblValue* regs, BblState* state, uint8_t srcReg, uint8_t capIdx) {
     (void)state;
-    if (!regs[0].isClosure()) throw BBL::Error{"no closure for capture"};
+    if (!regs[0].isClosure()) JIT_ERROR(state, "no closure for capture");
     BblClosure* closure = regs[0].closureVal();
     closure->captures[capIdx] = regs[srcReg];
 }
@@ -139,26 +152,59 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         } else if (methodStr == state->m.push) {
             for (int _i=0;_i<argc;_i++) { tbl->set(BblValue::makeInt(tbl->nextIntKey), args[_i]); }
             regs[base] = BblValue::makeNull();
-        } else throw BBL::Error{"unknown table method: " + methodStr->data};
+        } else JIT_ERROR(state, "unknown table method: " + methodStr->data);
     } else if (receiver.type() == BBL::Type::Vector) {
         BblVec* vec = receiver.vectorVal();
         if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(vec->length()));
         else if (methodStr == state->m.push) { for (int i=0;i<argc;i++) state->packValue(vec, args[i]); regs[base] = BblValue::makeNull(); }
         else if (methodStr == state->m.at) regs[base] = state->readVecElem(vec, static_cast<size_t>(args[0].intVal()));
         else if (methodStr == state->m.set) { state->writeVecElem(vec, static_cast<size_t>(args[0].intVal()), args[1]); regs[base] = BblValue::makeNull(); }
-        else throw BBL::Error{"unknown vector method: " + methodStr->data};
+        else JIT_ERROR(state, "unknown vector method: " + methodStr->data);
     } else if (receiver.type() == BBL::Type::String) {
         BblString* str = receiver.stringVal();
         if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(str->data.size()));
-        else throw BBL::Error{"unknown string method: " + methodStr->data};
+        else if (methodStr == state->m.at) regs[base] = BblValue::makeString(state->intern(std::string(1, str->data[static_cast<size_t>(args[0].intVal())])));
+        else if (methodStr == state->m.slice) {
+            int64_t start = args[0].intVal();
+            int64_t len = argc > 1 ? args[1].intVal() : static_cast<int64_t>(str->data.size()) - start;
+            regs[base] = BblValue::makeString(state->intern(str->data.substr(static_cast<size_t>(start), static_cast<size_t>(len))));
+        } else if (methodStr == state->m.find) {
+            size_t start = argc > 1 ? static_cast<size_t>(args[1].intVal()) : 0;
+            auto pos = str->data.find(args[0].stringVal()->data, start);
+            regs[base] = BblValue::makeInt(pos == std::string::npos ? -1 : static_cast<int64_t>(pos));
+        } else if (methodStr == state->m.contains) regs[base] = BblValue::makeBool(str->data.find(args[0].stringVal()->data) != std::string::npos);
+        else if (methodStr == state->m.starts_with) regs[base] = BblValue::makeBool(str->data.starts_with(args[0].stringVal()->data));
+        else if (methodStr == state->m.ends_with) regs[base] = BblValue::makeBool(str->data.ends_with(args[0].stringVal()->data));
+        else if (methodStr == state->m.upper) { std::string r = str->data; for (auto& c : r) c = static_cast<char>(toupper(c)); regs[base] = BblValue::makeString(state->intern(r)); }
+        else if (methodStr == state->m.lower) { std::string r = str->data; for (auto& c : r) c = static_cast<char>(tolower(c)); regs[base] = BblValue::makeString(state->intern(r)); }
+        else if (methodStr == state->m.replace) {
+            std::string result = str->data, from = args[0].stringVal()->data, to = args[1].stringVal()->data;
+            size_t pos = 0;
+            while ((pos = result.find(from, pos)) != std::string::npos) { result.replace(pos, from.size(), to); pos += to.size(); }
+            regs[base] = BblValue::makeString(state->intern(result));
+        } else if (methodStr == state->m.split) {
+            std::string delim = args[0].stringVal()->data;
+            BblTable* tbl = state->allocTable();
+            size_t pos = 0; int64_t idx = 0;
+            while (pos <= str->data.size()) {
+                size_t next = str->data.find(delim, pos);
+                if (next == std::string::npos) next = str->data.size();
+                tbl->set(BblValue::makeInt(idx++), BblValue::makeString(state->intern(str->data.substr(pos, next - pos))));
+                pos = next + delim.size();
+                if (next == str->data.size()) break;
+            }
+            regs[base] = BblValue::makeTable(tbl);
+        } else JIT_ERROR(state, "unknown string method: " + methodStr->data);
     } else if (receiver.type() == BBL::Type::Binary) {
         BblBinary* bin = receiver.binaryVal();
         if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(bin->length()));
-        else throw BBL::Error{"unknown binary method: " + methodStr->data};
-    } else throw BBL::Error{"cannot call method on " + std::string(typeName(receiver.type()))};
+        else JIT_ERROR(state, "unknown binary method: " + methodStr->data);
+    } else JIT_ERROR(state, "cannot call method on " + std::string(typeName(receiver.type())));
 }
 
-void jitVector(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint8_t argc, uint8_t typeIdx) {
+void jitVector(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint32_t packed) {
+    uint8_t argc = (packed >> 8) & 0xFF;
+    uint8_t typeIdx = packed & 0xFF;
     std::string elemType = chunk->constants[typeIdx].stringVal()->data;
     BBL::Type elemTypeTag = BBL::Type::Null;
     size_t elemSize = 0;
@@ -168,7 +214,7 @@ void jitVector(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, u
     else if (elemType == "float" || elemType == "float64") { elemTypeTag = BBL::Type::Float; elemSize = 8; }
     else if (elemType == "float32") { elemTypeTag = BBL::Type::Float; elemSize = 4; }
     else if (elemType == "int32") { elemTypeTag = BBL::Type::Int; elemSize = 4; }
-    else throw BBL::Error{"unknown vector element type: " + elemType};
+    else JIT_ERROR(state, "unknown vector element type: " + elemType);
     BblVec* vec = state->allocVector(elemType, elemTypeTag, elemSize);
     for (int i = 0; i < argc; i++) state->packValue(vec, regs[destReg + 1 + i]);
     regs[destReg] = BblValue::makeVector(vec);
@@ -179,7 +225,7 @@ void jitBinary(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg)
     if (arg.type() == BBL::Type::Vector) regs[destReg] = BblValue::makeBinary(state->allocBinary(arg.vectorVal()->data));
     else if (arg.type() == BBL::Type::Struct) regs[destReg] = BblValue::makeBinary(state->allocBinary(arg.structVal()->data));
     else if (arg.type() == BBL::Type::Int) regs[destReg] = BblValue::makeBinary(state->allocBinary(std::vector<uint8_t>(static_cast<size_t>(arg.intVal()), 0)));
-    else throw BBL::Error{"binary: invalid argument type"};
+    else JIT_ERROR(state, "binary: invalid argument type");
 }
 
 void jitLength(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
@@ -188,22 +234,26 @@ void jitLength(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg)
     else if (obj.type() == BBL::Type::String) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.stringVal()->data.size()));
     else if (obj.type() == BBL::Type::Binary) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.binaryVal()->length()));
     else if (obj.type() == BBL::Type::Table) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.tableVal()->length()));
-    else throw BBL::Error{"cannot get length"};
+    else JIT_ERROR(state, "cannot get length");
 }
 
-void jitGetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint8_t objReg, uint8_t nameIdx) {
+void jitGetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint32_t packed) {
+    uint8_t objReg = (packed >> 8) & 0xFF;
+    uint8_t nameIdx = packed & 0xFF;
     BblValue& obj = regs[objReg];
     std::string fieldName = chunk->constants[nameIdx].stringVal()->data;
     if (obj.type() == BBL::Type::Struct) {
         for (auto& fd : obj.structVal()->desc->fields)
             if (fd.name == fieldName) { regs[destReg] = state->readField(obj.structVal(), fd); return; }
-        throw BBL::Error{"struct has no field '" + fieldName + "'"};
+        JIT_ERROR(state, "struct has no field '" + fieldName + "'");
     } else if (obj.type() == BBL::Type::Table) {
         regs[destReg] = obj.tableVal()->get(BblValue::makeString(state->intern(fieldName))).value_or(BblValue::makeNull());
-    } else throw BBL::Error{"cannot access field"};
+    } else JIT_ERROR(state, "cannot access field");
 }
 
-void jitSetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t valReg, uint8_t objReg, uint8_t nameIdx) {
+void jitSetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t valReg, uint32_t packed) {
+    uint8_t objReg = (packed >> 8) & 0xFF;
+    uint8_t nameIdx = packed & 0xFF;
     BblValue& obj = regs[objReg];
     std::string fieldName = chunk->constants[nameIdx].stringVal()->data;
     if (obj.type() == BBL::Type::Struct) {
@@ -214,26 +264,84 @@ void jitSetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t valReg, 
     }
 }
 
-void jitGetIndex(BblValue* regs, BblState* state, uint8_t destReg, uint8_t objReg, uint8_t idxReg) {
+void jitGetIndex(BblValue* regs, BblState* state, uint32_t packed, uint32_t unused) {
+    (void)unused;
+    uint8_t destReg = (packed >> 16) & 0xFF;
+    uint8_t objReg = (packed >> 8) & 0xFF;
+    uint8_t idxReg = packed & 0xFF;
     BblValue& obj = regs[objReg]; BblValue& idx = regs[idxReg];
     if (obj.type() == BBL::Type::Vector) regs[destReg] = state->readVecElem(obj.vectorVal(), static_cast<size_t>(idx.intVal()));
     else if (obj.type() == BBL::Type::Table) regs[destReg] = obj.tableVal()->get(idx).value_or(BblValue::makeNull());
-    else throw BBL::Error{"cannot index"};
+    else JIT_ERROR(state, "cannot index");
 }
 
-void jitSetIndex(BblValue* regs, BblState* state, uint8_t valReg, uint8_t objReg, uint8_t idxReg) {
+void jitSetIndex(BblValue* regs, BblState* state, uint32_t packed, uint32_t unused) {
+    (void)unused;
+    uint8_t valReg = (packed >> 16) & 0xFF;
+    uint8_t objReg = (packed >> 8) & 0xFF;
+    uint8_t idxReg = packed & 0xFF;
     BblValue& obj = regs[objReg]; BblValue& idx = regs[idxReg];
     if (obj.type() == BBL::Type::Vector) state->writeVecElem(obj.vectorVal(), static_cast<size_t>(idx.intVal()), regs[valReg]);
     else if (obj.type() == BBL::Type::Table) obj.tableVal()->set(idx, regs[valReg]);
 }
 
 void jitExec(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
-    if (regs[srcReg].type() != BBL::Type::String) throw BBL::Error{"exec: argument must be string"};
+    if (regs[srcReg].type() != BBL::Type::String) JIT_ERROR(state, "exec: argument must be string");
     BblLexer lexer(regs[srcReg].stringVal()->data.c_str());
     auto nodes = parse(lexer);
     BblValue result = BblValue::makeNull();
     for (auto& n : nodes) result = state->eval(n, state->rootScope);
     regs[destReg] = result;
+}
+
+static std::string jitValToStr(BblState& state, const BblValue& v) {
+    switch (v.type()) {
+        case BBL::Type::Null: return "null";
+        case BBL::Type::Bool: return v.boolVal() ? "true" : "false";
+        case BBL::Type::Int: return std::to_string(v.intVal());
+        case BBL::Type::Float: { char b[64]; snprintf(b, 64, "%g", v.floatVal()); return b; }
+        case BBL::Type::String: return v.stringVal()->data;
+        default: return "<object>";
+    }
+}
+
+// op: 0=ADD, 1=SUB, 2=MUL, 3=DIV, 4=MOD
+void jitArith(BblValue* regs, BblState* state, uint8_t A, uint32_t packed) {
+    uint8_t op = (packed >> 16) & 0xFF;
+    uint8_t B = (packed >> 8) & 0xFF;
+    uint8_t C = packed & 0xFF;
+    BblValue& rb = regs[B]; BblValue& rc = regs[C];
+    if (op == 0) {
+        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
+            regs[A] = BblValue::makeInt(rb.intVal() + rc.intVal());
+        else if (rb.type() == BBL::Type::String) {
+            if (A == B)
+                rb.stringVal()->data += jitValToStr(*state, rc);
+            else
+                regs[A] = BblValue::makeString(state->allocString(rb.stringVal()->data + jitValToStr(*state, rc)));
+        } else
+            regs[A] = BblValue::makeFloat(rb.floatVal() + rc.floatVal());
+    } else if (op == 1) {
+        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
+            regs[A] = BblValue::makeInt(rb.intVal() - rc.intVal());
+        else
+            regs[A] = BblValue::makeFloat(rb.floatVal() - rc.floatVal());
+    } else if (op == 2) {
+        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
+            regs[A] = BblValue::makeInt(rb.intVal() * rc.intVal());
+        else
+            regs[A] = BblValue::makeFloat(rb.floatVal() * rc.floatVal());
+    } else if (op == 3) {
+        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
+            regs[A] = BblValue::makeInt(rb.intVal() / rc.intVal());
+        else
+            regs[A] = BblValue::makeFloat(rb.floatVal() / rc.floatVal());
+    } else {
+        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
+            regs[A] = BblValue::makeInt(rb.intVal() % rc.intVal());
+        else
+            regs[A] = BblValue::makeFloat(std::fmod(rb.floatVal(), rc.floatVal()));
+    }
 }
 
 static void emit(uint8_t* buf, size_t& pos, const void* data, size_t len) {
@@ -326,34 +434,58 @@ static void emitReturn(uint8_t* buf, size_t& pos, int A) {
     emitEpilogue(buf, pos);
 }
 
-// ADD R[A] = R[B] + R[C] (integer, NaN-boxed)
+// ADD R[A] = R[B] + R[C] (integer, NaN-boxed — direct arithmetic, no unbox)
 static void emitAdd(uint8_t* buf, size_t& pos, int A, int B, int C) {
-    uint8_t mov1[] = { 0x48, 0x8b, 0x83 };
-    emit(buf, pos, mov1, 3);
+    // mov rax, [rbx + B*8]
+    uint8_t load[] = { 0x48, 0x8b, 0x83 };
+    emit(buf, pos, load, 3);
     emit32(buf, pos, B * VAL_SIZE);
-    emitUnboxIntRax(buf, pos);
-    uint8_t mov2[] = { 0x48, 0x8b, 0x8b };
-    emit(buf, pos, mov2, 3);
-    emit32(buf, pos, C * VAL_SIZE);
-    emitUnboxIntRcx(buf, pos);
-    uint8_t add[] = { 0x48, 0x01, 0xc8 };
+    // add rax, [rbx + C*8]
+    uint8_t add[] = { 0x48, 0x03, 0x83 };
     emit(buf, pos, add, 3);
-    emitReboxIntStore(buf, pos, A * VAL_SIZE);
+    emit32(buf, pos, C * VAL_SIZE);
+    // movabs rcx, NB_PAYLOAD; and rax, rcx
+    uint8_t movabs[] = { 0x48, 0xB9 };
+    emit(buf, pos, movabs, 2);
+    emit64(buf, pos, NB_PAYLOAD);
+    uint8_t andOp[] = { 0x48, 0x21, 0xC8 };
+    emit(buf, pos, andOp, 3);
+    // movabs rcx, NB_TAG_INT; or rax, rcx
+    emit(buf, pos, movabs, 2);
+    emit64(buf, pos, NB_TAG_INT);
+    uint8_t orOp[] = { 0x48, 0x09, 0xC8 };
+    emit(buf, pos, orOp, 3);
+    // mov [rbx + A*8], rax
+    uint8_t store[] = { 0x48, 0x89, 0x83 };
+    emit(buf, pos, store, 3);
+    emit32(buf, pos, A * VAL_SIZE);
 }
 
-// SUB R[A] = R[B] - R[C]
+// SUB R[A] = R[B] - R[C] (integer, NaN-boxed — direct arithmetic, no unbox)
 static void emitSub(uint8_t* buf, size_t& pos, int A, int B, int C) {
-    uint8_t mov1[] = { 0x48, 0x8b, 0x83 };
-    emit(buf, pos, mov1, 3);
+    // mov rax, [rbx + B*8]
+    uint8_t load[] = { 0x48, 0x8b, 0x83 };
+    emit(buf, pos, load, 3);
     emit32(buf, pos, B * VAL_SIZE);
-    emitUnboxIntRax(buf, pos);
-    uint8_t mov2[] = { 0x48, 0x8b, 0x8b };
-    emit(buf, pos, mov2, 3);
-    emit32(buf, pos, C * VAL_SIZE);
-    emitUnboxIntRcx(buf, pos);
-    uint8_t sub[] = { 0x48, 0x29, 0xc8 };
+    // sub rax, [rbx + C*8]
+    uint8_t sub[] = { 0x48, 0x2b, 0x83 };
     emit(buf, pos, sub, 3);
-    emitReboxIntStore(buf, pos, A * VAL_SIZE);
+    emit32(buf, pos, C * VAL_SIZE);
+    // movabs rcx, NB_PAYLOAD; and rax, rcx
+    uint8_t movabs[] = { 0x48, 0xB9 };
+    emit(buf, pos, movabs, 2);
+    emit64(buf, pos, NB_PAYLOAD);
+    uint8_t andOp[] = { 0x48, 0x21, 0xC8 };
+    emit(buf, pos, andOp, 3);
+    // movabs rcx, NB_TAG_INT; or rax, rcx
+    emit(buf, pos, movabs, 2);
+    emit64(buf, pos, NB_TAG_INT);
+    uint8_t orOp[] = { 0x48, 0x09, 0xC8 };
+    emit(buf, pos, orOp, 3);
+    // mov [rbx + A*8], rax
+    uint8_t store[] = { 0x48, 0x89, 0x83 };
+    emit(buf, pos, store, 3);
+    emit32(buf, pos, A * VAL_SIZE);
 }
 
 // MUL R[A] = R[B] * R[C]
@@ -373,15 +505,22 @@ static void emitMul(uint8_t* buf, size_t& pos, int A, int B, int C) {
 
 // ADDI R[A] += imm (NaN-boxed)
 static void emitAddi(uint8_t* buf, size_t& pos, int A, int imm) {
-    uint8_t load[] = { 0x48, 0x8b, 0x83 };
-    emit(buf, pos, load, 3);
-    emit32(buf, pos, A * VAL_SIZE);
-    emitUnboxIntRax(buf, pos);
-    // add rax, imm32
-    uint8_t add[] = { 0x48, 0x05 };
-    emit(buf, pos, add, 2);
-    emit32(buf, pos, static_cast<uint32_t>(imm));
-    emitReboxIntStore(buf, pos, A * VAL_SIZE);
+    if (imm >= 0 && imm <= 32767) {
+        // add qword [rbx + A*8], imm32
+        uint8_t addMem[] = { 0x48, 0x81, 0x83 };
+        emit(buf, pos, addMem, 3);
+        emit32(buf, pos, A * VAL_SIZE);
+        emit32(buf, pos, static_cast<uint32_t>(imm));
+    } else {
+        uint8_t load[] = { 0x48, 0x8b, 0x83 };
+        emit(buf, pos, load, 3);
+        emit32(buf, pos, A * VAL_SIZE);
+        emitUnboxIntRax(buf, pos);
+        uint8_t add[] = { 0x48, 0x05 };
+        emit(buf, pos, add, 2);
+        emit32(buf, pos, static_cast<uint32_t>(imm));
+        emitReboxIntStore(buf, pos, A * VAL_SIZE);
+    }
 }
 
 // SUBI R[A] -= imm (NaN-boxed)
@@ -487,44 +626,47 @@ static size_t emitJmp(uint8_t* buf, size_t& pos) {
 // Emit a call to a C function: movabs rax, <addr>; call rax
 // Before calling, set up args: rdi=rbx(regs), rsi=r12(state)
 // Additional args in edx, ecx, r8d per System V ABI
-static void emitCallHelper2(uint8_t* buf, size_t& pos, void* fn, uint32_t arg3, uint32_t arg4) {
-    // mov rdi, rbx
+static void emitErrorCheck(uint8_t* buf, size_t& pos, std::vector<size_t>& errorExitPatches) {
+    uint8_t movabs[] = { 0x48, 0xb8 };
+    emit(buf, pos, movabs, 2);
+    emit64(buf, pos, reinterpret_cast<uint64_t>(&g_jitError));
+    uint8_t cmpb[] = { 0x80, 0x38, 0x00 };
+    emit(buf, pos, cmpb, 3);
+    uint8_t jne[] = { 0x0f, 0x85 };
+    emit(buf, pos, jne, 2);
+    errorExitPatches.push_back(pos);
+    emit32(buf, pos, 0);
+}
+
+static void emitCallHelper2(uint8_t* buf, size_t& pos, void* fn, uint32_t arg3, uint32_t arg4, std::vector<size_t>* errPatches = nullptr) {
     uint8_t a1[] = { 0x48, 0x89, 0xdf };
     emit(buf, pos, a1, 3);
-    // mov rsi, r12
     uint8_t a2[] = { 0x4c, 0x89, 0xe6 };
     emit(buf, pos, a2, 3);
-    // mov edx, arg3
     uint8_t a3[] = { 0xba };
     emit(buf, pos, a3, 1);
     emit32(buf, pos, arg3);
-    // mov ecx, arg4
     uint8_t a4[] = { 0xb9 };
     emit(buf, pos, a4, 1);
     emit32(buf, pos, arg4);
-    // movabs rax, fn
     uint8_t movabs[] = { 0x48, 0xb8 };
     emit(buf, pos, movabs, 2);
     emit64(buf, pos, reinterpret_cast<uint64_t>(fn));
-    // call rax
     uint8_t call[] = { 0xff, 0xd0 };
     emit(buf, pos, call, 2);
+    if (errPatches) emitErrorCheck(buf, pos, *errPatches);
 }
 
-// Call with 5 args (rdi, rsi, rdx, rcx, r8)
-static void emitCallHelper3(uint8_t* buf, size_t& pos, void* fn, uint32_t arg3, uint32_t arg4, uint32_t arg5) {
+static void emitCallHelper3(uint8_t* buf, size_t& pos, void* fn, uint32_t arg3, uint32_t arg4, uint32_t arg5, std::vector<size_t>* errPatches = nullptr) {
     uint8_t a1[] = { 0x48, 0x89, 0xdf };
     emit(buf, pos, a1, 3);
     uint8_t a2[] = { 0x4c, 0x89, 0xe6 };
     emit(buf, pos, a2, 3);
-    // mov rdx, r13 (chunk pointer)
     uint8_t a3[] = { 0x4c, 0x89, 0xea };
     emit(buf, pos, a3, 3);
-    // mov ecx, arg4
     uint8_t a4[] = { 0xb9 };
     emit(buf, pos, a4, 1);
     emit32(buf, pos, arg4);
-    // mov r8d, arg5
     uint8_t a5[] = { 0x41, 0xb8 };
     emit(buf, pos, a5, 2);
     emit32(buf, pos, arg5);
@@ -533,6 +675,7 @@ static void emitCallHelper3(uint8_t* buf, size_t& pos, void* fn, uint32_t arg3, 
     emit64(buf, pos, reinterpret_cast<uint64_t>(fn));
     uint8_t call[] = { 0xff, 0xd0 };
     emit(buf, pos, call, 2);
+    if (errPatches) emitErrorCheck(buf, pos, *errPatches);
 }
 
 // isFalsy check for NaN-boxed values: falsy if bits == TAG_NULL, TAG_BOOL|0, or TAG_INT|0
@@ -627,7 +770,7 @@ struct JumpPatch {
 
 JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     JitCode jit;
-    jit.capacity = chunk.code.size() * 64 + 512;
+    jit.capacity = chunk.code.size() * 96 + 1024;
     jit.buf = static_cast<uint8_t*>(
         mmap(nullptr, jit.capacity, PROT_READ | PROT_WRITE,
              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
@@ -640,6 +783,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     std::unordered_map<uint8_t, BblClosure*> closureRegs;
     std::set<uint8_t> selfRefRegs;
     std::vector<size_t> selfCallPatches;
+    std::vector<size_t> errorExitPatches;
 
     for (size_t i = 0; i < chunk.code.size(); i++) {
         nativeOffsets[i] = jit.size;
@@ -677,9 +821,34 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         case OP_MOVE:
             emitMove(jit.buf, jit.size, A, B);
             break;
-        case OP_ADD:
+        case OP_ADD: {
+            // Type guard: if R[B] is int, fast path; else call jitArith helper
+            uint8_t ld[] = { 0x48, 0x8b, 0x83 };
+            emit(jit.buf, jit.size, ld, 3);
+            emit32(jit.buf, jit.size, B * VAL_SIZE);
+            uint8_t movabs1[] = { 0x48, 0xb9 };
+            emit(jit.buf, jit.size, movabs1, 2);
+            emit64(jit.buf, jit.size, BblValue::TAG_MASK);
+            uint8_t andrr[] = { 0x48, 0x21, 0xc1 };
+            emit(jit.buf, jit.size, andrr, 3);
+            uint8_t movabs2[] = { 0x48, 0xba };
+            emit(jit.buf, jit.size, movabs2, 2);
+            emit64(jit.buf, jit.size, NB_TAG_INT);
+            uint8_t cmprr[] = { 0x48, 0x39, 0xd1 };
+            emit(jit.buf, jit.size, cmprr, 3);
+            uint8_t jne[] = { 0x0f, 0x85 };
+            emit(jit.buf, jit.size, jne, 2);
+            size_t slowPatch = jit.size;
+            emit32(jit.buf, jit.size, 0);
             emitAdd(jit.buf, jit.size, A, B, C);
+            emit8(jit.buf, jit.size, 0xe9);
+            size_t donePatch = jit.size;
+            emit32(jit.buf, jit.size, 0);
+            patchRel32(jit.buf, slowPatch, jit.size);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((0 << 16) | (B << 8) | C), &errorExitPatches);
+            patchRel32(jit.buf, donePatch, jit.size);
             break;
+        }
         case OP_ADDI:
             emitAddi(jit.buf, jit.size, A, sBx);
             break;
@@ -699,14 +868,38 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             emitReboxIntStore(jit.buf, jit.size, A * VAL_SIZE);
             break;
         }
-        case OP_SUB:
+        case OP_SUB: {
+            uint8_t ld[] = { 0x48, 0x8b, 0x83 };
+            emit(jit.buf, jit.size, ld, 3);
+            emit32(jit.buf, jit.size, B * VAL_SIZE);
+            uint8_t movabs1[] = { 0x48, 0xb9 };
+            emit(jit.buf, jit.size, movabs1, 2);
+            emit64(jit.buf, jit.size, BblValue::TAG_MASK);
+            uint8_t andrr[] = { 0x48, 0x21, 0xc1 };
+            emit(jit.buf, jit.size, andrr, 3);
+            uint8_t movabs2[] = { 0x48, 0xba };
+            emit(jit.buf, jit.size, movabs2, 2);
+            emit64(jit.buf, jit.size, NB_TAG_INT);
+            uint8_t cmprr[] = { 0x48, 0x39, 0xd1 };
+            emit(jit.buf, jit.size, cmprr, 3);
+            uint8_t jne[] = { 0x0f, 0x85 };
+            emit(jit.buf, jit.size, jne, 2);
+            size_t slowPatch = jit.size;
+            emit32(jit.buf, jit.size, 0);
             emitSub(jit.buf, jit.size, A, B, C);
+            emit8(jit.buf, jit.size, 0xe9);
+            size_t donePatch = jit.size;
+            emit32(jit.buf, jit.size, 0);
+            patchRel32(jit.buf, slowPatch, jit.size);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((1 << 16) | (B << 8) | C), &errorExitPatches);
+            patchRel32(jit.buf, donePatch, jit.size);
             break;
+        }
         case OP_SUBI:
             emitSubi(jit.buf, jit.size, A, sBx);
             break;
         case OP_MUL:
-            emitMul(jit.buf, jit.size, A, B, C);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((2 << 16) | (B << 8) | C), &errorExitPatches);
             break;
 
         case OP_LTJMP: {
@@ -759,12 +952,12 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                     selfRefRegs.insert(A);
                 }
             }
-            emitCallHelper2(jit.buf, jit.size, (void*)jitGetGlobal, symId, A);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitGetGlobal, symId, A, &errorExitPatches);
             break;
         }
         case OP_SETGLOBAL: {
             uint32_t symId = static_cast<uint32_t>(chunk.constants[Bx].intVal());
-            emitCallHelper2(jit.buf, jit.size, (void*)jitSetGlobal, symId, A);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitSetGlobal, symId, A, &errorExitPatches);
             break;
         }
         case OP_CALL: {
@@ -827,19 +1020,19 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                         goto inline_done;
                     default:
                         // Can't inline this instruction — fall back to helper call
-                        emitCallHelper2(jit.buf, jit.size, (void*)jitCall, A, B);
+                        emitCallHelper2(jit.buf, jit.size, (void*)jitCall, A, B, &errorExitPatches);
                         goto inline_done;
                     }
                 }
                 inline_done:;
             } else {
-                emitCallHelper2(jit.buf, jit.size, (void*)jitCall, A, B);
+                emitCallHelper2(jit.buf, jit.size, (void*)jitCall, A, B, &errorExitPatches);
             }
             } // end self-ref else
             break;
         }
         case OP_CLOSURE:
-            emitCallHelper3(jit.buf, jit.size, (void*)jitClosure, 0, A, Bx);
+            emitCallHelper3(jit.buf, jit.size, (void*)jitClosure, 0, A, Bx, &errorExitPatches);
             // Track that register A now holds this closure proto
             closureRegs[A] = chunk.constants[Bx].closureVal();
             break;
@@ -889,44 +1082,15 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         case OP_LTE: emitCmp(jit.buf, jit.size, A, B, C, 0x9e); break; // setle
         case OP_GTE: emitCmp(jit.buf, jit.size, A, B, C, 0x9d); break; // setge
 
-        case OP_DIV: {
-            uint8_t mov1[] = { 0x48, 0x8b, 0x83 };
-            emit(jit.buf, jit.size, mov1, 3);
-            emit32(jit.buf, jit.size, B * VAL_SIZE);
-            emitUnboxIntRax(jit.buf, jit.size);
-            uint8_t movcx[] = { 0x48, 0x8b, 0x8b };
-            emit(jit.buf, jit.size, movcx, 3);
-            emit32(jit.buf, jit.size, C * VAL_SIZE);
-            emitUnboxIntRcx(jit.buf, jit.size);
-            uint8_t cqo[] = { 0x48, 0x99 };
-            emit(jit.buf, jit.size, cqo, 2);
-            uint8_t idiv[] = { 0x48, 0xf7, 0xf9 };
-            emit(jit.buf, jit.size, idiv, 3);
-            emitReboxIntStore(jit.buf, jit.size, A * VAL_SIZE);
+        case OP_DIV:
+            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((3 << 16) | (B << 8) | C), &errorExitPatches);
             break;
-        }
-        case OP_MOD: {
-            uint8_t mov1[] = { 0x48, 0x8b, 0x83 };
-            emit(jit.buf, jit.size, mov1, 3);
-            emit32(jit.buf, jit.size, B * VAL_SIZE);
-            emitUnboxIntRax(jit.buf, jit.size);
-            uint8_t movcx[] = { 0x48, 0x8b, 0x8b };
-            emit(jit.buf, jit.size, movcx, 3);
-            emit32(jit.buf, jit.size, C * VAL_SIZE);
-            emitUnboxIntRcx(jit.buf, jit.size);
-            uint8_t cqo[] = { 0x48, 0x99 };
-            emit(jit.buf, jit.size, cqo, 2);
-            uint8_t idiv[] = { 0x48, 0xf7, 0xf9 };
-            emit(jit.buf, jit.size, idiv, 3);
-            // remainder in rdx → rax
-            uint8_t movrdx[] = { 0x48, 0x89, 0xd0 };
-            emit(jit.buf, jit.size, movrdx, 3);
-            emitReboxIntStore(jit.buf, jit.size, A * VAL_SIZE);
+        case OP_MOD:
+            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((4 << 16) | (B << 8) | C), &errorExitPatches);
             break;
-        }
 
         case OP_TABLE:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitTable, A, B);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitTable, A, B, &errorExitPatches);
             break;
 
         case OP_MCALL: {
@@ -948,48 +1112,49 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>((void*)jitMcall));
             // call rax
             uint8_t call[] = { 0xff, 0xd0 }; emit(jit.buf, jit.size, call, 2);
+            emitErrorCheck(jit.buf, jit.size, errorExitPatches);
             break;
         }
 
         case OP_VECTOR:
-            emitCallHelper3(jit.buf, jit.size, (void*)jitVector, 0, A, static_cast<uint32_t>((B << 8) | C));
+            emitCallHelper3(jit.buf, jit.size, (void*)jitVector, 0, A, static_cast<uint32_t>((B << 8) | C), &errorExitPatches);
             break;
         case OP_BINARY:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitBinary, A, B);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitBinary, A, B, &errorExitPatches);
             break;
         case OP_LENGTH:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitLength, A, B);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitLength, A, B, &errorExitPatches);
             break;
         case OP_GETFIELD:
-            emitCallHelper3(jit.buf, jit.size, (void*)jitGetField, 0, A, static_cast<uint32_t>((B << 8) | C));
+            emitCallHelper3(jit.buf, jit.size, (void*)jitGetField, 0, A, static_cast<uint32_t>((B << 8) | C), &errorExitPatches);
             break;
         case OP_SETFIELD:
-            emitCallHelper3(jit.buf, jit.size, (void*)jitSetField, 0, A, static_cast<uint32_t>((B << 8) | C));
+            emitCallHelper3(jit.buf, jit.size, (void*)jitSetField, 0, A, static_cast<uint32_t>((B << 8) | C), &errorExitPatches);
             break;
         case OP_GETINDEX:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitGetIndex, static_cast<uint32_t>((A << 16) | (B << 8) | C), 0);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitGetIndex, static_cast<uint32_t>((A << 16) | (B << 8) | C), 0, &errorExitPatches);
             break;
         case OP_SETINDEX:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitSetIndex, static_cast<uint32_t>((A << 16) | (B << 8) | C), 0);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitSetIndex, static_cast<uint32_t>((A << 16) | (B << 8) | C), 0, &errorExitPatches);
             break;
         case OP_EXEC:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitExec, A, B);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitExec, A, B, &errorExitPatches);
             break;
         case OP_GETCAPTURE:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitGetCapture, A, B);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitGetCapture, A, B, &errorExitPatches);
             break;
         case OP_SETCAPTURE:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitSetCapture, A, B);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitSetCapture, A, B, &errorExitPatches);
+            break;
+        case OP_TAILCALL:
+            emitCallHelper2(jit.buf, jit.size, (void*)jitCall, A, B, &errorExitPatches);
             break;
         case OP_SIZEOF:
         case OP_STRUCT:
-        case OP_TAILCALL:
         case OP_TRYBEGIN:
         case OP_TRYEND:
         case OP_EXECFILE:
         default:
-            // Unsupported opcode — fall back to interpreter
-            // For now, just emit a return with null
             emitLoadNull(jit.buf, jit.size, A);
             emitReturn(jit.buf, jit.size, A);
             goto done_compile;
@@ -1010,6 +1175,18 @@ done_compile:
         patchRel32(jit.buf, p, 0);
     }
 
+    // Error exit: load NaN-boxed null into rax, epilogue
+    size_t errorExit = jit.size;
+    {
+        uint8_t movabs[] = { 0x48, 0xb8 };
+        emit(jit.buf, jit.size, movabs, 2);
+        emit64(jit.buf, jit.size, BblValue::TAG_NULL);
+        emitEpilogue(jit.buf, jit.size);
+    }
+    for (size_t p : errorExitPatches) {
+        patchRel32(jit.buf, p, errorExit);
+    }
+
     mprotect(jit.buf, jit.capacity, PROT_READ | PROT_EXEC);
     return jit;
 }
@@ -1017,17 +1194,22 @@ done_compile:
 BblValue jitExecute(BblState& state, Chunk& chunk) {
     JitCode jit = jitCompile(state, chunk);
 
-    // Call: fn(regs, state, chunk)
     typedef BblValue (*JitFn)(BblValue*, BblState*, Chunk*);
     JitFn fn = reinterpret_cast<JitFn>(jit.buf);
 
-    // Ensure register file is large enough
     if (state.vm->stack.size() < chunk.numRegs)
         state.vm->stack.resize(chunk.numRegs);
 
+    g_jitError = false;
     BblValue result = fn(state.vm->stack.data(), &state, &chunk);
 
     jitFree(jit);
+
+    if (g_jitError) {
+        g_jitError = false;
+        throw BBL::Error{g_jitErrorMsg};
+    }
+
     return result;
 }
 

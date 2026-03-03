@@ -527,6 +527,9 @@ struct BblState {
     void resumeGC() { gcThreshold = savedGcThreshold; }
     std::vector<BblScope*> activeScopes;
 
+    std::string jitError;
+    bool jitHasError = false;
+
     // C function call interface
     std::vector<BblValue> callArgs;
     BblValue returnValue;

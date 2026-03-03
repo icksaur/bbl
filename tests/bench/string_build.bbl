@@ -1,0 +1,8 @@
+(= run (fn ()
+    (= s "")
+    (= i 0)
+    (loop (< i 100000)
+        (= s (+ s "x"))
+        (= i (+ i 1)))
+    (print (s:length))))
+(run)

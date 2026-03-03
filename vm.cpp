@@ -483,7 +483,8 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                     int64_t len = static_cast<size_t>(nargs) > 1 ? argsBuf[1].intVal() : static_cast<int64_t>(str->data.size()) - start;
                     R(A) = BblValue::makeString(state.intern(str->data.substr(static_cast<size_t>(start), static_cast<size_t>(len))));
                 } else if (methodStr == state.m.find) {
-                    auto pos = str->data.find(argsBuf[0].stringVal()->data);
+                    size_t start = nargs > 1 ? static_cast<size_t>(argsBuf[1].intVal()) : 0;
+                    auto pos = str->data.find(argsBuf[0].stringVal()->data, start);
                     R(A) = BblValue::makeInt(pos == std::string::npos ? -1 : static_cast<int64_t>(pos));
                 } else if (methodStr == state.m.contains) R(A) = BblValue::makeBool(str->data.find(argsBuf[0].stringVal()->data) != std::string::npos);
                 else if (methodStr == state.m.starts_with) R(A) = BblValue::makeBool(str->data.starts_with(argsBuf[0].stringVal()->data));
