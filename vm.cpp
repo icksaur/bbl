@@ -641,16 +641,14 @@ static bool callValue(BblState& state, CallFrame*& frame, uint8_t base, uint8_t 
             CallFrame* newFrame = &state.vm->frames[state.vm->frameCount++];
             newFrame->chunk = &closure->chunk;
             newFrame->ip = closure->chunk.code.data();
-            newFrame->regs = state.vm->stackTop;
+            newFrame->regs = &frame->regs[base];
             newFrame->closure = closure;
             newFrame->numRegs = closure->chunk.numRegs;
-            newFrame->line = destInCaller; // repurpose line as return dest in caller
+            newFrame->line = destInCaller;
 
-            // Initialize register file
-            state.vm->stackTop += closure->chunk.numRegs;
-            newFrame->regs[0] = callee; // R[0] = callee
-            for (int i = 0; i < argc; i++)
-                newFrame->regs[1 + i] = frame->regs[base + 1 + i];
+            // Ensure stack has room for callee's registers
+            BblValue* needed = newFrame->regs + closure->chunk.numRegs;
+            if (needed > state.vm->stackTop) state.vm->stackTop = needed;
 
             frame = newFrame;
             return true;
