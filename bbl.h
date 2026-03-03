@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -71,7 +72,10 @@ struct BblString {
     bool marked = false;
 };
 
+enum class ObjKind : uint8_t { Table, Vector, Struct, Binary, UserData };
+
 struct BblBinary {
+    ObjKind objKind = ObjKind::Binary;
     std::vector<uint8_t> data;
     bool marked = false;
     size_t length() const { return data.size(); }
@@ -98,12 +102,14 @@ struct StructDesc {
 };
 
 struct BblStruct {
+    ObjKind objKind = ObjKind::Struct;
     StructDesc* desc;
     std::vector<uint8_t> data;
     bool marked = false;
 };
 
 struct BblVec {
+    ObjKind objKind = ObjKind::Vector;
     std::string elemType;
     BBL::Type elemTypeTag;
     size_t elemSize;
@@ -126,6 +132,7 @@ struct UserDataDesc {
 };
 
 struct BblUserData {
+    ObjKind objKind = ObjKind::UserData;
     UserDataDesc* desc;
     void* data;
     bool marked = false;
@@ -202,44 +209,84 @@ public:
 } // namespace BBL
 
 struct BblValue {
-    BBL::Type type = BBL::Type::Null;
-    bool isCFn = false;
-    bool isClosure = false;
-    union {
-        int64_t intVal;
-        double floatVal;
-        bool boolVal;
-        BblString* stringVal;
-        BblBinary* binaryVal;
-        BblFn* fnVal;
-        BblCFunction cfnVal;
-        BblStruct* structVal;
-        BblVec* vectorVal;
-        BblTable* tableVal;
-        BblUserData* userdataVal;
-        BblClosure* closureVal;
-    };
+    uint64_t bits = TAG_NULL;
 
-    BblValue() : type(BBL::Type::Null), intVal(0) {}
-    static BblValue makeNull() { return {}; }
-    static BblValue makeInt(int64_t v) { BblValue r; r.type = BBL::Type::Int; r.intVal = v; return r; }
-    static BblValue makeFloat(double v) { BblValue r; r.type = BBL::Type::Float; r.floatVal = v; return r; }
-    static BblValue makeBool(bool v) { BblValue r; r.type = BBL::Type::Bool; r.boolVal = v; return r; }
-    static BblValue makeString(BblString* s) { BblValue r; r.type = BBL::Type::String; r.stringVal = s; return r; }
-    static BblValue makeBinary(BblBinary* b) { BblValue r; r.type = BBL::Type::Binary; r.binaryVal = b; return r; }
-    static BblValue makeFn(BblFn* f) { BblValue r; r.type = BBL::Type::Fn; r.fnVal = f; return r; }
-    static BblValue makeCFn(BblCFunction f) { BblValue r; r.type = BBL::Type::Fn; r.isCFn = true; r.cfnVal = f; return r; }
-    static BblValue makeClosure(BblClosure* c) { BblValue r; r.type = BBL::Type::Fn; r.isClosure = true; r.closureVal = c; return r; }
-    static BblValue makeStruct(BblStruct* s) { BblValue r; r.type = BBL::Type::Struct; r.structVal = s; return r; }
-    static BblValue makeVector(BblVec* v) { BblValue r; r.type = BBL::Type::Vector; r.vectorVal = v; return r; }
-    static BblValue makeTable(BblTable* t) { BblValue r; r.type = BBL::Type::Table; r.tableVal = t; return r; }
-    static BblValue makeUserData(BblUserData* u) { BblValue r; r.type = BBL::Type::UserData; r.userdataVal = u; return r; }
+    static constexpr uint64_t QNAN        = 0xFFF8000000000000ULL;
+    static constexpr uint64_t TAG_NULL     = QNAN | (0ULL << 48);
+    static constexpr uint64_t TAG_BOOL     = QNAN | (1ULL << 48);
+    static constexpr uint64_t TAG_INT      = QNAN | (2ULL << 48);
+    static constexpr uint64_t TAG_CLOSURE  = QNAN | (3ULL << 48);
+    static constexpr uint64_t TAG_CFN      = QNAN | (4ULL << 48);
+    static constexpr uint64_t TAG_FN       = QNAN | (5ULL << 48);
+    static constexpr uint64_t TAG_STRING   = QNAN | (6ULL << 48);
+    static constexpr uint64_t TAG_OBJECT   = QNAN | (7ULL << 48);
+    static constexpr uint64_t TAG_MASK     = QNAN | (7ULL << 48);
+    static constexpr uint64_t PAYLOAD_MASK = 0x0000FFFFFFFFFFFFULL;
+
+    bool isDouble()  const { return (bits & QNAN) != QNAN; }
+
+    BBL::Type type() const {
+        if (isDouble()) return BBL::Type::Float;
+        uint64_t tag = bits & TAG_MASK;
+        if (tag == TAG_NULL)    return BBL::Type::Null;
+        if (tag == TAG_BOOL)    return BBL::Type::Bool;
+        if (tag == TAG_INT)     return BBL::Type::Int;
+        if (tag == TAG_CLOSURE || tag == TAG_CFN || tag == TAG_FN) return BBL::Type::Fn;
+        if (tag == TAG_STRING)  return BBL::Type::String;
+        if (tag == TAG_OBJECT) {
+            ObjKind k = *reinterpret_cast<ObjKind*>(bits & PAYLOAD_MASK);
+            switch (k) {
+                case ObjKind::Table:    return BBL::Type::Table;
+                case ObjKind::Vector:   return BBL::Type::Vector;
+                case ObjKind::Struct:   return BBL::Type::Struct;
+                case ObjKind::Binary:   return BBL::Type::Binary;
+                case ObjKind::UserData: return BBL::Type::UserData;
+            }
+        }
+        return BBL::Type::Null;
+    }
+
+    template<typename T> T* asPtr() const { return reinterpret_cast<T*>(bits & PAYLOAD_MASK); }
+
+    int64_t  intVal()     const { uint64_t r = bits & PAYLOAD_MASK; return (r & (1ULL<<47)) ? (int64_t)(r | ~PAYLOAD_MASK) : (int64_t)r; }
+    double   floatVal()   const { double d; memcpy(&d, &bits, 8); return d; }
+    bool     boolVal()    const { return (bits & 1) != 0; }
+    BblString*   stringVal()   const { return asPtr<BblString>(); }
+    BblBinary*   binaryVal()   const { return asPtr<BblBinary>(); }
+    BblFn*       fnVal()       const { return asPtr<BblFn>(); }
+    BblCFunction cfnVal()      const { return reinterpret_cast<BblCFunction>(bits & PAYLOAD_MASK); }
+    BblClosure*  closureVal()  const { return asPtr<BblClosure>(); }
+    BblStruct*   structVal()   const { return asPtr<BblStruct>(); }
+    BblVec*      vectorVal()   const { return asPtr<BblVec>(); }
+    BblTable*    tableVal()    const { return asPtr<BblTable>(); }
+    BblUserData* userdataVal() const { return asPtr<BblUserData>(); }
+
+    bool isClosure() const { return (bits & TAG_MASK) == TAG_CLOSURE; }
+    bool isCFn()     const { return (bits & TAG_MASK) == TAG_CFN; }
+
+    static BblValue makeNull()               { BblValue v; v.bits = TAG_NULL; return v; }
+    static BblValue makeInt(int64_t n) {
+        if (n < -(1LL << 47) || n >= (1LL << 47)) return makeFloat(static_cast<double>(n));
+        BblValue v; v.bits = TAG_INT | (static_cast<uint64_t>(n) & PAYLOAD_MASK); return v;
+    }
+    static BblValue makeFloat(double d)      { BblValue v; memcpy(&v.bits, &d, 8); return v; }
+    static BblValue makeBool(bool b)         { BblValue v; v.bits = TAG_BOOL | (b ? 1ULL : 0ULL); return v; }
+    static BblValue makeString(BblString* s) { BblValue v; v.bits = TAG_STRING | reinterpret_cast<uint64_t>(s); return v; }
+    static BblValue makeBinary(BblBinary* b) { BblValue v; v.bits = TAG_OBJECT | reinterpret_cast<uint64_t>(b); return v; }
+    static BblValue makeFn(BblFn* f)         { BblValue v; v.bits = TAG_FN | reinterpret_cast<uint64_t>(f); return v; }
+    static BblValue makeCFn(BblCFunction f)  { BblValue v; v.bits = TAG_CFN | reinterpret_cast<uint64_t>(f); return v; }
+    static BblValue makeClosure(BblClosure* c){ BblValue v; v.bits = TAG_CLOSURE | reinterpret_cast<uint64_t>(c); return v; }
+    static BblValue makeStruct(BblStruct* s) { BblValue v; v.bits = TAG_OBJECT | reinterpret_cast<uint64_t>(s); return v; }
+    static BblValue makeVector(BblVec* ve)   { BblValue v; v.bits = TAG_OBJECT | reinterpret_cast<uint64_t>(ve); return v; }
+    static BblValue makeTable(BblTable* t)   { BblValue v; v.bits = TAG_OBJECT | reinterpret_cast<uint64_t>(t); return v; }
+    static BblValue makeUserData(BblUserData* u) { BblValue v; v.bits = TAG_OBJECT | reinterpret_cast<uint64_t>(u); return v; }
 
     bool operator==(const BblValue& o) const;
     bool operator!=(const BblValue& o) const { return !(*this == o); }
 };
 
 struct BblTable {
+    ObjKind objKind = ObjKind::Table;
     struct Entry {
         BblValue key;
         BblValue val;
@@ -584,20 +631,20 @@ struct BblState {
     T* getVectorData(const std::string& name) {
         auto v = get(name);
         if (!v) throw BBL::Error{"undefined symbol: " + name};
-        if (v->type != BBL::Type::Vector) {
-            throw BBL::Error{"type mismatch: expected vector, got " + std::string(typeName(v->type))};
+        if (v->type() != BBL::Type::Vector) {
+            throw BBL::Error{"type mismatch: expected vector, got " + std::string(typeName(v->type()))};
         }
-        return reinterpret_cast<T*>(v->vectorVal->data.data());
+        return reinterpret_cast<T*>(v->vectorVal()->data.data());
     }
 
     template<typename T>
     size_t getVectorLength(const std::string& name) {
         auto v = get(name);
         if (!v) throw BBL::Error{"undefined symbol: " + name};
-        if (v->type != BBL::Type::Vector) {
+        if (v->type() != BBL::Type::Vector) {
             throw BBL::Error{"type mismatch: expected vector"};
         }
-        return v->vectorVal->length();
+        return v->vectorVal()->length();
     }
 
     // C function arg access

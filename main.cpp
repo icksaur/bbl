@@ -20,43 +20,43 @@ static void printUsage() {
 
 static void printValue(const BblValue& v) {
     char buf[64];
-    switch (v.type) {
+    switch (v.type()) {
         case BBL::Type::Null: break; // silent
         case BBL::Type::Int:
-            snprintf(buf, sizeof(buf), "%" PRId64, v.intVal);
+            snprintf(buf, sizeof(buf), "%" PRId64, v.intVal());
             fputs(buf, stdout);
             fputc('\n', stdout);
             break;
         case BBL::Type::Float:
-            snprintf(buf, sizeof(buf), "%g", v.floatVal);
+            snprintf(buf, sizeof(buf), "%g", v.floatVal());
             fputs(buf, stdout);
             fputc('\n', stdout);
             break;
         case BBL::Type::Bool:
-            fputs(v.boolVal ? "true" : "false", stdout);
+            fputs(v.boolVal() ? "true" : "false", stdout);
             fputc('\n', stdout);
             break;
         case BBL::Type::String:
-            fprintf(stdout, "\"%s\"\n", v.stringVal->data.c_str());
+            fprintf(stdout, "\"%s\"\n", v.stringVal()->data.c_str());
             break;
         case BBL::Type::Fn:
             fputs("<fn>\n", stdout);
             break;
         case BBL::Type::Binary:
-            fprintf(stdout, "<binary %zu bytes>\n", v.binaryVal->length());
+            fprintf(stdout, "<binary %zu bytes>\n", v.binaryVal()->length());
             break;
         case BBL::Type::Table:
-            fprintf(stdout, "<table length=%zu>\n", v.tableVal->length());
+            fprintf(stdout, "<table length=%zu>\n", v.tableVal()->length());
             break;
         case BBL::Type::Vector:
             fprintf(stdout, "<vector %s length=%zu>\n",
-                    v.vectorVal->elemType.c_str(), v.vectorVal->length());
+                    v.vectorVal()->elemType.c_str(), v.vectorVal()->length());
             break;
         case BBL::Type::Struct:
-            fprintf(stdout, "<struct %s>\n", v.structVal->desc->name.c_str());
+            fprintf(stdout, "<struct %s>\n", v.structVal()->desc->name.c_str());
             break;
         case BBL::Type::UserData:
-            fprintf(stdout, "<userdata %s>\n", v.userdataVal->desc->name.c_str());
+            fprintf(stdout, "<userdata %s>\n", v.userdataVal()->desc->name.c_str());
             break;
         default: break;
     }

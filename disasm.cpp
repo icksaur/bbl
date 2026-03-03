@@ -25,7 +25,7 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
         printf("%4d ", chunk.lines[offset]);
 
     switch (op) {
-    case OP_LOADK:     printf("LOADK     R%d K%d", A, Bx); if (Bx < chunk.constants.size()) { auto& v = chunk.constants[Bx]; if (v.type == BBL::Type::Int) printf(" (%" PRId64 ")", v.intVal); else if (v.type == BBL::Type::String) printf(" (\"%s\")", v.stringVal->data.c_str()); else if (v.type == BBL::Type::Float) printf(" (%g)", v.floatVal); } break;
+    case OP_LOADK:     printf("LOADK     R%d K%d", A, Bx); if (Bx < chunk.constants.size()) { auto& v = chunk.constants[Bx]; if (v.type() == BBL::Type::Int) printf(" (%" PRId64 ")", v.intVal()); else if (v.type() == BBL::Type::String) printf(" (\"%s\")", v.stringVal()->data.c_str()); else if (v.type() == BBL::Type::Float) printf(" (%g)", v.floatVal()); } break;
     case OP_LOADNULL:  printf("LOADNULL  R%d", A); break;
     case OP_LOADBOOL:  printf("LOADBOOL  R%d %s", A, B ? "true" : "false"); break;
     case OP_LOADINT:   printf("LOADINT   R%d %d", A, sBx); break;
