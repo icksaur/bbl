@@ -83,6 +83,11 @@ static void tableGrow(BblTable* tbl) {
 
 std::expected<BblValue, BBL::GetError> BblTable::get(const BblValue& key) const {
     if (count == 0) return std::unexpected(BBL::GetError::NotFound);
+    if (isSequential && key.type == BBL::Type::Int) {
+        size_t idx = static_cast<size_t>(key.intVal);
+        if (idx < arrayPart.size()) return arrayPart[idx];
+        return std::unexpected(BBL::GetError::NotFound);
+    }
     if (useInline) {
         for (size_t i = 0; i < count; i++)
             if (bblValueKeyEqual(inlineEntries[i].key, key)) return inlineEntries[i].val;
@@ -94,6 +99,45 @@ std::expected<BblValue, BBL::GetError> BblTable::get(const BblValue& key) const 
 }
 
 void BblTable::set(const BblValue& key, const BblValue& val) {
+    // Array fast-path for sequential integer keys
+    if (isSequential && key.type == BBL::Type::Int) {
+        int64_t idx = key.intVal;
+        if (idx >= 0 && static_cast<size_t>(idx) <= arrayPart.size()) {
+            if (static_cast<size_t>(idx) == arrayPart.size()) {
+                arrayPart.push_back(val);
+                count++;
+                order.push_back(key);
+                nextIntKey = idx + 1;
+                return;
+            }
+            arrayPart[static_cast<size_t>(idx)] = val;
+            return;
+        }
+        isSequential = false;
+        // Migrate array to hash
+        if (!arrayPart.empty()) {
+            for (size_t i = 0; i < arrayPart.size(); i++) {
+                BblValue k = BblValue::makeInt(static_cast<int64_t>(i));
+                if (useInline && count < INLINE_MAX) {
+                    inlineEntries[count] = {k, arrayPart[i], true, false};
+                } else {
+                    if (useInline) {
+                        useInline = false;
+                        tableGrow(this);
+                        for (size_t j = 0; j < INLINE_MAX; j++) {
+                            auto* e = tableFindEntry(buckets, capacity, inlineEntries[j].key);
+                            *e = inlineEntries[j];
+                        }
+                    }
+                    if (capacity == 0 || count + 1 > capacity * 3 / 4) tableGrow(this);
+                    auto* e = tableFindEntry(buckets, capacity, k);
+                    *e = {k, arrayPart[i], true, false};
+                }
+            }
+            arrayPart.clear();
+        }
+    }
+
     if (useInline) {
         for (size_t i = 0; i < count; i++) {
             if (bblValueKeyEqual(inlineEntries[i].key, key)) {
@@ -133,6 +177,10 @@ void BblTable::set(const BblValue& key, const BblValue& val) {
 
 bool BblTable::has(const BblValue& key) const {
     if (count == 0) return false;
+    if (isSequential && key.type == BBL::Type::Int) {
+        size_t idx = static_cast<size_t>(key.intVal);
+        return idx < arrayPart.size();
+    }
     if (useInline) {
         for (size_t i = 0; i < count; i++)
             if (bblValueKeyEqual(inlineEntries[i].key, key)) return true;
@@ -719,6 +767,8 @@ BblTable* BblState::allocTable() {
         t->marked = false;
         t->order.clear();
         t->useInline = true;
+        t->isSequential = true;
+        t->arrayPart.clear();
         // Don't clear buckets — they'll only be used when useInline becomes false
     } else {
         t = new BblTable{};
@@ -787,7 +837,9 @@ static void gcMark(BblValue& val) {
         case BBL::Type::Table:
             if (val.tableVal && !val.tableVal->marked) {
                 val.tableVal->marked = true;
-                if (val.tableVal->useInline) {
+                if (val.tableVal->isSequential) {
+                    for (auto& v : val.tableVal->arrayPart) gcMark(v);
+                } else if (val.tableVal->useInline) {
                     for (size_t i = 0; i < val.tableVal->count; i++) {
                         BblValue km = val.tableVal->inlineEntries[i].key;
                         BblValue vm = val.tableVal->inlineEntries[i].val;

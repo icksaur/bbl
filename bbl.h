@@ -258,6 +258,8 @@ struct BblTable {
     static constexpr size_t INLINE_MAX = 2;
     Entry inlineEntries[INLINE_MAX];
     bool useInline = true;
+    bool isSequential = true;
+    std::vector<BblValue> arrayPart;
 
     ~BblTable() { delete[] buckets; }
     BblTable() = default;
