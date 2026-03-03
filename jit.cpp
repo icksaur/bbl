@@ -128,7 +128,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             for (auto& k : tbl->order) keys->set(BblValue::makeInt(i++), k);
             regs[base] = BblValue::makeTable(keys);
         } else if (methodStr == state->m.push) {
-            for (int _i=0;_i<argc;_i++) { auto& a=args[_i]; tbl->set(BblValue::makeInt(tbl->nextIntKey), a); tbl->nextIntKey++; }
+            for (int _i=0;_i<argc;_i++) { tbl->set(BblValue::makeInt(tbl->nextIntKey), args[_i]); }
             regs[base] = BblValue::makeNull();
         } else throw BBL::Error{"unknown table method: " + methodStr->data};
     } else if (receiver.type == BBL::Type::Vector) {

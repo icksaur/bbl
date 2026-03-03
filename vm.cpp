@@ -513,7 +513,7 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                     for (auto& k : tbl->order) keys->set(BblValue::makeInt(i++), k);
                     R(A) = BblValue::makeTable(keys);
                 } else if (methodStr == state.m.push) {
-                    for (int i = 0; i < nargs; i++) { tbl->set(BblValue::makeInt(tbl->nextIntKey), argsBuf[i]); tbl->nextIntKey++; }
+                    for (int i = 0; i < nargs; i++) { tbl->set(BblValue::makeInt(tbl->nextIntKey), argsBuf[i]); }
                     R(A) = BblValue::makeNull();
                 } else if (methodStr == state.m.pop) {
                     bool found = false;
