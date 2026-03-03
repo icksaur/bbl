@@ -891,8 +891,8 @@ void BblState::gc() {
         for (BblValue* p = vm->stack.data(); p < vm->stackTop; p++)
             gcMark(*p);
         for (int i = 0; i < vm->frameCount; i++) {
-            if (vm->frames[i].closure) {
-                BblValue cv = BblValue::makeClosure(vm->frames[i].closure);
+            if (vm->frames[i].regs[0].closureVal) {
+                BblValue cv = BblValue::makeClosure(vm->frames[i].regs[0].closureVal);
                 gcMark(cv);
             }
         }

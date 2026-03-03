@@ -44,8 +44,8 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
     frame->chunk = &chunk;
     frame->ip = chunk.code.data();
     frame->regs = state.vm->stack.data();
-    frame->closure = nullptr;
-    frame->numRegs = chunk.numRegs;
+    frame->regs[0] = BblValue::makeNull();
+    frame->returnDest = 0;
     state.vm->frameCount = 1;
     state.vm->stackTop = state.vm->stack.data() + chunk.numRegs;
 
@@ -230,12 +230,12 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
             break;
         }
         case OP_GETCAPTURE:
-            if (!frame->closure) throw BBL::Error{"no closure"};
-            R(A) = frame->closure->captures[B];
+            if (!R(0).isClosure) throw BBL::Error{"no closure"};
+            R(A) = R(0).closureVal->captures[B];
             break;
         case OP_SETCAPTURE:
-            if (!frame->closure) throw BBL::Error{"no closure"};
-            frame->closure->captures[B] = R(A);
+            if (!R(0).isClosure) throw BBL::Error{"no closure"};
+            R(0).closureVal->captures[B] = R(A);
             break;
 
         case OP_JMP: frame->ip += sBx; break;
@@ -267,8 +267,8 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                 auto& desc = proto->captureDescs[i];
                 if (desc.srcType == 0)
                     closure->captures[i] = R(desc.srcIdx);
-                else if (frame->closure)
-                    closure->captures[i] = frame->closure->captures[desc.srcIdx];
+                else if (R(0).isClosure)
+                    closure->captures[i] = R(0).closureVal->captures[desc.srcIdx];
                 else
                     closure->captures[i] = BblValue::makeNull();
             }
@@ -298,15 +298,13 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                 R(1 + i) = frame->regs[A + 1 + i];
             frame->chunk = &closure->chunk;
             frame->ip = closure->chunk.code.data();
-            frame->closure = closure;
-            frame->numRegs = closure->chunk.numRegs;
             state.vm->stackTop = frame->regs + closure->chunk.numRegs;
             break;
         }
 
         case OP_RETURN: {
             BblValue result = R(A);
-            uint8_t returnDest = static_cast<uint8_t>(frame->line);
+            uint8_t returnDest = static_cast<uint8_t>(frame->returnDest);
             state.vm->frameCount--;
             if (state.vm->frameCount == 0) {
                 state.vm->stackTop = state.vm->stack.data();
@@ -314,7 +312,7 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                 goto done;
             }
             frame = &state.vm->frames[state.vm->frameCount - 1];
-            state.vm->stackTop = frame->regs + frame->numRegs;
+            state.vm->stackTop = frame->regs + frame->chunk->numRegs;
             R(returnDest) = result;
             break;
         }
@@ -642,11 +640,8 @@ static bool callValue(BblState& state, CallFrame*& frame, uint8_t base, uint8_t 
             newFrame->chunk = &closure->chunk;
             newFrame->ip = closure->chunk.code.data();
             newFrame->regs = &frame->regs[base];
-            newFrame->closure = closure;
-            newFrame->numRegs = closure->chunk.numRegs;
-            newFrame->line = destInCaller;
+            newFrame->returnDest = destInCaller;
 
-            // Ensure stack has room for callee's registers
             BblValue* needed = newFrame->regs + closure->chunk.numRegs;
             if (needed > state.vm->stackTop) state.vm->stackTop = needed;
 
