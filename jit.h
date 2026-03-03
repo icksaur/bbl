@@ -5,6 +5,7 @@
 #include <cstddef>
 
 struct BblState;
+struct BblClosure;
 
 struct JitCode {
     uint8_t* buf = nullptr;
@@ -12,7 +13,7 @@ struct JitCode {
     size_t capacity = 0;
 };
 
-JitCode jitCompile(BblState& state, Chunk& chunk);
+JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self = nullptr);
 BblValue jitExecute(BblState& state, Chunk& chunk);
 void jitFree(JitCode& jit);
 

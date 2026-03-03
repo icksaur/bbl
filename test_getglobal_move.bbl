@@ -1,0 +1,9 @@
+// Test GETGLOBAL of self-ref followed by MOVE (not CALL)
+(= f (fn (x) (+ x 1)))
+
+(= test (fn ()
+  (= temp f)    // GETGLOBAL, then assign to local - likely GETGLOBAL R[x]; MOVE somewhere
+  (print "Got temp\n")
+  (temp 42)))
+
+(print (test) "\n")

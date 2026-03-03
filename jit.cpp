@@ -2,6 +2,7 @@
 #include "bbl.h"
 #include "vm.h"
 #include <cstring>
+#include <set>
 #include <vector>
 #include <sys/mman.h>
 
@@ -62,7 +63,7 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
         BblClosure* closure = callee.closureVal;
 
         if (!closure->jitCache) {
-            JitCode* cached = new JitCode(jitCompile(*state, closure->chunk));
+            JitCode* cached = new JitCode(jitCompile(*state, closure->chunk, closure));
             closure->jitCache = cached;
         }
         typedef BblValue (*JitFn)(BblValue*, BblState*, Chunk*);
@@ -78,13 +79,16 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
 
 void jitGetCapture(BblValue* regs, BblState* state, uint8_t destReg, uint8_t capIdx) {
     (void)state;
-    // Captures need the closure pointer — for now, not supported in JIT
-    throw BBL::Error{"JIT: captures not yet supported"};
+    if (!regs[0].isClosure) throw BBL::Error{"no closure for capture"};
+    BblClosure* closure = regs[0].closureVal;
+    regs[destReg] = closure->captures[capIdx];
 }
 
 void jitSetCapture(BblValue* regs, BblState* state, uint8_t srcReg, uint8_t capIdx) {
     (void)state;
-    throw BBL::Error{"JIT: captures not yet supported"};
+    if (!regs[0].isClosure) throw BBL::Error{"no closure for capture"};
+    BblClosure* closure = regs[0].closureVal;
+    closure->captures[capIdx] = regs[srcReg];
 }
 
 void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint16_t protoIdx) {
@@ -96,7 +100,17 @@ void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, 
     closure->captureDescs = proto->captureDescs;
     closure->captures.resize(proto->captureDescs.size());
     state->allocatedClosures.push_back(closure);
-    // No capture filling in JIT context (top-level closures have no captures)
+
+    for (size_t i = 0; i < proto->captureDescs.size(); i++) {
+        auto& desc = proto->captureDescs[i];
+        if (desc.srcType == 0)
+            closure->captures[i] = regs[desc.srcIdx];
+        else if (regs[0].isClosure)
+            closure->captures[i] = regs[0].closureVal->captures[desc.srcIdx];
+        else
+            closure->captures[i] = BblValue::makeNull();
+    }
+
     regs[destReg] = BblValue::makeClosure(closure);
 }
 
@@ -650,7 +664,7 @@ struct JumpPatch {
     size_t targetInst;   // bytecode instruction index to jump to
 };
 
-JitCode jitCompile(BblState& state, Chunk& chunk) {
+JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     JitCode jit;
     jit.capacity = chunk.code.size() * 64 + 512;
     jit.buf = static_cast<uint8_t*>(
@@ -663,6 +677,8 @@ JitCode jitCompile(BblState& state, Chunk& chunk) {
     std::vector<size_t> nativeOffsets(chunk.code.size() + 1, 0);
     std::vector<JumpPatch> patches;
     std::unordered_map<uint8_t, BblClosure*> closureRegs;
+    std::set<uint8_t> selfRefRegs;
+    std::vector<size_t> selfCallPatches;
 
     for (size_t i = 0; i < chunk.code.size(); i++) {
         nativeOffsets[i] = jit.size;
@@ -671,6 +687,11 @@ JitCode jitCompile(BblState& state, Chunk& chunk) {
         uint8_t A = decodeA(inst), B = decodeB(inst), C = decodeC(inst);
         uint16_t Bx = decodeBx(inst);
         int sBx = decodesBx(inst);
+
+        if (op != OP_GETGLOBAL && op != OP_CLOSURE && op != OP_CALL) {
+            selfRefRegs.erase(A);
+            closureRegs.erase(A);
+        }
 
         switch (op) {
         case OP_LOADK:
@@ -785,6 +806,15 @@ JitCode jitCompile(BblState& state, Chunk& chunk) {
 
         case OP_GETGLOBAL: {
             uint32_t symId = static_cast<uint32_t>(chunk.constants[Bx].intVal);
+            if (self && state.vm) {
+                auto it = state.vm->globals.find(symId);
+                if (it != state.vm->globals.end() &&
+                    it->second.type == BBL::Type::Fn &&
+                    it->second.isClosure &&
+                    it->second.closureVal == self) {
+                    selfRefRegs.insert(A);
+                }
+            }
             emitCallHelper2(jit.buf, jit.size, (void*)jitGetGlobal, symId, A);
             break;
         }
@@ -794,6 +824,30 @@ JitCode jitCompile(BblState& state, Chunk& chunk) {
             break;
         }
         case OP_CALL: {
+            if (selfRefRegs.count(A)) {
+                // Native self-recursive call through full prologue
+                // lea rdi, [rbx + A*16]
+                uint8_t lea[] = { 0x48, 0x8d, 0xbb };
+                emit(jit.buf, jit.size, lea, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE);
+                // mov rsi, r12 (state)
+                uint8_t movsi[] = { 0x4c, 0x89, 0xe6 };
+                emit(jit.buf, jit.size, movsi, 3);
+                // mov rdx, r13 (chunk)
+                uint8_t movdx[] = { 0x4c, 0x89, 0xea };
+                emit(jit.buf, jit.size, movdx, 3);
+                // call rel32 → function entry (offset 0)
+                emit8(jit.buf, jit.size, 0xe8);
+                selfCallPatches.push_back(jit.size);
+                emit32(jit.buf, jit.size, 0);
+                // result: rax=type+flags, rdx=data (rbx restored by epilogue)
+                uint8_t st1[] = { 0x48, 0x89, 0x83 };
+                emit(jit.buf, jit.size, st1, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE);
+                uint8_t st2[] = { 0x48, 0x89, 0x93 };
+                emit(jit.buf, jit.size, st2, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE + DATA_OFF);
+            } else {
             // Try to inline: check if base register holds a known closure
             auto cit = closureRegs.find(A);
             if (cit != closureRegs.end() && B == cit->second->arity) {
@@ -840,6 +894,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk) {
             } else {
                 emitCallHelper2(jit.buf, jit.size, (void*)jitCall, A, B);
             }
+            } // end self-ref else
             break;
         }
         case OP_CLOSURE:
@@ -986,11 +1041,15 @@ JitCode jitCompile(BblState& state, Chunk& chunk) {
         case OP_EXEC:
             emitCallHelper2(jit.buf, jit.size, (void*)jitExec, A, B);
             break;
+        case OP_GETCAPTURE:
+            emitCallHelper2(jit.buf, jit.size, (void*)jitGetCapture, A, B);
+            break;
+        case OP_SETCAPTURE:
+            emitCallHelper2(jit.buf, jit.size, (void*)jitSetCapture, A, B);
+            break;
         case OP_SIZEOF:
         case OP_STRUCT:
         case OP_TAILCALL:
-        case OP_GETCAPTURE:
-        case OP_SETCAPTURE:
         case OP_TRYBEGIN:
         case OP_TRYEND:
         case OP_EXECFILE:
@@ -1011,6 +1070,10 @@ done_compile:
         if (p.targetInst < nativeOffsets.size() && nativeOffsets[p.targetInst] != 0) {
             patchRel32(jit.buf, p.patchOffset, nativeOffsets[p.targetInst]);
         }
+    }
+
+    for (size_t p : selfCallPatches) {
+        patchRel32(jit.buf, p, 0);
     }
 
     mprotect(jit.buf, jit.capacity, PROT_READ | PROT_EXEC);

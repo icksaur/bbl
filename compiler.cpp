@@ -334,6 +334,40 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
 
     // Control flow
     if (op == "if") {
+        auto& cond = node.children[1];
+        bool fusedCmp = false;
+        if (cond.type == NodeType::List && cond.children.size() == 3 &&
+            cond.children[0].type == NodeType::Symbol) {
+            const std::string& cop = cond.children[0].stringVal;
+            OpCode fop = OP_LOADNULL;
+            if (cop == "<") fop = OP_LTJMP;
+            else if (cop == "<=") fop = OP_LEJMP;
+            else if (cop == ">") fop = OP_GTJMP;
+            else if (cop == ">=") fop = OP_GEJMP;
+            if (fop != OP_LOADNULL) {
+                uint8_t saveReg = cs.nextReg;
+                uint8_t rA = compileExpr(state, cs, cond.children[1], cs.allocReg());
+                uint8_t rB = compileExpr(state, cs, cond.children[2], cs.allocReg());
+                cs.chunk.emitABC(fop, rA, rB, 0, node.line);
+                int elseJump = emitJump(cs, OP_JMP, 0, node.line);
+                cs.freeRegsTo(saveReg);
+                compileInto(state, cs, node.children[2], dest);
+                if (node.children.size() > 3) {
+                    int endJump = emitJump(cs, OP_JMP, 0, node.line);
+                    patchJump(cs, elseJump);
+                    compileInto(state, cs, node.children[3], dest);
+                    patchJump(cs, endJump);
+                } else {
+                    int endJump = emitJump(cs, OP_JMP, 0, node.line);
+                    patchJump(cs, elseJump);
+                    cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
+                    patchJump(cs, endJump);
+                }
+                fusedCmp = true;
+                return dest;
+            }
+        }
+        if (!fusedCmp) {
         uint8_t condReg = compileExpr(state, cs, node.children[1], dest);
         int elseJump = emitJump(cs, OP_JMPFALSE, condReg, node.line);
         compileInto(state, cs, node.children[2], dest);
@@ -347,6 +381,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
             patchJump(cs, elseJump);
             cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
             patchJump(cs, endJump);
+        }
         }
         return dest;
     }

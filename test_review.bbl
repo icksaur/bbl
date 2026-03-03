@@ -1,0 +1,21 @@
+// Test 1: Self-recursive function
+(= fib (fn (n)
+  (if (< n 2)
+    n
+    (+ (fib (- n 1)) (fib (- n 2))))))
+
+(print (fib 10) "\n")
+
+// Test 2: GETGLOBAL with non-CALL use
+(= counter (fn (x) (+ x 1)))
+(= test-getglobal (fn ()
+  (= saved counter)
+  (saved 5)))
+(print (test-getglobal) "\n")
+
+// Test 3: Fused comparison with dest register clobber
+(= test-fused (fn (a b c)
+  (if (< a b)
+    c
+    0)))
+(print (test-fused 1 2 99) "\n")

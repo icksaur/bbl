@@ -1,0 +1,10 @@
+// Test self-recursive function that stores self-reference
+(= strange (fn (n)
+  (if (< n 1)
+    n
+    (do
+      (= myself strange)  // Self-reference NOT in call position
+      (print "myself=" myself "\n")
+      (+ n (myself (- n 1)))))))
+
+(print (strange 3) "\n")
