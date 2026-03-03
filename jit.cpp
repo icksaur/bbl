@@ -113,13 +113,12 @@ void jitTable(BblValue* regs, BblState* state, uint8_t destReg, uint8_t pairCoun
 
 void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblString* methodStr) {
     BblValue receiver = regs[base];
-    std::vector<BblValue> args(argc);
-    for (int i = 0; i < argc; i++) args[i] = regs[base + 1 + i];
+    BblValue* args = &regs[base + 1];
 
     // Dispatch through the same method tables as the interpreter
     if (receiver.type == BBL::Type::Table) {
         BblTable* tbl = receiver.tableVal;
-        if (methodStr == state->m.get) regs[base] = tbl->get(args[0]).value_or(args.size() > 1 ? args[1] : BblValue::makeNull());
+        if (methodStr == state->m.get) regs[base] = tbl->get(args[0]).value_or(static_cast<size_t>(argc) > 1 ? args[1] : BblValue::makeNull());
         else if (methodStr == state->m.set) { tbl->set(args[0], args[1]); regs[base] = BblValue::makeNull(); }
         else if (methodStr == state->m.has) regs[base] = BblValue::makeBool(tbl->has(args[0]));
         else if (methodStr == state->m.del) { tbl->del(args[0]); regs[base] = BblValue::makeNull(); }
@@ -129,13 +128,13 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             for (auto& k : tbl->order) keys->set(BblValue::makeInt(i++), k);
             regs[base] = BblValue::makeTable(keys);
         } else if (methodStr == state->m.push) {
-            for (auto& a : args) { tbl->set(BblValue::makeInt(tbl->nextIntKey), a); tbl->nextIntKey++; }
+            for (int _i=0;_i<argc;_i++) { auto& a=args[_i]; tbl->set(BblValue::makeInt(tbl->nextIntKey), a); tbl->nextIntKey++; }
             regs[base] = BblValue::makeNull();
         } else throw BBL::Error{"unknown table method: " + methodStr->data};
     } else if (receiver.type == BBL::Type::Vector) {
         BblVec* vec = receiver.vectorVal;
         if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(vec->length()));
-        else if (methodStr == state->m.push) { for (auto& a : args) state->packValue(vec, a); regs[base] = BblValue::makeNull(); }
+        else if (methodStr == state->m.push) { for (int i=0;i<argc;i++) state->packValue(vec, args[i]); regs[base] = BblValue::makeNull(); }
         else if (methodStr == state->m.at) regs[base] = state->readVecElem(vec, static_cast<size_t>(args[0].intVal));
         else if (methodStr == state->m.set) { state->writeVecElem(vec, static_cast<size_t>(args[0].intVal), args[1]); regs[base] = BblValue::makeNull(); }
         else throw BBL::Error{"unknown vector method: " + methodStr->data};
