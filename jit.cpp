@@ -311,6 +311,9 @@ void jitArith(BblValue* regs, BblState* state, uint8_t A, uint32_t packed) {
     uint8_t B = (packed >> 8) & 0xFF;
     uint8_t C = packed & 0xFF;
     BblValue& rb = regs[B]; BblValue& rc = regs[C];
+    auto toF = [](const BblValue& v) -> double {
+        return v.type() == BBL::Type::Int ? static_cast<double>(v.intVal()) : v.floatVal();
+    };
     if (op == 0) {
         if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
             regs[A] = BblValue::makeInt(rb.intVal() + rc.intVal());
@@ -320,27 +323,29 @@ void jitArith(BblValue* regs, BblState* state, uint8_t A, uint32_t packed) {
             else
                 regs[A] = BblValue::makeString(state->allocString(rb.stringVal()->data + jitValToStr(*state, rc)));
         } else
-            regs[A] = BblValue::makeFloat(rb.floatVal() + rc.floatVal());
+            regs[A] = BblValue::makeFloat(toF(rb) + toF(rc));
     } else if (op == 1) {
         if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
             regs[A] = BblValue::makeInt(rb.intVal() - rc.intVal());
         else
-            regs[A] = BblValue::makeFloat(rb.floatVal() - rc.floatVal());
+            regs[A] = BblValue::makeFloat(toF(rb) - toF(rc));
     } else if (op == 2) {
         if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
             regs[A] = BblValue::makeInt(rb.intVal() * rc.intVal());
         else
-            regs[A] = BblValue::makeFloat(rb.floatVal() * rc.floatVal());
+            regs[A] = BblValue::makeFloat(toF(rb) * toF(rc));
     } else if (op == 3) {
-        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
+        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int) {
+            if (rc.intVal() == 0) JIT_ERROR(state, "division by zero");
             regs[A] = BblValue::makeInt(rb.intVal() / rc.intVal());
-        else
-            regs[A] = BblValue::makeFloat(rb.floatVal() / rc.floatVal());
+        } else
+            regs[A] = BblValue::makeFloat(toF(rb) / toF(rc));
     } else {
-        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
+        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int) {
+            if (rc.intVal() == 0) JIT_ERROR(state, "division by zero");
             regs[A] = BblValue::makeInt(rb.intVal() % rc.intVal());
-        else
-            regs[A] = BblValue::makeFloat(std::fmod(rb.floatVal(), rc.floatVal()));
+        } else
+            regs[A] = BblValue::makeFloat(std::fmod(toF(rb), toF(rc)));
     }
 }
 
@@ -822,7 +827,8 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             emitMove(jit.buf, jit.size, A, B);
             break;
         case OP_ADD: {
-            // Type guard: if R[B] is int, fast path; else call jitArith helper
+            // Type guard: if R[B] and R[C] are both int, fast path
+            // Check B
             uint8_t ld[] = { 0x48, 0x8b, 0x83 };
             emit(jit.buf, jit.size, ld, 3);
             emit32(jit.buf, jit.size, B * VAL_SIZE);
@@ -838,13 +844,24 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             emit(jit.buf, jit.size, cmprr, 3);
             uint8_t jne[] = { 0x0f, 0x85 };
             emit(jit.buf, jit.size, jne, 2);
-            size_t slowPatch = jit.size;
+            size_t slowPatch1 = jit.size;
+            emit32(jit.buf, jit.size, 0);
+            // Check C
+            emit(jit.buf, jit.size, ld, 3);
+            emit32(jit.buf, jit.size, C * VAL_SIZE);
+            emit(jit.buf, jit.size, movabs1, 2);
+            emit64(jit.buf, jit.size, BblValue::TAG_MASK);
+            emit(jit.buf, jit.size, andrr, 3);
+            emit(jit.buf, jit.size, cmprr, 3);
+            emit(jit.buf, jit.size, jne, 2);
+            size_t slowPatch2 = jit.size;
             emit32(jit.buf, jit.size, 0);
             emitAdd(jit.buf, jit.size, A, B, C);
             emit8(jit.buf, jit.size, 0xe9);
             size_t donePatch = jit.size;
             emit32(jit.buf, jit.size, 0);
-            patchRel32(jit.buf, slowPatch, jit.size);
+            patchRel32(jit.buf, slowPatch1, jit.size);
+            patchRel32(jit.buf, slowPatch2, jit.size);
             emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((0 << 16) | (B << 8) | C), &errorExitPatches);
             patchRel32(jit.buf, donePatch, jit.size);
             break;
@@ -884,13 +901,23 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             emit(jit.buf, jit.size, cmprr, 3);
             uint8_t jne[] = { 0x0f, 0x85 };
             emit(jit.buf, jit.size, jne, 2);
-            size_t slowPatch = jit.size;
+            size_t slowPatch1 = jit.size;
+            emit32(jit.buf, jit.size, 0);
+            emit(jit.buf, jit.size, ld, 3);
+            emit32(jit.buf, jit.size, C * VAL_SIZE);
+            emit(jit.buf, jit.size, movabs1, 2);
+            emit64(jit.buf, jit.size, BblValue::TAG_MASK);
+            emit(jit.buf, jit.size, andrr, 3);
+            emit(jit.buf, jit.size, cmprr, 3);
+            emit(jit.buf, jit.size, jne, 2);
+            size_t slowPatch2 = jit.size;
             emit32(jit.buf, jit.size, 0);
             emitSub(jit.buf, jit.size, A, B, C);
             emit8(jit.buf, jit.size, 0xe9);
             size_t donePatch = jit.size;
             emit32(jit.buf, jit.size, 0);
-            patchRel32(jit.buf, slowPatch, jit.size);
+            patchRel32(jit.buf, slowPatch1, jit.size);
+            patchRel32(jit.buf, slowPatch2, jit.size);
             emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((1 << 16) | (B << 8) | C), &errorExitPatches);
             patchRel32(jit.buf, donePatch, jit.size);
             break;

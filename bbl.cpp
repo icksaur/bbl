@@ -2844,6 +2844,10 @@ std::expected<BBL::Type, BBL::GetError> BblState::getType(const std::string& nam
 
 std::expected<BblValue, BBL::GetError> BblState::get(const std::string& name) const {
     uint32_t id = resolveSymbol(name);
+    if (vm) {
+        auto git = vm->globals.find(id);
+        if (git != vm->globals.end()) return git->second;
+    }
     auto it = rootScope.bindings->find(id);
     if (it == rootScope.bindings->end()) {
         return std::unexpected(BBL::GetError::NotFound);
