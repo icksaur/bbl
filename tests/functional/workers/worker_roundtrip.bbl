@@ -1,0 +1,5 @@
+(= child (state-new "/tmp/bbl_func_workers/adder.bbl"))
+(child:post (table "a" 100 "b" 50))
+(= reply (child:recv))
+(print (reply:get "sum"))
+(child:join)

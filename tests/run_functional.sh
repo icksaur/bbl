@@ -107,6 +107,33 @@ check_bbl_path() {
 }
 check_bbl_path
 
+# Phase 7: Worker/child-state tests
+WORKER_DIR="/tmp/bbl_func_workers"
+mkdir -p "$WORKER_DIR"
+cat > "$WORKER_DIR/echo.bbl" << 'WEOF'
+(= msg (recv))
+(post (table "reply" (msg:get "data")))
+WEOF
+cat > "$WORKER_DIR/adder.bbl" << 'WEOF'
+(= msg (recv))
+(post (table "sum" (+ (msg:get "a") (msg:get "b"))))
+WEOF
+check_worker() {
+    local name="$1" expected="$2" actual
+    actual=$(timeout 5 "$BBL" "$DIR/workers/${name}.bbl" 2>/dev/null)
+    if [ "$actual" = "$expected" ]; then
+        echo "  PASS  $name"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL  $name"
+        echo "    expected: '$expected'"
+        echo "    got:      '$actual'"
+        FAIL=$((FAIL + 1))
+    fi
+}
+check_worker worker_echo "hello"
+check_worker worker_roundtrip "150"
+
 echo ""
 echo "Passed: $PASS  Failed: $FAIL"
 [ "$FAIL" -eq 0 ]

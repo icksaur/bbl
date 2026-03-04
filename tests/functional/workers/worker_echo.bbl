@@ -1,0 +1,5 @@
+(= child (state-new "/tmp/bbl_func_workers/echo.bbl"))
+(child:post (table "data" "hello"))
+(= reply (child:recv))
+(print (reply:get "reply"))
+(child:join)

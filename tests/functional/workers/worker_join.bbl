@@ -1,0 +1,6 @@
+(= child (state-new "/tmp/bbl_func_workers/counter.bbl"))
+(child:post (table "n" 1000))
+(= reply (child:recv))
+(= result (reply:get "result"))
+(if (== result 499500) (print "done") (print "wrong"))
+(child:join)
