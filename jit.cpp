@@ -57,6 +57,10 @@ static std::string jitValToStr(BblState& state, const BblValue& v);
     g_jitError = true; \
     g_jitErrorMsg = _e.what; \
     return; \
+} catch (const std::exception& _e) { \
+    g_jitError = true; \
+    g_jitErrorMsg = _e.what(); \
+    return; \
 }
 
 
@@ -103,6 +107,8 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
     }
     } catch (const BBL::Error& e) {
         JIT_ERROR(state, e.what);
+    } catch (const std::exception& e) {
+        JIT_ERROR(state, e.what());
     }
 }
 
@@ -199,6 +205,11 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         else if (methodStr == state->m.at) regs[base] = state->readVecElem(vec, static_cast<size_t>(args[0].intVal()));
         else if (methodStr == state->m.set) { state->writeVecElem(vec, static_cast<size_t>(args[0].intVal()), args[1]); regs[base] = BblValue::makeNull(); }
         else if (methodStr == state->m.resize) { vec->data.resize(static_cast<size_t>(args[0].intVal()) * vec->elemSize, 0); regs[base] = BblValue::makeNull(); }
+        else if (methodStr == state->m.reserve) {
+            int64_t cap = args[0].intVal();
+            if (cap < 0) JIT_ERROR(state, "vector.reserve: capacity must be non-negative");
+            vec->data.reserve(static_cast<size_t>(cap) * vec->elemSize); regs[base] = BblValue::makeNull();
+        }
         else JIT_ERROR(state, "unknown vector method: " + methodStr->data);
     } else if (receiver.type() == BBL::Type::String) {
         BblString* str = receiver.stringVal();
@@ -306,6 +317,8 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
     } else JIT_ERROR(state, "cannot call method on " + std::string(typeName(receiver.type())));
     } catch (const BBL::Error& e) {
         JIT_ERROR(state, e.what);
+    } catch (const std::exception& e) {
+        JIT_ERROR(state, e.what());
     }
 }
 
@@ -521,13 +534,23 @@ void jitBitwise(BblValue* regs, BblState* state, uint8_t A, uint32_t packed) {
     uint8_t op = (packed >> 16) & 0xFF;
     uint8_t B = (packed >> 8) & 0xFF;
     uint8_t C = packed & 0xFF;
+    if (regs[B].type() != BBL::Type::Int) JIT_ERROR(state, "bitwise ops require integers");
+    if (op != 3 && regs[C].type() != BBL::Type::Int) JIT_ERROR(state, "bitwise ops require integers");
     int64_t a = regs[B].intVal();
     if (op == 0) regs[A] = BblValue::makeInt(a & regs[C].intVal());
     else if (op == 1) regs[A] = BblValue::makeInt(a | regs[C].intVal());
     else if (op == 2) regs[A] = BblValue::makeInt(a ^ regs[C].intVal());
     else if (op == 3) regs[A] = BblValue::makeInt(~a);
-    else if (op == 4) regs[A] = BblValue::makeInt(a << regs[C].intVal());
-    else if (op == 5) regs[A] = BblValue::makeInt(a >> regs[C].intVal());
+    else if (op == 4) {
+        int64_t shift = regs[C].intVal();
+        if (shift < 0) JIT_ERROR(state, "negative shift count");
+        regs[A] = BblValue::makeInt(shift >= 64 ? 0 : (a << shift));
+    }
+    else if (op == 5) {
+        int64_t shift = regs[C].intVal();
+        if (shift < 0) JIT_ERROR(state, "negative shift count");
+        regs[A] = BblValue::makeInt(shift >= 64 ? (a >> 63) : (a >> shift));
+    }
 }
 
 static void emit(uint8_t* buf, size_t& pos, const void* data, size_t len) {

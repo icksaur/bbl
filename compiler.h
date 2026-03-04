@@ -24,7 +24,9 @@ struct CompilerState {
 
     struct LoopInfo {
         int start;
+        bool isEach = false;
         std::vector<int> breaks;
+        std::vector<int> continues;
     };
     std::vector<LoopInfo> loops;
 

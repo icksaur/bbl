@@ -563,6 +563,7 @@ struct BblState {
         BblString* set = nullptr;
         BblString* get = nullptr;
         BblString* resize = nullptr;
+        BblString* reserve = nullptr;
         BblString* has = nullptr;
         BblString* del = nullptr; // "delete"
         BblString* keys = nullptr;

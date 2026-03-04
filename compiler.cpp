@@ -457,6 +457,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
 
         CompilerState::LoopInfo loopInfo;
         loopInfo.start = static_cast<int>(cs.chunk.code.size());
+        loopInfo.isEach = true;
         cs.loops.push_back(loopInfo);
 
         uint8_t cmpReg = cs.allocReg();
@@ -468,6 +469,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
         for (size_t i = 3; i < node.children.size(); i++)
             compileExpr(state, cs, node.children[i], dest);
 
+        for (int c : cs.loops.back().continues) patchJump(cs, c);
         uint8_t oneConst = static_cast<uint8_t>(cs.chunk.addConstant(BblValue::makeInt(1)));
         cs.chunk.emitABC(OP_ADDK, idxReg, idxReg, oneConst, node.line);
 
@@ -523,8 +525,13 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
 
     if (op == "continue") {
         if (cs.loops.empty()) throw BBL::Error{"'continue' outside of loop"};
-        int loopOffset = static_cast<int>(cs.chunk.code.size()) - cs.loops.back().start + 1;
-        cs.chunk.emitAsBx(OP_LOOP, 0, loopOffset, node.line);
+        if (cs.loops.back().isEach) {
+            int jmp = emitJump(cs, OP_JMP, 0, node.line);
+            cs.loops.back().continues.push_back(jmp);
+        } else {
+            int loopOffset = static_cast<int>(cs.chunk.code.size()) - cs.loops.back().start + 1;
+            cs.chunk.emitAsBx(OP_LOOP, 0, loopOffset, node.line);
+        }
         return dest;
     }
 
@@ -613,8 +620,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     auto it = state.structDescs.find(op);
     if (it != state.structDescs.end()) {
         uint8_t savedNext = cs.nextReg;
-        uint8_t base = dest;
-        if (base < cs.nextReg) { base = cs.allocReg(); cs.freeRegsTo(base); }
+        uint8_t base = cs.allocReg(); // reserve base register
         uint8_t nameIdx = addStrConst(state, cs, op);
         uint8_t argc = static_cast<uint8_t>(node.children.size() - 1);
         for (size_t i = 1; i < node.children.size(); i++) {
