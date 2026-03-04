@@ -1,7 +1,7 @@
 (= run (fn ()
     (= i 0)
     (loop (< i 1000000)
-        (= t (table "k" i))
+        (= t (table "x" i "y" (* i 2) "z" (+ i 1)))
         (= i (+ i 1)))
     (print i)))
 (run)

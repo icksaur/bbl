@@ -43,10 +43,10 @@ static BblTable::Entry* tableFindEntry(BblTable::Entry* buckets, size_t cap, con
     BblTable::Entry* firstTombstone = nullptr;
     for (size_t i = 0; i < cap; i++) {
         BblTable::Entry& e = buckets[(idx + i) & (cap - 1)];
-        if (!e.occupied && !e.tombstone) {
+        if (e.isEmpty()) {
             return firstTombstone ? firstTombstone : &e;
         }
-        if (e.tombstone) {
+        if (e.isTombstone()) {
             if (!firstTombstone) firstTombstone = &e;
             continue;
         }
@@ -57,17 +57,17 @@ static BblTable::Entry* tableFindEntry(BblTable::Entry* buckets, size_t cap, con
 
 static void tableGrow(BblTable* tbl) {
     size_t newCap = tbl->capacity < 8 ? 8 : tbl->capacity * 2;
-    auto* newBuckets = new BblTable::Entry[newCap];
+    auto* newBuckets = static_cast<BblTable::Entry*>(calloc(newCap, sizeof(BblTable::Entry)));
     for (uint32_t i = 0; i < tbl->capacity; i++) {
         auto& e = tbl->buckets[i];
-        if (e.occupied && !e.tombstone) {
+        if (e.isOccupied()) {
             auto* dest = tableFindEntry(newBuckets, newCap, e.key);
             dest->key = e.key;
             dest->val = e.val;
-            dest->occupied = true;
+            
         }
     }
-    if (tbl->buckets != tbl->inlineBuckets) delete[] tbl->buckets;
+    if (tbl->buckets != tbl->inlineBuckets) free(tbl->buckets);
     tbl->buckets = newBuckets;
     tbl->capacity = static_cast<uint32_t>(newCap);
 }
@@ -75,18 +75,17 @@ static void tableGrow(BblTable* tbl) {
 std::expected<BblValue, BBL::GetError> BblTable::get(const BblValue& key) const {
     if (count == 0 || capacity == 0) return std::unexpected(BBL::GetError::NotFound);
     auto* e = tableFindEntry(buckets, capacity, key);
-    if (!e || !e->occupied || e->tombstone) return std::unexpected(BBL::GetError::NotFound);
+    if (!e || !e->isOccupied()) return std::unexpected(BBL::GetError::NotFound);
     return e->val;
 }
 
 void BblTable::set(const BblValue& key, const BblValue& val) {
     if (capacity == 0 || count + 1 > capacity * 3 / 4) tableGrow(this);
     auto* e = tableFindEntry(buckets, capacity, key);
-    bool isNew = !e->occupied || e->tombstone;
+    bool isNew = !e->isOccupied();
     e->key = key;
     e->val = val;
-    e->occupied = true;
-    e->tombstone = false;
+    
     if (isNew) {
         count++;
         if (!order) order = new std::vector<BblValue>();
@@ -99,15 +98,14 @@ void BblTable::set(const BblValue& key, const BblValue& val) {
 bool BblTable::has(const BblValue& key) const {
     if (count == 0 || capacity == 0) return false;
     auto* e = tableFindEntry(buckets, capacity, key);
-    return e && e->occupied && !e->tombstone;
+    return e && e->isOccupied();
 }
 
 bool BblTable::del(const BblValue& key) {
     if (count == 0 || capacity == 0) return false;
     auto* e = tableFindEntry(buckets, capacity, key);
-    if (!e || !e->occupied || e->tombstone) return false;
-    e->tombstone = true;
-    e->key = BblValue::makeNull();
+    if (!e || !e->isOccupied()) return false;
+    e->key.bits = BblTable::TOMBSTONE_KEY;
     e->val = BblValue::makeNull();
     count--;
     if (order) {
@@ -671,7 +669,7 @@ static void gcMark(BblValue& val) {
                 val.tableVal()->marked = true;
                 for (uint32_t i = 0; i < val.tableVal()->capacity; i++) {
                     auto& e = val.tableVal()->buckets[i];
-                    if (e.occupied && !e.tombstone) {
+                    if (e.isOccupied()) {
                         BblValue km = e.key;
                         BblValue vm = e.val;
                         gcMark(km);

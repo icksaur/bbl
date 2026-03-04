@@ -297,19 +297,27 @@ struct BblTable : GcObj {
     struct Entry {
         BblValue key;
         BblValue val;
-        bool occupied = false;
-        bool tombstone = false;
+        bool isEmpty() const { return key.bits == EMPTY_KEY; }
+        bool isTombstone() const { return key.bits == TOMBSTONE_KEY; }
+        bool isOccupied() const { return !isEmpty() && !isTombstone(); }
     };
+    static constexpr uint64_t EMPTY_KEY = 0;
+    static constexpr uint64_t TOMBSTONE_KEY = 1;
 
     Entry* buckets = nullptr;
     uint32_t capacity = 0;
     uint32_t count = 0;
     int64_t nextIntKey = 0;
     std::vector<BblValue>* order = nullptr;
-    Entry inlineBuckets[2];
+    Entry inlineBuckets[4];
 
-    ~BblTable() { if (buckets != inlineBuckets) delete[] buckets; delete order; }
-    BblTable() { gcType = GcType::Table; buckets = inlineBuckets; capacity = 2; }
+    ~BblTable() { if (buckets != inlineBuckets) free(buckets); delete order; }
+    BblTable() {
+        gcType = GcType::Table;
+        buckets = inlineBuckets;
+        capacity = 4;
+        memset(inlineBuckets, 0, sizeof(inlineBuckets));
+    }
     BblTable(const BblTable&) = delete;
     BblTable& operator=(const BblTable&) = delete;
 
