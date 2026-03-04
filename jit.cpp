@@ -161,7 +161,20 @@ void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, 
 }
 
 void jitTable(BblValue* regs, BblState* state, uint8_t destReg, uint8_t pairCount) {
-    BblTable* tbl = state->allocTable();
+    BblTable* tbl;
+    if (regs[destReg].type() == BBL::Type::Table) {
+        tbl = regs[destReg].tableVal();
+        if (tbl->buckets == tbl->inlineBuckets && pairCount <= 3) {
+            tbl->count = 0;
+            tbl->nextIntKey = 0;
+            memset(tbl->inlineBuckets, 0, sizeof(tbl->inlineBuckets));
+            if (tbl->order) tbl->order->clear();
+        } else {
+            tbl = state->allocTable();
+        }
+    } else {
+        tbl = state->allocTable();
+    }
     for (int i = 0; i < pairCount; i++)
         tbl->set(regs[destReg + 1 + i*2], regs[destReg + 2 + i*2]);
     regs[destReg] = BblValue::makeTable(tbl);
