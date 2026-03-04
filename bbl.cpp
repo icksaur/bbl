@@ -2854,13 +2854,13 @@ void BblState::execfile(const std::string& path) {
 
 bool BblState::has(const std::string& name) const {
     uint32_t id = resolveSymbol(name);
-    return rootScope.bindings->count(id) > 0;
+    return vm->globals.count(id) > 0;
 }
 
 std::expected<BBL::Type, BBL::GetError> BblState::getType(const std::string& name) const {
     uint32_t id = resolveSymbol(name);
-    auto it = rootScope.bindings->find(id);
-    if (it == rootScope.bindings->end()) {
+    auto it = vm->globals.find(id);
+    if (it == vm->globals.end()) {
         return std::unexpected(BBL::GetError::NotFound);
     }
     return it->second.type();
@@ -2868,12 +2868,8 @@ std::expected<BBL::Type, BBL::GetError> BblState::getType(const std::string& nam
 
 std::expected<BblValue, BBL::GetError> BblState::get(const std::string& name) const {
     uint32_t id = resolveSymbol(name);
-    if (vm) {
-        auto git = vm->globals.find(id);
-        if (git != vm->globals.end()) return git->second;
-    }
-    auto it = rootScope.bindings->find(id);
-    if (it == rootScope.bindings->end()) {
+    auto it = vm->globals.find(id);
+    if (it == vm->globals.end()) {
         return std::unexpected(BBL::GetError::NotFound);
     }
     return it->second;
@@ -2924,24 +2920,24 @@ std::expected<BblBinary*, BBL::GetError> BblState::getBinary(const std::string& 
 // ---------- Setters ----------
 
 void BblState::setInt(const std::string& name, int64_t val) {
-    rootScope.def(resolveSymbol(name), BblValue::makeInt(val));
+    vm->globals[resolveSymbol(name)] = BblValue::makeInt(val);
 }
 
 void BblState::setFloat(const std::string& name, double val) {
-    rootScope.def(resolveSymbol(name), BblValue::makeFloat(val));
+    vm->globals[resolveSymbol(name)] = BblValue::makeFloat(val);
 }
 
 void BblState::setString(const std::string& name, const char* str) {
-    rootScope.def(resolveSymbol(name), BblValue::makeString(intern(str)));
+    vm->globals[resolveSymbol(name)] = BblValue::makeString(intern(str));
 }
 
 void BblState::set(const std::string& name, BblValue val) {
-    rootScope.def(resolveSymbol(name), val);
+    vm->globals[resolveSymbol(name)] = val;
 }
 
 void BblState::setBinary(const std::string& name, const uint8_t* ptr, size_t size) {
     std::vector<uint8_t> data(ptr, ptr + size);
-    rootScope.def(resolveSymbol(name), BblValue::makeBinary(allocBinary(std::move(data))));
+    vm->globals[resolveSymbol(name)] = BblValue::makeBinary(allocBinary(std::move(data)));
 }
 
 void BblState::pushUserData(const std::string& typeName, void* ptr) {
@@ -2952,7 +2948,7 @@ void BblState::pushUserData(const std::string& typeName, void* ptr) {
 // ---------- C function registration ----------
 
 void BblState::defn(const std::string& name, BblCFunction fn) {
-    rootScope.def(resolveSymbol(name), BblValue::makeCFn(fn));
+    vm->globals[resolveSymbol(name)] = BblValue::makeCFn(fn);
 }
 
 // ---------- C function args ----------

@@ -73,14 +73,11 @@ static std::string jitValToStr(BblState& state, const BblValue& v);
 void jitGetGlobal(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg) {
     auto it = state->vm->globals.find(symId);
     if (it != state->vm->globals.end()) { regs[destReg] = it->second; return; }
-    auto* val = state->rootScope.lookup(symId);
-    if (val) { regs[destReg] = *val; return; }
     JIT_ERROR(state, "undefined variable");
 }
 
 void jitSetGlobal(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg) {
     state->vm->globals[symId] = regs[srcReg];
-    state->rootScope.def(symId, regs[srcReg]);
 }
 
 void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
@@ -467,11 +464,7 @@ void jitSetIndex(BblValue* regs, BblState* state, uint32_t packed, uint32_t unus
 void jitExec(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
     JIT_TRY
     if (regs[srcReg].type() != BBL::Type::String) JIT_ERROR(state, "exec: argument must be string");
-    BblLexer lexer(regs[srcReg].stringVal()->data.c_str());
-    auto nodes = parse(lexer);
-    BblValue result = BblValue::makeNull();
-    for (auto& n : nodes) result = state->eval(n, state->rootScope);
-    regs[destReg] = result;
+    regs[destReg] = state->execExpr(regs[srcReg].stringVal()->data);
     JIT_CATCH
 }
 

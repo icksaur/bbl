@@ -218,8 +218,6 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
             uint32_t symId = static_cast<uint32_t>(K(Bx).intVal());
             auto it = state.vm->globals.find(symId);
             if (it != state.vm->globals.end()) { R(A) = it->second; break; }
-            auto* val = state.rootScope.lookup(symId);
-            if (val) { R(A) = *val; break; }
             for (auto& [name, id] : state.symbolIds)
                 if (id == symId) throw BBL::Error{"undefined variable: " + name};
             throw BBL::Error{"undefined variable"};
@@ -227,7 +225,6 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
         case OP_SETGLOBAL: {
             uint32_t symId = static_cast<uint32_t>(K(Bx).intVal());
             state.vm->globals[symId] = R(A);
-            state.rootScope.def(symId, R(A));
             break;
         }
         case OP_GETCAPTURE:
@@ -608,9 +605,7 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
             if (R(B).type() != BBL::Type::String) throw BBL::Error{"exec: argument must be string"};
             BblLexer lexer(R(B).stringVal()->data.c_str());
             auto nodes = parse(lexer);
-            BblValue result = BblValue::makeNull();
-            for (auto& n : nodes) result = state.eval(n, state.rootScope);
-            R(A) = result;
+            R(A) = state.execExpr(R(B).stringVal()->data);
             break;
         }
 
