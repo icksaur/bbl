@@ -1287,6 +1287,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                     it->second.isClosure() &&
                     it->second.closureVal() == self) {
                     selfRefRegs.insert(A);
+                    break;
                 }
             }
             emitCallHelper2(jit.buf, jit.size, (void*)jitGetGlobal, symId, A, &errorExitPatches);
@@ -1299,22 +1300,22 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         }
         case OP_CALL: {
             if (selfRefRegs.count(A)) {
-                // Native self-recursive call through full prologue
-                // lea rdi, [rbx + A*16]
+                // Fast self-recursive call: r12/r13 already hold state/chunk
+                // lea rdi, [rbx + A*8]
                 uint8_t lea[] = { 0x48, 0x8d, 0xbb };
                 emit(jit.buf, jit.size, lea, 3);
                 emit32(jit.buf, jit.size, A * VAL_SIZE);
-                // mov rsi, r12 (state)
+                // mov rsi, r12 (state — needed for prologue)
                 uint8_t movsi[] = { 0x4c, 0x89, 0xe6 };
                 emit(jit.buf, jit.size, movsi, 3);
-                // mov rdx, r13 (chunk)
+                // mov rdx, r13 (chunk — needed for prologue)
                 uint8_t movdx[] = { 0x4c, 0x89, 0xea };
                 emit(jit.buf, jit.size, movdx, 3);
-                // call rel32 → function entry (offset 0)
+                // call rel32 → function entry (full prologue)
                 emit8(jit.buf, jit.size, 0xe8);
                 selfCallPatches.push_back(jit.size);
                 emit32(jit.buf, jit.size, 0);
-                // result in rax (NaN-boxed BblValue)
+                // result in rax → R[A]
                 uint8_t st1[] = { 0x48, 0x89, 0x83 };
                 emit(jit.buf, jit.size, st1, 3);
                 emit32(jit.buf, jit.size, A * VAL_SIZE);
