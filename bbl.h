@@ -486,6 +486,44 @@ struct BblStateHandle {
     std::optional<std::string> childError;
 };
 
+template<typename T, size_t SLAB_COUNT = 256>
+struct SlabAllocator {
+    struct Slab {
+        alignas(T) char storage[sizeof(T) * SLAB_COUNT];
+        size_t used = 0;
+    };
+    std::vector<std::unique_ptr<Slab>> slabs;
+    std::vector<T*> freeList;
+
+    T* alloc() {
+        if (!freeList.empty()) {
+            T* p = freeList.back();
+            freeList.pop_back();
+            return new(p) T();
+        }
+        if (slabs.empty() || slabs.back()->used >= SLAB_COUNT)
+            slabs.push_back(std::make_unique<Slab>());
+        auto& slab = *slabs.back();
+        T* p = reinterpret_cast<T*>(slab.storage + sizeof(T) * slab.used);
+        slab.used++;
+        return new(p) T();
+    }
+
+    void free(T* p) {
+        p->~T();
+        freeList.push_back(p);
+    }
+
+    ~SlabAllocator() {
+        for (auto& slab : slabs) {
+            for (size_t i = 0; i < slab->used; i++) {
+                auto* p = reinterpret_cast<T*>(slab->storage + sizeof(T) * i);
+                (void)p;
+            }
+        }
+    }
+};
+
 struct BblState {
     std::unordered_map<std::string, BblString*> internTable;
     std::vector<BblString*> allocatedStrings;
@@ -494,7 +532,7 @@ struct BblState {
     std::vector<BblStruct*> allocatedStructs;
     std::vector<BblVec*> allocatedVectors;
     std::vector<BblTable*> allocatedTables;
-    std::vector<BblTable*> freeTablePool;
+    SlabAllocator<BblTable> tableSlab;
     std::vector<BblUserData*> allocatedUserDatas;
     std::vector<BblClosure*> allocatedClosures;
     std::unique_ptr<VmState> vm;

@@ -635,11 +635,9 @@ BblState::~BblState() {
         delete v;
     }
     for (auto* t : allocatedTables) {
-        delete t;
+        t->~BblTable();
     }
-    for (auto* t : freeTablePool) {
-        delete t;
-    }
+    // tableSlab owns the memory, no delete needed
     for (auto* u : allocatedUserDatas) {
         if (u->desc && u->desc->destructor && u->data) {
             u->desc->destructor(u->data);
@@ -699,21 +697,7 @@ BblVec* BblState::allocVector(const std::string& elemType, BBL::Type elemTypeTag
 }
 
 BblTable* BblState::allocTable() {
-    BblTable* t;
-    if (!freeTablePool.empty()) {
-        t = freeTablePool.back();
-        freeTablePool.pop_back();
-        t->count = 0;
-        t->nextIntKey = 0;
-        t->marked = false;
-        t->order.clear();
-        t->useInline = true;
-        t->isSequential = true;
-        t->arrayPart.clear();
-        // Don't clear buckets — they'll only be used when useInline becomes false
-    } else {
-        t = new BblTable{};
-    }
+    BblTable* t = tableSlab.alloc();
     allocatedTables.push_back(t);
     allocCount++;
     return t;
@@ -849,12 +833,12 @@ void BblState::gc() {
     });
     sweepPool(allocatedStructs, noop);
     sweepPool(allocatedVectors, noop);
-    // Tables: recycle dead ones into free pool instead of deleting
+    // Tables: recycle dead ones via slab allocator
     {
         auto mid = std::partition(allocatedTables.begin(), allocatedTables.end(),
                                    [](BblTable* obj) { return obj->marked; });
         for (auto it = mid; it != allocatedTables.end(); ++it) {
-            freeTablePool.push_back(*it);
+            tableSlab.free(*it);
         }
         allocatedTables.erase(mid, allocatedTables.end());
         for (auto* obj : allocatedTables) obj->marked = false;
