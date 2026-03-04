@@ -103,8 +103,7 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
         regs[base] = fn(&regs[base], state, &closure->chunk);
         if (g_jitError) return;
     } else if (callee.type() == BBL::Type::Fn) {
-        BblFn* fn = callee.fnVal();
-        regs[base] = state->callFn(fn, &regs[base + 1], argc, 0);
+        JIT_ERROR(state, "raw BblFn calls not supported in JIT mode");
     } else {
         JIT_ERROR(state, "not callable");
     }

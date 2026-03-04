@@ -320,22 +320,6 @@ struct BblTable {
     bool del(const BblValue& key);
 };
 
-struct BblScope {
-    std::unique_ptr<std::unordered_map<uint32_t, BblValue>> bindings;
-    BblScope* parent = nullptr;
-
-    // Flat mode for function call scopes
-    std::vector<BblValue> slots;
-    const std::unordered_map<uint32_t, size_t>* slotMap = nullptr;
-
-    BblScope() = default;
-    explicit BblScope(BblScope* p) : parent(p) {}
-
-    void def(uint32_t id, BblValue val);
-    void set(uint32_t id, BblValue val);
-    BblValue* lookup(uint32_t id);
-};
-
 struct BblFn {
     std::vector<std::string> params;
     std::vector<uint32_t> paramIds;
@@ -445,7 +429,7 @@ struct AstNode {
     std::vector<AstNode> children;
     int line = 1;
     mutable uint32_t symbolId = 0;                // lazy-resolved symbol ID for Symbol nodes
-    mutable int8_t cachedSpecialForm = -1;        // lazy-resolved SpecialForm for List head symbols
+
     mutable bool isTailCall = false;               // marked for tail-call optimization
 };
 
@@ -502,7 +486,6 @@ struct BblStateHandle {
 };
 
 struct BblState {
-    BblScope rootScope;
     std::unordered_map<std::string, BblString*> internTable;
     std::vector<BblString*> allocatedStrings;
     std::vector<BblBinary*> allocatedBinaries;
@@ -525,7 +508,6 @@ struct BblState {
     size_t savedGcThreshold = 0;
     void pauseGC() { savedGcThreshold = gcThreshold; gcThreshold = SIZE_MAX; }
     void resumeGC() { gcThreshold = savedGcThreshold; }
-    std::vector<BblScope*> activeScopes;
 
     std::string jitError;
     bool jitHasError = false;
@@ -537,21 +519,12 @@ struct BblState {
 
     // Backtrace
     std::vector<Frame> callStack;
-    size_t maxCallDepth = 512;
     size_t maxSteps = 0;  // 0 = unlimited
     size_t stepCount = 0;
     BblFn* currentFn = nullptr;
     std::string currentFile;
     std::string scriptDir;
     bool allowOpenFilesystem = false;
-    bool useBytecode = true;
-    bool useJit = true;
-
-    // Flow control (break/continue state flag)
-    static constexpr uint8_t FlowNone = 0;
-    static constexpr uint8_t FlowBreak = 1;
-    static constexpr uint8_t FlowContinue = 2;
-    uint8_t flowSignal = FlowNone;
 
     // Pre-interned method name cache for O(1) dispatch
     struct MethodNames {
@@ -690,21 +663,6 @@ struct BblState {
     void set(const std::string& name, BblValue val);
     void setBinary(const std::string& name, const uint8_t* ptr, size_t size);
     void pushUserData(const std::string& typeName, void* ptr);
-
-    // Eval
-    BblValue eval(const AstNode& node, BblScope& scope);
-    BblValue evalList(const AstNode& node, BblScope& scope);
-    BblValue callFn(BblFn* fn, const BblValue* args, size_t argc, int callLine);
-
-    // Method dispatch (extracted from evalList)
-    BblValue evalBinaryMethod(BblBinary* bin, const std::string& method,
-                               const AstNode& node, BblScope& scope);
-    BblValue evalVectorMethod(BblVec* vec, const std::string& method,
-                              const AstNode& node, BblScope& scope);
-    BblValue evalStringMethod(BblString* strObj, const std::string& method,
-                              const BblValue& obj, const AstNode& node, BblScope& scope);
-    BblValue evalTableMethod(BblTable* tbl, const std::string& method,
-                             const AstNode& node, BblScope& scope);
 
     void printBacktrace(const std::string& what);
 };

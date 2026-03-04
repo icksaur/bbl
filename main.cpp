@@ -137,7 +137,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // First pass: handle -v/-h/--bytecode early
+    // First pass: handle -v/-h early
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-v") == 0) {
             printVersion();
@@ -146,16 +146,6 @@ int main(int argc, char* argv[]) {
         if (strcmp(argv[i], "-h") == 0) {
             printUsage();
             return 0;
-        }
-        if (strcmp(argv[i], "--bytecode") == 0) {
-            bbl.useBytecode = true;
-        }
-        if (strcmp(argv[i], "--jit") == 0) {
-            bbl.useBytecode = true;
-            bbl.useJit = true;
-        }
-        if (strcmp(argv[i], "--tree-walk") == 0) {
-            bbl.useBytecode = false;
         }
     }
 
@@ -168,7 +158,6 @@ int main(int argc, char* argv[]) {
     if (hasExecFlag) {
         // Process all -e flags in the same environment
         for (int i = 1; i < argc; i++) {
-            if (strcmp(argv[i], "--bytecode") == 0 || strcmp(argv[i], "--tree-walk") == 0 || strcmp(argv[i], "--jit") == 0) continue;
             if (strcmp(argv[i], "-e") == 0) {
                 if (i + 1 >= argc) {
                     fprintf(stderr, "bbl: -e requires an argument\n");
@@ -189,7 +178,6 @@ int main(int argc, char* argv[]) {
     // Script file mode
     const char* scriptFile = nullptr;
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--bytecode") == 0 || strcmp(argv[i], "--tree-walk") == 0 || strcmp(argv[i], "--jit") == 0) continue;
         scriptFile = argv[i];
         break;
     }

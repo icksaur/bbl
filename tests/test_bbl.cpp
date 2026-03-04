@@ -4699,7 +4699,7 @@ TEST(test_tco_rebinding) {
 // ========== Bytecode VM Tests ==========
 
 TEST(test_bc_literals) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("42").intVal(), (int64_t)42);
     ASSERT_NEAR(bbl.execExpr("3.14").floatVal(), 3.14, 0.001);
     ASSERT_EQ(bbl.execExpr("true").boolVal(), true);
@@ -4708,7 +4708,7 @@ TEST(test_bc_literals) {
 }
 
 TEST(test_bc_arithmetic) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(+ 1 2)").intVal(), (int64_t)3);
     ASSERT_EQ(bbl.execExpr("(- 10 3)").intVal(), (int64_t)7);
     ASSERT_EQ(bbl.execExpr("(* 4 5)").intVal(), (int64_t)20);
@@ -4718,13 +4718,13 @@ TEST(test_bc_arithmetic) {
 }
 
 TEST(test_bc_variadic_add) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(+ 1 2 3)").intVal(), (int64_t)6);
     ASSERT_EQ(bbl.execExpr("(+ 1 2 3 4 5)").intVal(), (int64_t)15);
 }
 
 TEST(test_bc_string_concat) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     auto v1 = bbl.execExpr("(+ \"a\" \"b\")");
     ASSERT_EQ(std::string(v1.stringVal()->data), std::string("ab"));
     auto v2 = bbl.execExpr("(+ \"hello\" \" \" \"world\")");
@@ -4732,7 +4732,7 @@ TEST(test_bc_string_concat) {
 }
 
 TEST(test_bc_comparison) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_TRUE(bbl.execExpr("(< 1 2)").boolVal());
     ASSERT_FALSE(bbl.execExpr("(> 1 2)").boolVal());
     ASSERT_TRUE(bbl.execExpr("(== 42 42)").boolVal());
@@ -4740,102 +4740,102 @@ TEST(test_bc_comparison) {
 }
 
 TEST(test_bc_logic) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_TRUE(bbl.execExpr("(not false)").boolVal());
     ASSERT_FALSE(bbl.execExpr("(not true)").boolVal());
 }
 
 TEST(test_bc_variables) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(= x 42) x").intVal(), (int64_t)42);
     ASSERT_EQ(bbl.execExpr("(= x 1) (= x 2) x").intVal(), (int64_t)2);
 }
 
 TEST(test_bc_if) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(if true 1 2)").intVal(), (int64_t)1);
     ASSERT_EQ(bbl.execExpr("(if false 1 2)").intVal(), (int64_t)2);
 }
 
 TEST(test_bc_loop) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(= s 0) (= i 0) (loop (< i 5) (do (= s (+ s i)) (= i (+ i 1)))) s").intVal(), (int64_t)10);
 }
 
 TEST(test_bc_break_continue) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(= s 0) (= i 0) (loop (< i 10) (do (if (== i 5) (break)) (= s (+ s 1)) (= i (+ i 1)))) s").intVal(), (int64_t)5);
 }
 
 TEST(test_bc_do_block) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(do 1 2 3)").intVal(), (int64_t)3);
     ASSERT_EQ(bbl.execExpr("(do)").type(), BBL::Type::Null);
 }
 
 TEST(test_bc_fn_call) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(= f (fn (x) (+ x 1))) (f 10)").intVal(), (int64_t)11);
 }
 
 TEST(test_bc_closure) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(= make (fn (x) (fn () x))) (= g (make 42)) (g)").intVal(), (int64_t)42);
 }
 
 TEST(test_bc_recursion) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(= fib (fn (n) (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2)))))) (fib 10)").intVal(), (int64_t)55);
 }
 
 TEST(test_bc_cfn_call) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     auto v = bbl.execExpr("(typeof 42)");
     ASSERT_EQ(std::string(v.stringVal()->data), std::string("int"));
 }
 
 TEST(test_bc_multi_arg_fn) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(= f (fn (a b c) (+ a (+ b c)))) (f 1 2 3)").intVal(), (int64_t)6);
 }
 
 TEST(test_bc_and_or) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(and true false)").boolVal(), false);
     ASSERT_EQ(bbl.execExpr("(or false 42)").intVal(), (int64_t)42);
 }
 
 TEST(test_bc_bitwise) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(band 255 15)").intVal(), (int64_t)15);
     ASSERT_EQ(bbl.execExpr("(shl 1 4)").intVal(), (int64_t)16);
 }
 
 TEST(test_bc_vector) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     bbl.exec("(= v (vector int 1 2 3))");
     ASSERT_EQ(bbl.execExpr("(v:length)").intVal(), (int64_t)3);
 }
 
 TEST(test_bc_table) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     bbl.exec("(= t (table \"x\" 1 \"y\" 2))");
     ASSERT_EQ(bbl.execExpr("(t:get \"x\")").intVal(), (int64_t)1);
 }
 
 TEST(test_bc_dot_access) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     bbl.exec("(= t (table \"x\" 42))");
     ASSERT_EQ(bbl.execExpr("t.x").intVal(), (int64_t)42);
 }
 
 TEST(test_bc_method_call) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(= s \"hello\") (s:length)").intVal(), (int64_t)5);
 }
 
 TEST(test_bc_each) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     try {
         bbl.exec("(= s 0) (= v (vector int 1 2 3)) (each x v (= s (+ s x)))");
         ASSERT_EQ(bbl.execExpr("s").intVal(), (int64_t)6);
@@ -4846,7 +4846,7 @@ TEST(test_bc_each) {
 }
 
 TEST(test_bc_nested_fn) {
-    BblState bbl; BBL::addPrint(bbl); bbl.useBytecode = true;
+    BblState bbl; BBL::addPrint(bbl);
     ASSERT_EQ(bbl.execExpr("(= adder (fn (x) (fn (y) (+ x y)))) (= add5 (adder 5)) (add5 10)").intVal(), (int64_t)15);
 }
 

@@ -244,7 +244,7 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
             frame->ip -= sBx;
 
             // Tracing JIT: record and compile hot loops
-            if (state.useJit && !frame->chunk->traceCompiled) {
+            if (!frame->chunk->traceCompiled) {
                 frame->chunk->hotCount++;
                 if (frame->chunk->hotCount >= 64) {
                     Trace trace = recordTrace(state, *frame->chunk, loopPc, frame->regs);
@@ -685,11 +685,7 @@ static bool callValue(BblState& state, CallFrame*& frame, uint8_t base, uint8_t 
             frame = newFrame;
             return true;
         }
-        // Tree-walker BblFn
-        BblFn* fn = callee.fnVal();
-        BblValue result = state.callFn(fn, &frame->regs[base + 1], static_cast<size_t>(argc), 0);
-        frame->regs[destInCaller] = result;
-        return true;
+        throw BBL::Error{"raw BblFn calls not supported in JIT mode"};
     }
     return false;
 }
