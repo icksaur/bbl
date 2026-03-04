@@ -40,6 +40,7 @@ extern "C" {
     void jitSizeof(BblValue* regs, BblState* state, Chunk* chunk, uint8_t A, uint8_t constIdx);
     void jitExecFile(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
     void jitBitwise(BblValue* regs, BblState* state, uint8_t A, uint32_t packed);
+    void jitStoreError(BblValue* regs, BblState* state, uint8_t destReg, uint8_t unused);
 }
 
 static thread_local bool g_jitError = false;
@@ -477,6 +478,13 @@ void jitExecFile(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcRe
     state->execfile(regs[srcReg].stringVal()->data);
     regs[destReg] = BblValue::makeNull();
     JIT_CATCH
+}
+
+void jitStoreError(BblValue* regs, BblState* state, uint8_t destReg, uint8_t unused) {
+    (void)unused;
+    regs[destReg] = BblValue::makeString(state->intern(g_jitErrorMsg));
+    g_jitError = false;
+    g_jitErrorMsg.clear();
 }
 
 static std::string jitValToStr(BblState& state, const BblValue& v) {
@@ -1004,6 +1012,11 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     std::vector<size_t> selfCallPatches;
     std::vector<size_t> errorExitPatches;
 
+    struct TryInfo { int catchTarget; std::vector<size_t> outerPatches; uint8_t destReg; };
+    std::vector<TryInfo> tryStack;
+    struct TryCatchPatch { size_t patchOffset; size_t catchInst; uint8_t destReg; };
+    std::vector<TryCatchPatch> tryCatchPatches;
+
     for (size_t i = 0; i < chunk.code.size(); i++) {
         nativeOffsets[i] = jit.size;
         uint32_t inst = chunk.code[i];
@@ -1451,8 +1464,23 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         case OP_SHR:
             emitCallHelper2(jit.buf, jit.size, (void*)jitBitwise, A, static_cast<uint32_t>((5<<16)|(B<<8)|C), &errorExitPatches);
             break;
-        case OP_TRYBEGIN:
-        case OP_TRYEND:
+        case OP_TRYBEGIN: {
+            int catchTarget = static_cast<int>(i) + 1 + sBx;
+            tryStack.push_back({catchTarget, std::move(errorExitPatches), A});
+            errorExitPatches.clear();
+            break;
+        }
+        case OP_TRYEND: {
+            if (!tryStack.empty()) {
+                auto info = std::move(tryStack.back());
+                tryStack.pop_back();
+                for (size_t p : errorExitPatches) {
+                    tryCatchPatches.push_back({p, static_cast<size_t>(info.catchTarget), info.destReg});
+                }
+                errorExitPatches = std::move(info.outerPatches);
+            }
+            break;
+        }
         default:
             emitLoadNull(jit.buf, jit.size, A);
             emitReturn(jit.buf, jit.size, A);
@@ -1472,6 +1500,20 @@ done_compile:
 
     for (size_t p : selfCallPatches) {
         patchRel32(jit.buf, p, 0);
+    }
+
+    // Try/catch: emit catch entry stubs that call jitStoreError, then jump to catch bytecode
+    for (auto& tc : tryCatchPatches) {
+        size_t catchStub = jit.size;
+        emitCallHelper2(jit.buf, jit.size, (void*)jitStoreError, tc.destReg, 0);
+        // Jump to the catch block's compiled code
+        if (tc.catchInst < nativeOffsets.size() && nativeOffsets[tc.catchInst] != 0) {
+            emit8(jit.buf, jit.size, 0xe9);
+            size_t jmpPos = jit.size;
+            emit32(jit.buf, jit.size, 0);
+            patchRel32(jit.buf, jmpPos, nativeOffsets[tc.catchInst]);
+        }
+        patchRel32(jit.buf, tc.patchOffset, catchStub);
     }
 
     // Error exit: load NaN-boxed null into rax, epilogue

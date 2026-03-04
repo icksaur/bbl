@@ -536,20 +536,28 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "try") {
-        if (node.children.size() < 4) throw BBL::Error{"'try' requires body and catch"};
+        if (node.children.size() < 3) throw BBL::Error{"'try' requires body and catch"};
+        auto& catchNode = node.children.back();
+        if (catchNode.type != NodeType::List || catchNode.children.empty() ||
+            catchNode.children[0].type != NodeType::Symbol ||
+            catchNode.children[0].stringVal != "catch" ||
+            catchNode.children.size() < 3)
+            throw BBL::Error{"try: last argument must be (catch var handler)"};
+
         int tryJump = emitJump(cs, OP_TRYBEGIN, dest, node.line);
-        compileExpr(state, cs, node.children[1], dest);
+        for (size_t i = 1; i < node.children.size() - 1; i++)
+            compileExpr(state, cs, node.children[i], dest);
         cs.chunk.emitABC(OP_TRYEND, 0, 0, 0, node.line);
         int endJump = emitJump(cs, OP_JMP, 0, node.line);
         patchJump(cs, tryJump);
 
-        uint32_t catchSym = state.resolveSymbol(node.children[2].stringVal);
+        uint32_t catchSym = state.resolveSymbol(catchNode.children[1].stringVal);
         uint8_t catchReg = cs.allocReg();
         cs.localRegs[catchSym] = catchReg;
-        // Error value will be placed in dest by the VM, move to catchReg
         if (catchReg != dest) cs.chunk.emitABC(OP_MOVE, catchReg, dest, 0, node.line);
 
-        compileExpr(state, cs, node.children[3], dest);
+        for (size_t i = 2; i < catchNode.children.size(); i++)
+            compileExpr(state, cs, catchNode.children[i], dest);
         patchJump(cs, endJump);
         return dest;
     }
