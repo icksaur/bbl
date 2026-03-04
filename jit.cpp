@@ -563,7 +563,11 @@ void jitArith(BblValue* regs, BblState* state, uint8_t A, uint32_t packed) {
         if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
             regs[A] = BblValue::makeInt(rb.intVal() + rc.intVal());
         else if (rb.type() == BBL::Type::String) {
-            regs[A] = BblValue::makeString(state->allocString(rb.stringVal()->data + jitValToStr(*state, rc)));
+            if (A == B && !rb.stringVal()->interned) {
+                rb.stringVal()->data += jitValToStr(*state, rc);
+            } else {
+                regs[A] = BblValue::makeString(state->allocString(rb.stringVal()->data + jitValToStr(*state, rc)));
+            }
         } else if (isNum(rb) && isNum(rc))
             regs[A] = BblValue::makeFloat(toF(rb) + toF(rc));
         else

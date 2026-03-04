@@ -70,6 +70,7 @@ typedef int (*BblCFunction)(BblState* bbl);
 struct BblString {
     std::string data;
     bool marked = false;
+    bool interned = false;
 };
 
 enum class ObjKind : uint8_t { Table, Vector, Struct, Binary, UserData };

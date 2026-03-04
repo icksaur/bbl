@@ -656,7 +656,7 @@ BblString* BblState::intern(const std::string& s) {
     if (it != internTable.end()) {
         return it->second;
     }
-    auto* str = new BblString{s};
+    auto* str = new BblString{s, false, true};
     allocatedStrings.push_back(str);
     internTable[str->data] = str;
     allocCount++;
