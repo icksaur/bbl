@@ -95,8 +95,14 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
         BblClosure* closure = callee.closureVal();
 
         if (!closure->jitCache) {
-            JitCode* cached = new JitCode(jitCompile(*state, closure->chunk, closure));
-            closure->jitCache = cached;
+            BblClosure* proto = closure->jitProto ? closure->jitProto : closure;
+            if (proto->jitCache) {
+                closure->jitCache = proto->jitCache;
+            } else {
+                JitCode* cached = new JitCode(jitCompile(*state, closure->chunk, closure));
+                proto->jitCache = cached;
+                closure->jitCache = cached;
+            }
         }
         typedef BblValue (*JitFn)(BblValue*, BblState*, Chunk*);
         JitFn fn = reinterpret_cast<JitFn>(closure->jitCache->buf);
@@ -138,6 +144,7 @@ void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, 
     closure->name = proto->name;
     closure->captureDescs = proto->captureDescs;
     closure->captures.resize(proto->captureDescs.size());
+    closure->jitProto = proto;
     closure->gcNext = state->gcHead; state->gcHead = closure;
 
     for (size_t i = 0; i < proto->captureDescs.size(); i++) {

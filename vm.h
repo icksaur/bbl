@@ -16,6 +16,7 @@ struct BblClosure : GcObj {
     std::vector<BblValue> captures;
     std::vector<CaptureInfo> captureDescs;
     JitCode* jitCache = nullptr;
+    BblClosure* jitProto = nullptr;
     BblClosure() { gcType = GcType::Closure; }
 };
 
