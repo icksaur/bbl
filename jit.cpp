@@ -41,6 +41,7 @@ extern "C" {
     void jitExecFile(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
     void jitBitwise(BblValue* regs, BblState* state, uint8_t A, uint32_t packed);
     void jitStoreError(BblValue* regs, BblState* state, uint8_t destReg, uint8_t unused);
+    void jitWithCleanup(BblValue* regs, BblState* state, uint8_t varReg, uint8_t unused);
 }
 
 static thread_local bool g_jitError = false;
@@ -529,6 +530,17 @@ void jitStoreError(BblValue* regs, BblState* state, uint8_t destReg, uint8_t unu
     regs[destReg] = BblValue::makeString(state->intern(g_jitErrorMsg));
     g_jitError = false;
     g_jitErrorMsg.clear();
+}
+
+void jitWithCleanup(BblValue* regs, BblState* state, uint8_t varReg, uint8_t unused) {
+    (void)unused; (void)state;
+    BblValue& val = regs[varReg];
+    if (val.type() == BBL::Type::UserData && val.userdataVal()->desc &&
+        val.userdataVal()->desc->destructor && val.userdataVal()->data) {
+        val.userdataVal()->desc->destructor(val.userdataVal()->data);
+        val.userdataVal()->data = nullptr;
+    }
+    val = BblValue::makeNull();
 }
 
 static std::string jitValToStr(BblState& state, const BblValue& v) {

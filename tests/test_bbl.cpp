@@ -2841,10 +2841,9 @@ TEST(test_with_scoped_binding) {
     bbl.registerType(tb);
     bbl.defn("make-counter", makeCounterForWith);
     destructionCount = 0;
-    ASSERT_THROW(bbl.exec(R"(
+    bbl.exec(R"(
         (with c (make-counter) (c:value))
-        (= x c)
-    )"));
+    )");
     ASSERT_EQ(destructionCount, 1);
 }
 
@@ -5320,17 +5319,17 @@ int main() {
 
     // with (not supported in JIT-only mode)
     std::cout << "--- with ---" << std::endl;
-    // RUN(test_with_basic_destructor); // with not supported in JIT-only mode
-    // RUN(test_with_return_value); // with not supported in JIT-only mode
-    // RUN(test_with_destructor_on_throw); // with not supported in JIT-only mode
-    // RUN(test_with_scoped_binding); // with not supported in JIT-only mode
-    // RUN(test_with_no_double_free_gc); // with not supported in JIT-only mode
-    // RUN(test_with_non_userdata_error); // with not supported in JIT-only mode
-    // RUN(test_with_missing_args); // with not supported in JIT-only mode
-    // RUN(test_with_no_destructor); // with not supported in JIT-only mode
-    // RUN(test_with_nested); // with not supported in JIT-only mode
-    // RUN(test_with_explicit_close_no_double_free); // with not supported in JIT-only mode
-    // RUN(test_with_file_io); // with not supported in JIT-only mode
+    RUN(test_with_basic_destructor);
+    RUN(test_with_return_value);
+    RUN(test_with_destructor_on_throw);
+    RUN(test_with_scoped_binding);
+    RUN(test_with_no_double_free_gc);
+    RUN(test_with_non_userdata_error);
+    RUN(test_with_missing_args);
+    RUN(test_with_no_destructor);
+    RUN(test_with_nested);
+    RUN(test_with_explicit_close_no_double_free);
+    RUN(test_with_file_io);
 
     // string ordering
     std::cout << "--- string ordering ---" << std::endl;

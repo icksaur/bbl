@@ -645,6 +645,29 @@ BblState::BblState() {
     m.upper = intern("upper"); m.lower = intern("lower"); m.trim = intern("trim");
     m.copy_from = intern("copy-from");
     m.join = intern("join");
+
+    defn("__with_cleanup", [](BblState* bbl) -> int {
+        if (bbl->callArgs.empty()) return 0;
+        BblValue& val = bbl->callArgs[0];
+        if (val.type() == BBL::Type::UserData && val.userdataVal()->desc &&
+            val.userdataVal()->desc->destructor && val.userdataVal()->data) {
+            val.userdataVal()->desc->destructor(val.userdataVal()->data);
+            val.userdataVal()->data = nullptr;
+        }
+        return 0;
+    });
+
+    defn("__with_rethrow", [](BblState* bbl) -> int {
+        if (!bbl->callArgs.empty() && bbl->callArgs[0].type() == BBL::Type::String)
+            throw BBL::Error{bbl->callArgs[0].stringVal()->data};
+        throw BBL::Error{"unknown error in with block"};
+    });
+
+    defn("__with_typecheck", [](BblState* bbl) -> int {
+        if (bbl->callArgs.empty() || bbl->callArgs[0].type() != BBL::Type::UserData)
+            throw BBL::Error{"with: initializer must produce userdata"};
+        return 0;
+    });
 }
 
 BblState::~BblState() {

@@ -535,6 +535,50 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
         return dest;
     }
 
+    if (op == "with") {
+        if (node.children.size() < 4) throw BBL::Error{"'with' requires name, initializer, and body"};
+        if (node.children[1].type != NodeType::Symbol) throw BBL::Error{"with: first argument must be a symbol"};
+        uint32_t varSym = state.resolveSymbol(node.children[1].stringVal);
+        uint8_t varReg = cs.allocReg();
+        cs.localRegs[varSym] = varReg;
+        compileInto(state, cs, node.children[2], varReg);
+
+        // Type check: must be userdata
+        uint8_t helperReg = cs.allocReg();
+        uint16_t checkSym = static_cast<uint16_t>(cs.chunk.addConstant(
+            BblValue::makeInt(static_cast<int64_t>(state.resolveSymbol("__with_typecheck")))));
+        cs.chunk.emitABx(OP_GETGLOBAL, helperReg, checkSym, node.line);
+        cs.chunk.emitABC(OP_MOVE, helperReg + 1, varReg, 0, node.line);
+        cs.chunk.emitABC(OP_CALL, helperReg, 1, 0, node.line);
+
+        int tryJump = emitJump(cs, OP_TRYBEGIN, dest, node.line);
+        for (size_t i = 3; i < node.children.size(); i++)
+            compileExpr(state, cs, node.children[i], dest);
+        cs.chunk.emitABC(OP_TRYEND, 0, 0, 0, node.line);
+
+        uint16_t cleanupSym = static_cast<uint16_t>(cs.chunk.addConstant(
+            BblValue::makeInt(static_cast<int64_t>(state.resolveSymbol("__with_cleanup")))));
+        cs.chunk.emitABx(OP_GETGLOBAL, helperReg, cleanupSym, node.line);
+        cs.chunk.emitABC(OP_MOVE, helperReg + 1, varReg, 0, node.line);
+        cs.chunk.emitABC(OP_CALL, helperReg, 1, 0, node.line);
+        int endJump = emitJump(cs, OP_JMP, 0, node.line);
+
+        // Catch: cleanup then rethrow
+        patchJump(cs, tryJump);
+        uint8_t errReg = cs.allocReg();
+        cs.chunk.emitABC(OP_MOVE, errReg, dest, 0, node.line);
+        cs.chunk.emitABx(OP_GETGLOBAL, helperReg, cleanupSym, node.line);
+        cs.chunk.emitABC(OP_MOVE, helperReg + 1, varReg, 0, node.line);
+        cs.chunk.emitABC(OP_CALL, helperReg, 1, 0, node.line);
+        uint16_t rethrowSym = static_cast<uint16_t>(cs.chunk.addConstant(
+            BblValue::makeInt(static_cast<int64_t>(state.resolveSymbol("__with_rethrow")))));
+        cs.chunk.emitABx(OP_GETGLOBAL, helperReg, rethrowSym, node.line);
+        cs.chunk.emitABC(OP_MOVE, helperReg + 1, errReg, 0, node.line);
+        cs.chunk.emitABC(OP_CALL, helperReg, 1, 0, node.line);
+        patchJump(cs, endJump);
+        return dest;
+    }
+
     if (op == "try") {
         if (node.children.size() < 3) throw BBL::Error{"'try' requires body and catch"};
         auto& catchNode = node.children.back();
