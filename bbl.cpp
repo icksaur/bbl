@@ -76,7 +76,7 @@ std::expected<BblValue, BBL::GetError> BblTable::get(const BblValue& key) const 
     if (count == 0) return std::unexpected(BBL::GetError::NotFound);
     if (isSequential && key.type() == BBL::Type::Int) {
         size_t idx = static_cast<size_t>(key.intVal());
-        if (idx < arrayPart.size()) return arrayPart[idx];
+        if (arrayPart && idx < arrayPart->size()) return (*arrayPart)[idx];
         return std::unexpected(BBL::GetError::NotFound);
     }
     if (useInline) {
@@ -90,27 +90,27 @@ std::expected<BblValue, BBL::GetError> BblTable::get(const BblValue& key) const 
 }
 
 void BblTable::set(const BblValue& key, const BblValue& val) {
-    // Array fast-path for sequential integer keys
     if (isSequential && key.type() == BBL::Type::Int) {
         int64_t idx = key.intVal();
-        if (idx >= 0 && static_cast<size_t>(idx) <= arrayPart.size()) {
-            if (static_cast<size_t>(idx) == arrayPart.size()) {
-                arrayPart.push_back(val);
+        if (!arrayPart) arrayPart = new std::vector<BblValue>();
+        if (idx >= 0 && static_cast<size_t>(idx) <= arrayPart->size()) {
+            if (static_cast<size_t>(idx) == arrayPart->size()) {
+                arrayPart->push_back(val);
                 count++;
-                order.push_back(key);
+                if (!order) order = new std::vector<BblValue>();
+                order->push_back(key);
                 nextIntKey = idx + 1;
                 return;
             }
-            arrayPart[static_cast<size_t>(idx)] = val;
+            (*arrayPart)[static_cast<size_t>(idx)] = val;
             return;
         }
         isSequential = false;
-        // Migrate array to hash
-        if (!arrayPart.empty()) {
-            for (size_t i = 0; i < arrayPart.size(); i++) {
+        if (!arrayPart->empty()) {
+            for (size_t i = 0; i < arrayPart->size(); i++) {
                 BblValue k = BblValue::makeInt(static_cast<int64_t>(i));
                 if (useInline && count < INLINE_MAX) {
-                    inlineEntries[count] = {k, arrayPart[i], true, false};
+                    inlineEntries[count] = {k, (*arrayPart)[i], true, false};
                 } else {
                     if (useInline) {
                         useInline = false;
@@ -122,10 +122,10 @@ void BblTable::set(const BblValue& key, const BblValue& val) {
                     }
                     if (capacity == 0 || count + 1 > capacity * 3 / 4) tableGrow(this);
                     auto* e = tableFindEntry(buckets, capacity, k);
-                    *e = {k, arrayPart[i], true, false};
+                    *e = {k, (*arrayPart)[i], true, false};
                 }
             }
-            arrayPart.clear();
+            arrayPart->clear();
         }
     }
 
@@ -139,11 +139,11 @@ void BblTable::set(const BblValue& key, const BblValue& val) {
         if (count < INLINE_MAX) {
             inlineEntries[count] = {key, val, true, false};
             count++;
-            order.push_back(key);
+            if (!order) order = new std::vector<BblValue>();
+            order->push_back(key);
             if (key.type() == BBL::Type::Int && key.intVal() >= nextIntKey) nextIntKey = key.intVal() + 1;
             return;
         }
-        // Overflow: migrate to hash table
         useInline = false;
         tableGrow(this);
         for (size_t i = 0; i < INLINE_MAX; i++) {
@@ -160,7 +160,8 @@ void BblTable::set(const BblValue& key, const BblValue& val) {
     e->tombstone = false;
     if (isNew) {
         count++;
-        order.push_back(key);
+        if (!order) order = new std::vector<BblValue>();
+        order->push_back(key);
     }
     if (key.type() == BBL::Type::Int && key.intVal() >= nextIntKey)
         nextIntKey = key.intVal() + 1;
@@ -170,7 +171,7 @@ bool BblTable::has(const BblValue& key) const {
     if (count == 0) return false;
     if (isSequential && key.type() == BBL::Type::Int) {
         size_t idx = static_cast<size_t>(key.intVal());
-        return idx < arrayPart.size();
+        return arrayPart && idx < arrayPart->size();
     }
     if (useInline) {
         for (size_t i = 0; i < count; i++)
@@ -188,8 +189,10 @@ bool BblTable::del(const BblValue& key) {
             if (bblValueKeyEqual(inlineEntries[i].key, key)) {
                 inlineEntries[i] = inlineEntries[count - 1];
                 count--;
-                for (auto it = order.begin(); it != order.end(); ++it)
-                    if (bblValueKeyEqual(*it, key)) { order.erase(it); break; }
+                if (order) {
+                    for (auto it = order->begin(); it != order->end(); ++it)
+                        if (bblValueKeyEqual(*it, key)) { order->erase(it); break; }
+                }
                 return true;
             }
         }
@@ -201,8 +204,10 @@ bool BblTable::del(const BblValue& key) {
     e->key = BblValue::makeNull();
     e->val = BblValue::makeNull();
     count--;
-    for (auto it = order.begin(); it != order.end(); ++it) {
-        if (bblValueKeyEqual(*it, key)) { order.erase(it); break; }
+    if (order) {
+        for (auto it = order->begin(); it != order->end(); ++it) {
+            if (bblValueKeyEqual(*it, key)) { order->erase(it); break; }
+        }
     }
     return true;
 }
@@ -752,8 +757,8 @@ static void gcMark(BblValue& val) {
         case BBL::Type::Table:
             if (val.tableVal() && !val.tableVal()->marked) {
                 val.tableVal()->marked = true;
-                if (val.tableVal()->isSequential) {
-                    for (auto& v : val.tableVal()->arrayPart) gcMark(v);
+                if (val.tableVal()->isSequential && val.tableVal()->arrayPart) {
+                    for (auto& v : *val.tableVal()->arrayPart) gcMark(v);
                 } else if (val.tableVal()->useInline) {
                     for (size_t i = 0; i < val.tableVal()->count; i++) {
                         BblValue km = val.tableVal()->inlineEntries[i].key;
@@ -2315,7 +2320,8 @@ static int bblChildRecvVec(BblState* bbl);
 
 static BblMessage serializeMessage(BblState* bbl, BblTable* table, BblValue* vecArg) {
     BblMessage msg;
-    for (auto& k : table->order) {
+    if (!table->order) return msg;
+    for (auto& k : *table->order) {
         if (k.type() != BBL::Type::String)
             throw BBL::Error{"message key must be a string"};
         auto val = table->get(k).value_or(BblValue::makeNull());

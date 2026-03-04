@@ -536,14 +536,14 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                 else if (methodStr == state.m.has) R(A) = BblValue::makeBool(tbl->has(argsBuf[0]));
                 else if (methodStr == state.m.keys) {
                     BblTable* keys = state.allocTable(); int64_t i = 0;
-                    for (auto& k : tbl->order) keys->set(BblValue::makeInt(i++), k);
+                    if (tbl->order) for (auto& k : *tbl->order) keys->set(BblValue::makeInt(i++), k);
                     R(A) = BblValue::makeTable(keys);
                 } else if (methodStr == state.m.push) {
                     for (int i = 0; i < nargs; i++) { tbl->set(BblValue::makeInt(tbl->nextIntKey), argsBuf[i]); }
                     R(A) = BblValue::makeNull();
                 } else if (methodStr == state.m.pop) {
                     bool found = false;
-                    for (auto it = tbl->order.rbegin(); it != tbl->order.rend(); ++it) {
+                    for (auto it = tbl->order->rbegin(); it != tbl->order->rend(); ++it) {
                         if (it->type() == BBL::Type::Int) {
                             R(A) = tbl->get(*it).value_or(BblValue::makeNull());
                             tbl->del(*it);
@@ -554,8 +554,8 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                     if (!found) throw BBL::Error{"pop: no integer keys"};
                 } else if (methodStr == state.m.at) {
                     size_t idx = static_cast<size_t>(argsBuf[0].intVal());
-                    if (idx >= tbl->order.size()) throw BBL::Error{"table index out of range"};
-                    R(A) = tbl->get(tbl->order[idx]).value_or(BblValue::makeNull());
+                    if (idx >= tbl->order->size()) throw BBL::Error{"table index out of range"};
+                    R(A) = tbl->get((*tbl->order)[idx]).value_or(BblValue::makeNull());
                 } else {
                     auto val = tbl->get(BblValue::makeString(const_cast<BblString*>(methodStr)));
                     if (val.has_value() && val->type() == BBL::Type::Fn) {
