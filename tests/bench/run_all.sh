@@ -4,6 +4,7 @@ set -euo pipefail
 BBL="${1:-./build_rel/bbl}"
 LUAJIT="${2:-luajit}"
 DOTNET="${3:-}"
+NODEJS="${4:-node}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 if [ -z "$DOTNET" ]; then
@@ -37,7 +38,7 @@ else: print(f'🔴 {r:.1f}')
 "
 }
 
-declare -A BBL_MS LUA_MS NET_MS
+declare -A BBL_MS LUA_MS NET_MS NODE_MS
 
 for bench in $BENCHMARKS; do
     BBL_MS[$bench]=$(to_ms "$(median3 "timeout 30 $BBL $DIR/${bench}.bbl")")
@@ -54,28 +55,28 @@ for bench in $BENCHMARKS; do
     else
         NET_MS[$bench]="-"
     fi
+
+    nodef="$DIR/node/${bench}.js"
+    if [ -f "$nodef" ] && command -v "$NODEJS" > /dev/null 2>&1; then
+        NODE_MS[$bench]=$(to_ms "$(median3 "timeout 30 $NODEJS $nodef")")
+    else
+        NODE_MS[$bench]="-"
+    fi
 done
 
 echo ""
-echo "| Benchmark | BBL | .NET 9 | ratio | LuaJIT | ratio |"
-echo "|---|---|---|---|---|---|"
+echo "| Benchmark | BBL | .NET 9 | ratio | LuaJIT | ratio | Node.js | ratio |"
+echo "|---|---|---|---|---|---|---|---|"
 for bench in $BENCHMARKS; do
     bbl=${BBL_MS[$bench]}
     net=${NET_MS[$bench]}
     lua=${LUA_MS[$bench]}
+    njs=${NODE_MS[$bench]}
 
-    if [ "$net" != "-" ]; then
-        net_ratio=$(ratio_cell "$bbl" "$net")
-    else
-        net_ratio="-"
-    fi
+    if [ "$net" != "-" ]; then net_ratio=$(ratio_cell "$bbl" "$net"); else net_ratio="-"; fi
+    if [ "$lua" != "-" ]; then lua_ratio=$(ratio_cell "$bbl" "$lua"); else lua_ratio="-"; fi
+    if [ "$njs" != "-" ]; then njs_ratio=$(ratio_cell "$bbl" "$njs"); else njs_ratio="-"; fi
 
-    if [ "$lua" != "-" ]; then
-        lua_ratio=$(ratio_cell "$bbl" "$lua")
-    else
-        lua_ratio="-"
-    fi
-
-    echo "| $bench | ${bbl} ms | ${net} ms | $net_ratio | ${lua} ms | $lua_ratio |"
+    echo "| $bench | ${bbl} ms | ${net} ms | $net_ratio | ${lua} ms | $lua_ratio | ${njs} ms | $njs_ratio |"
 done
 echo ""
