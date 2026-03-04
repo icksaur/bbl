@@ -691,6 +691,13 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
         return dest;
     }
 
+    if (op == "int") {
+        if (node.children.size() != 2) throw BBL::Error{"'int' requires 1 argument"};
+        uint8_t srcReg = compileExpr(state, cs, node.children[1], dest);
+        cs.chunk.emitABC(OP_INT, dest, srcReg, 0, node.line);
+        return dest;
+    }
+
     if (op == "sizeof") {
         if (node.children.size() < 2) throw BBL::Error{"'sizeof' requires a type name"};
         if (node.children[1].type != NodeType::Symbol) throw BBL::Error{"'sizeof' argument must be a type name"};

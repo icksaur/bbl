@@ -502,6 +502,21 @@ BblState::BblState() {
     m.upper = intern("upper"); m.lower = intern("lower"); m.trim = intern("trim");
     m.copy_from = intern("copy-from");
     m.join = intern("join");
+    m.trim_left = intern("trim-left"); m.trim_right = intern("trim-right");
+    m.pad_left = intern("pad-left"); m.pad_right = intern("pad-right");
+
+    m.length->methodId = MID_LENGTH; m.push->methodId = MID_PUSH; m.pop->methodId = MID_POP;
+    m.clear->methodId = MID_CLEAR; m.at->methodId = MID_AT; m.set->methodId = MID_SET;
+    m.get->methodId = MID_GET; m.resize->methodId = MID_RESIZE; m.reserve->methodId = MID_RESERVE;
+    m.has->methodId = MID_HAS; m.del->methodId = MID_DEL; m.keys->methodId = MID_KEYS;
+    m.find->methodId = MID_FIND; m.contains->methodId = MID_CONTAINS;
+    m.starts_with->methodId = MID_STARTS_WITH; m.ends_with->methodId = MID_ENDS_WITH;
+    m.slice->methodId = MID_SLICE; m.split->methodId = MID_SPLIT;
+    m.replace->methodId = MID_REPLACE; m.upper->methodId = MID_UPPER;
+    m.lower->methodId = MID_LOWER; m.trim->methodId = MID_TRIM;
+    m.copy_from->methodId = MID_COPY_FROM; m.join->methodId = MID_JOIN;
+    m.trim_left->methodId = MID_TRIM_LEFT; m.trim_right->methodId = MID_TRIM_RIGHT;
+    m.pad_left->methodId = MID_PAD_LEFT; m.pad_right->methodId = MID_PAD_RIGHT;
 
     defn("__with_cleanup", [](BblState* bbl) -> int {
         if (bbl->callArgs.empty()) return 0;
@@ -756,6 +771,7 @@ void BblState::gc() {
 
     gcThreshold = std::max<size_t>(4096, liveCount * 2);
     allocCount = 0;
+    memset(sliceCache, 0, sizeof(sliceCache));
 }
 
 // ---------- Eval ----------

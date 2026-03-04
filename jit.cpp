@@ -42,6 +42,7 @@ extern "C" {
     void jitBitwise(BblValue* regs, BblState* state, uint8_t A, uint32_t packed);
     void jitStoreError(BblValue* regs, BblState* state, uint8_t destReg, uint8_t unused);
     void jitWithCleanup(BblValue* regs, BblState* state, uint8_t varReg, uint8_t unused);
+    void jitInt(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
 }
 
 static thread_local bool g_jitError = false;
@@ -249,37 +250,56 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         else JIT_ERROR(state, "unknown vector method: " + methodStr->data);
     } else if (receiver.type() == BBL::Type::String) {
         BblString* str = receiver.stringVal();
-        if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(str->data.size()));
-        else if (methodStr == state->m.at) {
+        switch (methodStr->methodId) {
+        case MID_LENGTH: regs[base] = BblValue::makeInt(static_cast<int64_t>(str->data.size())); break;
+        case MID_AT: {
             size_t idx = static_cast<size_t>(args[0].intVal());
-            if (idx >= str->data.size()) JIT_ERROR(state, "string index " + std::to_string(idx) + " out of bounds (length " + std::to_string(str->data.size()) + ")");
+            if (idx >= str->data.size()) JIT_ERROR(state, "string index out of bounds");
             regs[base] = BblValue::makeString(state->allocString(std::string(1, str->data[idx])));
+            break;
         }
-        else if (methodStr == state->m.slice) {
+        case MID_SLICE: {
             int64_t start = args[0].intVal();
             int64_t len = argc > 1 ? args[1].intVal() : static_cast<int64_t>(str->data.size()) - start;
-            regs[base] = BblValue::makeString(state->intern(str->data.substr(static_cast<size_t>(start), static_cast<size_t>(len))));
-        } else if (methodStr == state->m.find) {
+            uint32_t us = static_cast<uint32_t>(start), ul = static_cast<uint32_t>(len);
+            size_t ci = (reinterpret_cast<uintptr_t>(str) ^ (us * 2654435761u) ^ ul) % BblState::SLICE_CACHE_SIZE;
+            auto& ce = state->sliceCache[ci];
+            if (ce.src == str && ce.pos == us && ce.len == ul) {
+                regs[base] = BblValue::makeString(ce.result);
+            } else {
+                BblString* r = state->intern(str->data.substr(us, ul));
+                ce = {str, us, ul, r};
+                regs[base] = BblValue::makeString(r);
+            }
+            break;
+        }
+        case MID_FIND: {
             size_t start = argc > 1 ? static_cast<size_t>(args[1].intVal()) : 0;
             auto pos = str->data.find(args[0].stringVal()->data, start);
             regs[base] = BblValue::makeInt(pos == std::string::npos ? -1 : static_cast<int64_t>(pos));
-        } else if (methodStr == state->m.contains) regs[base] = BblValue::makeBool(str->data.find(args[0].stringVal()->data) != std::string::npos);
-        else if (methodStr == state->m.starts_with) regs[base] = BblValue::makeBool(str->data.starts_with(args[0].stringVal()->data));
-        else if (methodStr == state->m.ends_with) regs[base] = BblValue::makeBool(str->data.ends_with(args[0].stringVal()->data));
-        else if (methodStr == state->m.upper) { std::string r = str->data; for (auto& c : r) c = static_cast<char>(toupper(c)); regs[base] = BblValue::makeString(state->allocString(std::move(r))); }
-        else if (methodStr == state->m.lower) { std::string r = str->data; for (auto& c : r) c = static_cast<char>(tolower(c)); regs[base] = BblValue::makeString(state->allocString(std::move(r))); }
-        else if (methodStr == state->m.trim) {
+            break;
+        }
+        case MID_CONTAINS: regs[base] = BblValue::makeBool(str->data.find(args[0].stringVal()->data) != std::string::npos); break;
+        case MID_STARTS_WITH: regs[base] = BblValue::makeBool(str->data.starts_with(args[0].stringVal()->data)); break;
+        case MID_ENDS_WITH: regs[base] = BblValue::makeBool(str->data.ends_with(args[0].stringVal()->data)); break;
+        case MID_UPPER: { std::string r = str->data; for (auto& c : r) c = static_cast<char>(toupper(c)); regs[base] = BblValue::makeString(state->allocString(std::move(r))); break; }
+        case MID_LOWER: { std::string r = str->data; for (auto& c : r) c = static_cast<char>(tolower(c)); regs[base] = BblValue::makeString(state->allocString(std::move(r))); break; }
+        case MID_TRIM: {
             auto s = str->data.find_first_not_of(" \t\n\r");
             auto e = str->data.find_last_not_of(" \t\n\r");
             regs[base] = BblValue::makeString(state->intern(s == std::string::npos ? "" : str->data.substr(s, e - s + 1)));
-        } else if (methodStr == state->m.replace) {
+            break;
+        }
+        case MID_REPLACE: {
             std::string from = args[0].stringVal()->data;
             if (from.empty()) JIT_ERROR(state, "string.replace: search string must not be empty");
             std::string result = str->data, to = args[1].stringVal()->data;
             size_t pos = 0;
             while ((pos = result.find(from, pos)) != std::string::npos) { result.replace(pos, from.size(), to); pos += to.size(); }
             regs[base] = BblValue::makeString(state->intern(result));
-        } else if (methodStr == state->m.join) {
+            break;
+        }
+        case MID_JOIN: {
             BblValue container = args[0];
             std::string result;
             if (container.type() == BBL::Type::Table) {
@@ -291,7 +311,9 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
                 }
             }
             regs[base] = BblValue::makeString(state->intern(result));
-        } else if (methodStr == state->m.split) {
+            break;
+        }
+        case MID_SPLIT: {
             std::string delim = args[0].stringVal()->data;
             if (delim.empty()) JIT_ERROR(state, "string.split: separator must not be empty");
             BblTable* tbl = state->allocTable();
@@ -304,25 +326,36 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
                 if (next == str->data.size()) break;
             }
             regs[base] = BblValue::makeTable(tbl);
-        } else if (methodStr->data == "trim-left") {
+            break;
+        }
+        case MID_TRIM_LEFT: {
             auto s = str->data.find_first_not_of(" \t\n\r");
             regs[base] = BblValue::makeString(state->intern(s == std::string::npos ? "" : str->data.substr(s)));
-        } else if (methodStr->data == "trim-right") {
+            break;
+        }
+        case MID_TRIM_RIGHT: {
             auto e = str->data.find_last_not_of(" \t\n\r");
             regs[base] = BblValue::makeString(state->intern(e == std::string::npos ? "" : str->data.substr(0, e + 1)));
-        } else if (methodStr->data == "pad-left") {
+            break;
+        }
+        case MID_PAD_LEFT: {
             int64_t width = args[0].intVal();
             char fill = argc > 1 ? args[1].stringVal()->data[0] : ' ';
             std::string r = str->data;
             if (static_cast<int64_t>(r.size()) < width) r.insert(0, static_cast<size_t>(width) - r.size(), fill);
             regs[base] = BblValue::makeString(state->intern(r));
-        } else if (methodStr->data == "pad-right") {
+            break;
+        }
+        case MID_PAD_RIGHT: {
             int64_t width = args[0].intVal();
             char fill = argc > 1 ? args[1].stringVal()->data[0] : ' ';
             std::string r = str->data;
             if (static_cast<int64_t>(r.size()) < width) r.append(static_cast<size_t>(width) - r.size(), fill);
             regs[base] = BblValue::makeString(state->intern(r));
-        } else JIT_ERROR(state, "unknown string method: " + methodStr->data);
+            break;
+        }
+        default: JIT_ERROR(state, "unknown string method: " + methodStr->data);
+        }
     } else if (receiver.type() == BBL::Type::Binary) {
         BblBinary* bin = receiver.binaryVal();
         if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(bin->length()));
@@ -555,6 +588,22 @@ void jitWithCleanup(BblValue* regs, BblState* state, uint8_t varReg, uint8_t unu
         val.userdataVal()->data = nullptr;
     }
     val = BblValue::makeNull();
+}
+
+void jitInt(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
+    (void)state;
+    BblValue& arg = regs[srcReg];
+    if (arg.type() == BBL::Type::Int) { regs[destReg] = arg; return; }
+    if (arg.type() == BBL::Type::Float) {
+        regs[destReg] = BblValue::makeInt(static_cast<int64_t>(arg.floatVal())); return;
+    }
+    if (arg.type() == BBL::Type::String) {
+        const char* s = arg.stringVal()->data.c_str();
+        char* end = nullptr;
+        int64_t val = strtoll(s, &end, 10);
+        if (end != s && *end == '\0') { regs[destReg] = BblValue::makeInt(val); return; }
+    }
+    JIT_ERROR(state, "int: cannot convert");
 }
 
 static std::string jitValToStr(BblState& state, const BblValue& v) {
@@ -1554,6 +1603,9 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         case OP_EXECFILE:
             emitCallHelper2(jit.buf, jit.size, (void*)jitExecFile, A, B, &errorExitPatches);
+            break;
+        case OP_INT:
+            emitCallHelper2(jit.buf, jit.size, (void*)jitInt, A, B, &errorExitPatches);
             break;
         case OP_BAND:
             emitCallHelper2(jit.buf, jit.size, (void*)jitBitwise, A, static_cast<uint32_t>((0<<16)|(B<<8)|C), &errorExitPatches);

@@ -75,9 +75,19 @@ struct GcObj {
     GcObj* gcNext = nullptr;
 };
 
+enum MethodId : uint8_t {
+    MID_NONE = 0,
+    MID_LENGTH, MID_PUSH, MID_POP, MID_CLEAR, MID_AT, MID_SET, MID_GET,
+    MID_RESIZE, MID_RESERVE, MID_HAS, MID_DEL, MID_KEYS, MID_FIND,
+    MID_CONTAINS, MID_STARTS_WITH, MID_ENDS_WITH, MID_SLICE, MID_SPLIT,
+    MID_REPLACE, MID_UPPER, MID_LOWER, MID_TRIM, MID_COPY_FROM, MID_JOIN,
+    MID_TRIM_LEFT, MID_TRIM_RIGHT, MID_PAD_LEFT, MID_PAD_RIGHT,
+};
+
 struct BblString : GcObj {
     std::string data;
     bool interned = false;
+    uint8_t methodId = MID_NONE;
     BblString() { gcType = GcType::String; }
     BblString(const std::string& s) : data(s) { gcType = GcType::String; }
     BblString(const std::string& s, bool m, bool i) : data(s), interned(i) { gcType = GcType::String; marked = m; }
@@ -548,6 +558,10 @@ struct BblState {
     void pauseGC() { savedGcThreshold = gcThreshold; gcThreshold = SIZE_MAX; }
     void resumeGC() { gcThreshold = savedGcThreshold; }
 
+    struct SliceCacheEntry { BblString* src = nullptr; uint32_t pos = 0; uint32_t len = 0; BblString* result = nullptr; };
+    static constexpr int SLICE_CACHE_SIZE = 32;
+    SliceCacheEntry sliceCache[SLICE_CACHE_SIZE] = {};
+
     std::string jitError;
     bool jitHasError = false;
 
@@ -591,6 +605,10 @@ struct BblState {
         BblString* trim = nullptr;
         BblString* copy_from = nullptr; // "copy-from"
         BblString* join = nullptr;
+        BblString* trim_left = nullptr;
+        BblString* trim_right = nullptr;
+        BblString* pad_left = nullptr;
+        BblString* pad_right = nullptr;
     } m;
 
     // Print capture (for testing)

@@ -83,6 +83,7 @@ enum OpCode : uint8_t {
     OP_SIZEOF,
     OP_EXEC,
     OP_EXECFILE,
+    OP_INT,
 };
 
 // 32-bit instruction encoding
