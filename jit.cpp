@@ -711,8 +711,18 @@ static void emitReturn(uint8_t* buf, size_t& pos, int A) {
     uint8_t load[] = { 0x48, 0x8b, 0x83 };
     emit(buf, pos, load, 3);
     emit32(buf, pos, A * VAL_SIZE);
-
-    emitEpilogue(buf, pos);
+    // test r14d, r14d
+    uint8_t test[] = { 0x45, 0x85, 0xf6 };
+    emit(buf, pos, test, 3);
+    // jnz lightRet (+12: add rsp,8(4) + pop r14(2) + pop r13(2) + pop r12(2) + pop rbx(1) + ret(1))
+    uint8_t jnz[] = { 0x75, 0x0c };
+    emit(buf, pos, jnz, 2);
+    // Full epilogue: add rsp,8; pop r14, r13, r12, rbx, ret
+    uint8_t fullEpi[] = { 0x48, 0x83, 0xc4, 0x08, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5b, 0xc3 };
+    emit(buf, pos, fullEpi, sizeof(fullEpi));
+    // Light epilogue: add rsp,8; pop r14, pop rbx, ret
+    uint8_t lightEpi[] = { 0x48, 0x83, 0xc4, 0x08, 0x41, 0x5e, 0x5b, 0xc3 };
+    emit(buf, pos, lightEpi, sizeof(lightEpi));
 }
 
 // ADD R[A] = R[B] + R[C] (integer, NaN-boxed — direct arithmetic, no unbox)
@@ -1057,7 +1067,37 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
     jit.size = 0;
 
-    emitPrologue(jit.buf, jit.size);
+    // Full prologue: save callee-saved regs, set up rbx/r12/r13/r14
+    uint8_t fullPrologue[] = {
+        0x53,                   // push rbx
+        0x41, 0x54,             // push r12
+        0x41, 0x55,             // push r13
+        0x41, 0x56,             // push r14
+        0x48, 0x83, 0xec, 0x08, // sub rsp, 8 (alignment)
+        0x48, 0x89, 0xfb,       // mov rbx, rdi  (regs)
+        0x49, 0x89, 0xf4,       // mov r12, rsi  (state)
+        0x49, 0x89, 0xd5,       // mov r13, rdx  (chunk)
+        0x41, 0xbe, 0x00, 0x00, 0x00, 0x00, // mov r14d, 0 (full marker)
+    };
+    emit(jit.buf, jit.size, fullPrologue, sizeof(fullPrologue));
+    // Jump over light entry
+    emit8(jit.buf, jit.size, 0xeb); // jmp rel8
+    size_t jmpOverLight = jit.size;
+    emit8(jit.buf, jit.size, 0x00);
+
+    // Light entry: save rbx, set new regs base, r14=1
+    size_t lightEntry = jit.size;
+    uint8_t lightPrologue[] = {
+        0x53,                   // push rbx
+        0x41, 0x56,             // push r14
+        0x48, 0x83, 0xec, 0x08, // sub rsp, 8 (alignment)
+        0x48, 0x89, 0xfb,       // mov rbx, rdi  (regs)
+        0x41, 0xbe, 0x01, 0x00, 0x00, 0x00, // mov r14d, 1 (light marker)
+    };
+    emit(jit.buf, jit.size, lightPrologue, sizeof(lightPrologue));
+
+    jit.buf[jmpOverLight] = static_cast<uint8_t>(jit.size - jmpOverLight - 1);
+
 
     std::vector<size_t> nativeOffsets(chunk.code.size() + 1, 0);
     std::vector<JumpPatch> patches;
@@ -1300,18 +1340,12 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         }
         case OP_CALL: {
             if (selfRefRegs.count(A)) {
-                // Fast self-recursive call: r12/r13 already hold state/chunk
+                // Light self-recursive call: only save/restore rbx
                 // lea rdi, [rbx + A*8]
                 uint8_t lea[] = { 0x48, 0x8d, 0xbb };
                 emit(jit.buf, jit.size, lea, 3);
                 emit32(jit.buf, jit.size, A * VAL_SIZE);
-                // mov rsi, r12 (state — needed for prologue)
-                uint8_t movsi[] = { 0x4c, 0x89, 0xe6 };
-                emit(jit.buf, jit.size, movsi, 3);
-                // mov rdx, r13 (chunk — needed for prologue)
-                uint8_t movdx[] = { 0x4c, 0x89, 0xea };
-                emit(jit.buf, jit.size, movdx, 3);
-                // call rel32 → function entry (full prologue)
+                // call rel32 → light entry
                 emit8(jit.buf, jit.size, 0xe8);
                 selfCallPatches.push_back(jit.size);
                 emit32(jit.buf, jit.size, 0);
@@ -1554,7 +1588,7 @@ done_compile:
     }
 
     for (size_t p : selfCallPatches) {
-        patchRel32(jit.buf, p, 0);
+        patchRel32(jit.buf, p, lightEntry);
     }
 
     // Try/catch: emit catch entry stubs that call jitStoreError, then jump to catch bytecode
@@ -1571,13 +1605,21 @@ done_compile:
         patchRel32(jit.buf, tc.patchOffset, catchStub);
     }
 
-    // Error exit: load NaN-boxed null into rax, epilogue
+    // Error exit: load NaN-boxed null into rax, marker-aware epilogue
     size_t errorExit = jit.size;
     {
         uint8_t movabs[] = { 0x48, 0xb8 };
         emit(jit.buf, jit.size, movabs, 2);
         emit64(jit.buf, jit.size, BblValue::TAG_NULL);
-        emitEpilogue(jit.buf, jit.size);
+        // test r14d, r14d
+        uint8_t test[] = { 0x45, 0x85, 0xf6 };
+        emit(jit.buf, jit.size, test, 3);
+        uint8_t jnz[] = { 0x75, 0x0c };
+        emit(jit.buf, jit.size, jnz, 2);
+        uint8_t fullEpi[] = { 0x48, 0x83, 0xc4, 0x08, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5b, 0xc3 };
+        emit(jit.buf, jit.size, fullEpi, sizeof(fullEpi));
+        uint8_t lightEpi[] = { 0x5b, 0xc3 };
+        emit(jit.buf, jit.size, lightEpi, sizeof(lightEpi));
     }
     for (size_t p : errorExitPatches) {
         patchRel32(jit.buf, p, errorExit);
