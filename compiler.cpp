@@ -601,6 +601,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "binary") {
+        if (node.children.size() != 2) throw BBL::Error{"'binary' requires exactly 1 argument"};
         uint8_t srcReg = compileExpr(state, cs, node.children[1], dest);
         cs.chunk.emitABC(OP_BINARY, dest, srcReg, 0, node.line);
         return dest;
