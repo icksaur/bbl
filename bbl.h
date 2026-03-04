@@ -505,7 +505,7 @@ struct BblState {
 
     // GC
     size_t allocCount = 0;
-    size_t gcThreshold = 256;
+    size_t gcThreshold = 4096;
     size_t savedGcThreshold = 0;
     void pauseGC() { savedGcThreshold = gcThreshold; gcThreshold = SIZE_MAX; }
     void resumeGC() { gcThreshold = savedGcThreshold; }

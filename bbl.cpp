@@ -874,7 +874,7 @@ void BblState::gc() {
                      + allocatedStructs.size() + allocatedVectors.size()
                      + allocatedTables.size() + allocatedUserDatas.size()
                      + allocatedStrings.size();
-    gcThreshold = std::max<size_t>(1024, liveCount * 2);
+    gcThreshold = std::max<size_t>(4096, liveCount * 2);
     allocCount = 0;
 }
 
