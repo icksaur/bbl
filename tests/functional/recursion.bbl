@@ -38,8 +38,8 @@
 // Recursive sum of list elements via table
 (= sum-table (fn (t i)
     (= result 0)
-    (if (< i (t.length))
-        (= result (+ (t.at i) (sum-table t (+ i 1))))
+    (if (< i (t:length))
+        (= result (+ (t:at i) (sum-table t (+ i 1))))
     )
     result
 ))

@@ -37,6 +37,10 @@ check file_io     "hello from bbl"
 check binary_data "5"
 check recursion   "$(printf '1\n1\n120\n3628800\n0\n1\n55\n0\n15')"
 check do_block    "$(printf '30\nthen1\nthen2')"
+check try_catch   "caught 3 inner:division by zero"
+check each        "60 hello world "
+check bitwise     "8 14 6 -1 16 8"
+check logic       "true false true false false true"
 
 # Phase 6: args test (needs extra arguments)
 check_args() {

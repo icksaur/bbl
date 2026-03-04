@@ -1,0 +1,1 @@
+(print (band 12 10) " " (bor 12 10) " " (bxor 12 10) " " (bnot 0) " " (shl 1 4) " " (shr 32 2))

@@ -1,0 +1,6 @@
+(= r1 (try (/ 1 0) (catch e "caught")))
+(= r2 (try (+ 1 2) (catch e "error")))
+(= r3 (try
+    (try (/ 1 0) (catch e (+ "inner:" e)))
+    (catch e2 "outer")))
+(print r1 " " r2 " " r3)

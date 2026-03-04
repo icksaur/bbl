@@ -2,4 +2,4 @@
 (= b "hello")
 (print (== a b))
 (print " " (+ "a" "b" "c"))
-(print " " (a.length))
+(print " " (a:length))

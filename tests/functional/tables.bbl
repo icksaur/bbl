@@ -2,5 +2,5 @@
 (print player.name " " player.hp)
 (= player.hp 80)
 (print " " player.hp)
-(= ks (player.keys))
-(print " " (ks.length))
+(= ks (player:keys))
+(print " " (ks:length))

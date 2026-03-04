@@ -1,2 +1,2 @@
 // args.bbl - test script arguments
-(print (args.length) " " (args.at 0))
+(print (args:length) " " (args:at 0))
