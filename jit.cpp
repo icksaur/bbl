@@ -240,7 +240,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         else if (methodStr == state->m.at) {
             size_t idx = static_cast<size_t>(args[0].intVal());
             if (idx >= str->data.size()) JIT_ERROR(state, "string index " + std::to_string(idx) + " out of bounds (length " + std::to_string(str->data.size()) + ")");
-            regs[base] = BblValue::makeString(state->intern(std::string(1, str->data[idx])));
+            regs[base] = BblValue::makeString(state->allocString(std::string(1, str->data[idx])));
         }
         else if (methodStr == state->m.slice) {
             int64_t start = args[0].intVal();
@@ -253,8 +253,8 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         } else if (methodStr == state->m.contains) regs[base] = BblValue::makeBool(str->data.find(args[0].stringVal()->data) != std::string::npos);
         else if (methodStr == state->m.starts_with) regs[base] = BblValue::makeBool(str->data.starts_with(args[0].stringVal()->data));
         else if (methodStr == state->m.ends_with) regs[base] = BblValue::makeBool(str->data.ends_with(args[0].stringVal()->data));
-        else if (methodStr == state->m.upper) { std::string r = str->data; for (auto& c : r) c = static_cast<char>(toupper(c)); regs[base] = BblValue::makeString(state->intern(r)); }
-        else if (methodStr == state->m.lower) { std::string r = str->data; for (auto& c : r) c = static_cast<char>(tolower(c)); regs[base] = BblValue::makeString(state->intern(r)); }
+        else if (methodStr == state->m.upper) { std::string r = str->data; for (auto& c : r) c = static_cast<char>(toupper(c)); regs[base] = BblValue::makeString(state->allocString(std::move(r))); }
+        else if (methodStr == state->m.lower) { std::string r = str->data; for (auto& c : r) c = static_cast<char>(tolower(c)); regs[base] = BblValue::makeString(state->allocString(std::move(r))); }
         else if (methodStr == state->m.trim) {
             auto s = str->data.find_first_not_of(" \t\n\r");
             auto e = str->data.find_last_not_of(" \t\n\r");
