@@ -58,7 +58,7 @@ static BblTable::Entry* tableFindEntry(BblTable::Entry* buckets, size_t cap, con
 static void tableGrow(BblTable* tbl) {
     size_t newCap = tbl->capacity < 8 ? 8 : tbl->capacity * 2;
     auto* newBuckets = new BblTable::Entry[newCap];
-    for (size_t i = 0; i < tbl->capacity; i++) {
+    for (uint32_t i = 0; i < tbl->capacity; i++) {
         auto& e = tbl->buckets[i];
         if (e.occupied && !e.tombstone) {
             auto* dest = tableFindEntry(newBuckets, newCap, e.key);
@@ -67,90 +67,19 @@ static void tableGrow(BblTable* tbl) {
             dest->occupied = true;
         }
     }
-    delete[] tbl->buckets;
+    if (tbl->buckets != tbl->inlineBuckets) delete[] tbl->buckets;
     tbl->buckets = newBuckets;
-    tbl->capacity = newCap;
+    tbl->capacity = static_cast<uint32_t>(newCap);
 }
 
 std::expected<BblValue, BBL::GetError> BblTable::get(const BblValue& key) const {
-    if (count == 0) return std::unexpected(BBL::GetError::NotFound);
-    if (isSequential && key.type() == BBL::Type::Int) {
-        size_t idx = static_cast<size_t>(key.intVal());
-        if (arrayPart && idx < arrayPart->size()) return (*arrayPart)[idx];
-        return std::unexpected(BBL::GetError::NotFound);
-    }
-    if (useInline) {
-        for (size_t i = 0; i < count; i++)
-            if (bblValueKeyEqual(inlineEntries[i].key, key)) return inlineEntries[i].val;
-        return std::unexpected(BBL::GetError::NotFound);
-    }
+    if (count == 0 || capacity == 0) return std::unexpected(BBL::GetError::NotFound);
     auto* e = tableFindEntry(buckets, capacity, key);
     if (!e || !e->occupied || e->tombstone) return std::unexpected(BBL::GetError::NotFound);
     return e->val;
 }
 
 void BblTable::set(const BblValue& key, const BblValue& val) {
-    if (isSequential && key.type() == BBL::Type::Int) {
-        int64_t idx = key.intVal();
-        if (!arrayPart) arrayPart = new std::vector<BblValue>();
-        if (idx >= 0 && static_cast<size_t>(idx) <= arrayPart->size()) {
-            if (static_cast<size_t>(idx) == arrayPart->size()) {
-                arrayPart->push_back(val);
-                count++;
-                if (!order) order = new std::vector<BblValue>();
-                order->push_back(key);
-                nextIntKey = idx + 1;
-                return;
-            }
-            (*arrayPart)[static_cast<size_t>(idx)] = val;
-            return;
-        }
-        isSequential = false;
-        if (!arrayPart->empty()) {
-            for (size_t i = 0; i < arrayPart->size(); i++) {
-                BblValue k = BblValue::makeInt(static_cast<int64_t>(i));
-                if (useInline && count < INLINE_MAX) {
-                    inlineEntries[count] = {k, (*arrayPart)[i], true, false};
-                } else {
-                    if (useInline) {
-                        useInline = false;
-                        tableGrow(this);
-                        for (size_t j = 0; j < INLINE_MAX; j++) {
-                            auto* e = tableFindEntry(buckets, capacity, inlineEntries[j].key);
-                            *e = inlineEntries[j];
-                        }
-                    }
-                    if (capacity == 0 || count + 1 > capacity * 3 / 4) tableGrow(this);
-                    auto* e = tableFindEntry(buckets, capacity, k);
-                    *e = {k, (*arrayPart)[i], true, false};
-                }
-            }
-            arrayPart->clear();
-        }
-    }
-
-    if (useInline) {
-        for (size_t i = 0; i < count; i++) {
-            if (bblValueKeyEqual(inlineEntries[i].key, key)) {
-                inlineEntries[i].val = val;
-                return;
-            }
-        }
-        if (count < INLINE_MAX) {
-            inlineEntries[count] = {key, val, true, false};
-            count++;
-            if (!order) order = new std::vector<BblValue>();
-            order->push_back(key);
-            if (key.type() == BBL::Type::Int && key.intVal() >= nextIntKey) nextIntKey = key.intVal() + 1;
-            return;
-        }
-        useInline = false;
-        tableGrow(this);
-        for (size_t i = 0; i < INLINE_MAX; i++) {
-            auto* e = tableFindEntry(buckets, capacity, inlineEntries[i].key);
-            *e = inlineEntries[i];
-        }
-    }
     if (capacity == 0 || count + 1 > capacity * 3 / 4) tableGrow(this);
     auto* e = tableFindEntry(buckets, capacity, key);
     bool isNew = !e->occupied || e->tombstone;
@@ -168,36 +97,13 @@ void BblTable::set(const BblValue& key, const BblValue& val) {
 }
 
 bool BblTable::has(const BblValue& key) const {
-    if (count == 0) return false;
-    if (isSequential && key.type() == BBL::Type::Int) {
-        size_t idx = static_cast<size_t>(key.intVal());
-        return arrayPart && idx < arrayPart->size();
-    }
-    if (useInline) {
-        for (size_t i = 0; i < count; i++)
-            if (bblValueKeyEqual(inlineEntries[i].key, key)) return true;
-        return false;
-    }
+    if (count == 0 || capacity == 0) return false;
     auto* e = tableFindEntry(buckets, capacity, key);
     return e && e->occupied && !e->tombstone;
 }
 
 bool BblTable::del(const BblValue& key) {
-    if (count == 0) return false;
-    if (useInline) {
-        for (size_t i = 0; i < count; i++) {
-            if (bblValueKeyEqual(inlineEntries[i].key, key)) {
-                inlineEntries[i] = inlineEntries[count - 1];
-                count--;
-                if (order) {
-                    for (auto it = order->begin(); it != order->end(); ++it)
-                        if (bblValueKeyEqual(*it, key)) { order->erase(it); break; }
-                }
-                return true;
-            }
-        }
-        return false;
-    }
+    if (count == 0 || capacity == 0) return false;
     auto* e = tableFindEntry(buckets, capacity, key);
     if (!e || !e->occupied || e->tombstone) return false;
     e->tombstone = true;
@@ -763,24 +669,13 @@ static void gcMark(BblValue& val) {
         case BBL::Type::Table:
             if (val.tableVal() && !val.tableVal()->marked) {
                 val.tableVal()->marked = true;
-                if (val.tableVal()->isSequential && val.tableVal()->arrayPart) {
-                    for (auto& v : *val.tableVal()->arrayPart) gcMark(v);
-                } else if (val.tableVal()->useInline) {
-                    for (size_t i = 0; i < val.tableVal()->count; i++) {
-                        BblValue km = val.tableVal()->inlineEntries[i].key;
-                        BblValue vm = val.tableVal()->inlineEntries[i].val;
+                for (uint32_t i = 0; i < val.tableVal()->capacity; i++) {
+                    auto& e = val.tableVal()->buckets[i];
+                    if (e.occupied && !e.tombstone) {
+                        BblValue km = e.key;
+                        BblValue vm = e.val;
                         gcMark(km);
                         gcMark(vm);
-                    }
-                } else {
-                    for (size_t i = 0; i < val.tableVal()->capacity; i++) {
-                        auto& e = val.tableVal()->buckets[i];
-                        if (e.occupied && !e.tombstone) {
-                            BblValue km = e.key;
-                            BblValue vm = e.val;
-                            gcMark(km);
-                            gcMark(vm);
-                        }
                     }
                 }
             }

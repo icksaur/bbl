@@ -302,19 +302,14 @@ struct BblTable : GcObj {
     };
 
     Entry* buckets = nullptr;
-    size_t capacity = 0;
-    size_t count = 0;
+    uint32_t capacity = 0;
+    uint32_t count = 0;
     int64_t nextIntKey = 0;
-
-    static constexpr size_t INLINE_MAX = 2;
-    Entry inlineEntries[INLINE_MAX];
-    bool useInline = true;
-    bool isSequential = true;
     std::vector<BblValue>* order = nullptr;
-    std::vector<BblValue>* arrayPart = nullptr;
+    Entry inlineBuckets[2];
 
-    ~BblTable() { delete[] buckets; delete order; delete arrayPart; }
-    BblTable() { gcType = GcType::Table; }
+    ~BblTable() { if (buckets != inlineBuckets) delete[] buckets; delete order; }
+    BblTable() { gcType = GcType::Table; buckets = inlineBuckets; capacity = 2; }
     BblTable(const BblTable&) = delete;
     BblTable& operator=(const BblTable&) = delete;
 
