@@ -9,14 +9,14 @@
 
 struct JitCode;
 
-struct BblClosure {
+struct BblClosure : GcObj {
     Chunk chunk;
     int arity = 0;
     std::string name;
     std::vector<BblValue> captures;
     std::vector<CaptureInfo> captureDescs;
-    bool marked = false;
     JitCode* jitCache = nullptr;
+    BblClosure() { gcType = GcType::Closure; }
 };
 
 struct CallFrame {

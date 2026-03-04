@@ -2111,7 +2111,7 @@ TEST(test_gc_strings_collected) {
     )");
     // After the loop, most intermediates should have been GC'd.
     // The intern table should not have 1000+ entries for discarded strings.
-    size_t stringCount = bbl.allocatedStrings.size();
+    size_t stringCount = bbl.internTable.size();
     // Allow generous headroom (literals, stdlib strings, etc.), but far less than 1000
     ASSERT_TRUE(stringCount < 2000);
 }

@@ -67,19 +67,28 @@ struct BblState;
 
 typedef int (*BblCFunction)(BblState* bbl);
 
-struct BblString {
-    std::string data;
+enum class GcType : uint8_t { String, Binary, Struct, Vec, Table, Fn, Closure, UserData };
+
+struct GcObj {
+    GcType gcType;
     bool marked = false;
+    GcObj* gcNext = nullptr;
+};
+
+struct BblString : GcObj {
+    std::string data;
     bool interned = false;
+    BblString() { gcType = GcType::String; }
+    BblString(const std::string& s) : data(s) { gcType = GcType::String; }
+    BblString(const std::string& s, bool m, bool i) : data(s), interned(i) { gcType = GcType::String; marked = m; }
 };
 
 enum class ObjKind : uint8_t { Table, Vector, Struct, Binary, UserData };
 
-struct BblBinary {
-    ObjKind objKind = ObjKind::Binary;
+struct BblBinary : GcObj {
     std::vector<uint8_t> data;
-    bool marked = false;
     size_t length() const { return data.size(); }
+    BblBinary() { gcType = GcType::Binary; }
 };
 
 struct BblFn;
@@ -102,24 +111,22 @@ struct StructDesc {
     std::vector<FieldDesc> fields;
 };
 
-struct BblStruct {
-    ObjKind objKind = ObjKind::Struct;
+struct BblStruct : GcObj {
     StructDesc* desc;
     std::vector<uint8_t> data;
-    bool marked = false;
+    BblStruct() { gcType = GcType::Struct; }
 };
 
-struct BblVec {
-    ObjKind objKind = ObjKind::Vector;
+struct BblVec : GcObj {
     std::string elemType;
     BBL::Type elemTypeTag;
     size_t elemSize;
     std::vector<uint8_t> data;
-    bool marked = false;
 
     size_t length() const { return elemSize > 0 ? data.size() / elemSize : 0; }
     uint8_t* at(size_t i) { return data.data() + i * elemSize; }
     const uint8_t* at(size_t i) const { return data.data() + i * elemSize; }
+    BblVec() { gcType = GcType::Vec; }
 };
 
 struct BblTable;
@@ -132,11 +139,10 @@ struct UserDataDesc {
     BblUserDataDestructor destructor = nullptr;
 };
 
-struct BblUserData {
-    ObjKind objKind = ObjKind::UserData;
+struct BblUserData : GcObj {
     UserDataDesc* desc;
     void* data;
-    bool marked = false;
+    BblUserData() { gcType = GcType::UserData; }
 };
 
 namespace BBL {
@@ -235,13 +241,14 @@ struct BblValue {
         if (tag == TAG_CLOSURE || tag == TAG_CFN || tag == TAG_FN) return BBL::Type::Fn;
         if (tag == TAG_STRING)  return BBL::Type::String;
         if (tag == TAG_OBJECT) {
-            ObjKind k = *reinterpret_cast<ObjKind*>(bits & PAYLOAD_MASK);
-            switch (k) {
-                case ObjKind::Table:    return BBL::Type::Table;
-                case ObjKind::Vector:   return BBL::Type::Vector;
-                case ObjKind::Struct:   return BBL::Type::Struct;
-                case ObjKind::Binary:   return BBL::Type::Binary;
-                case ObjKind::UserData: return BBL::Type::UserData;
+            GcType gt = reinterpret_cast<GcObj*>(bits & PAYLOAD_MASK)->gcType;
+            switch (gt) {
+                case GcType::Table:    return BBL::Type::Table;
+                case GcType::Vec:      return BBL::Type::Vector;
+                case GcType::Struct:   return BBL::Type::Struct;
+                case GcType::Binary:   return BBL::Type::Binary;
+                case GcType::UserData: return BBL::Type::UserData;
+                default:               return BBL::Type::Null;
             }
         }
         return BBL::Type::Null;
@@ -286,8 +293,7 @@ struct BblValue {
     bool operator!=(const BblValue& o) const { return !(*this == o); }
 };
 
-struct BblTable {
-    ObjKind objKind = ObjKind::Table;
+struct BblTable : GcObj {
     struct Entry {
         BblValue key;
         BblValue val;
@@ -299,7 +305,6 @@ struct BblTable {
     size_t capacity = 0;
     size_t count = 0;
     int64_t nextIntKey = 0;
-    bool marked = false;
 
     static constexpr size_t INLINE_MAX = 2;
     Entry inlineEntries[INLINE_MAX];
@@ -309,7 +314,7 @@ struct BblTable {
     std::vector<BblValue>* arrayPart = nullptr;
 
     ~BblTable() { delete[] buckets; delete order; delete arrayPart; }
-    BblTable() = default;
+    BblTable() { gcType = GcType::Table; }
     BblTable(const BblTable&) = delete;
     BblTable& operator=(const BblTable&) = delete;
 
@@ -320,14 +325,14 @@ struct BblTable {
     bool del(const BblValue& key);
 };
 
-struct BblFn {
+struct BblFn : GcObj {
     std::vector<std::string> params;
     std::vector<uint32_t> paramIds;
     std::vector<struct AstNode> body;
     std::vector<std::pair<uint32_t, BblValue>> captures;
-    std::unordered_map<uint32_t, size_t> slotIndex;  // symbol ID → slot position
-    size_t paramSlotStart = 0;  // first param slot (= captures.size() at build time)
-    bool marked = false;
+    std::unordered_map<uint32_t, size_t> slotIndex;
+    size_t paramSlotStart = 0;
+    BblFn() { gcType = GcType::Fn; }
 };
 
 // ---------- Lexer ----------
@@ -525,15 +530,8 @@ struct SlabAllocator {
 
 struct BblState {
     std::unordered_map<std::string, BblString*> internTable;
-    std::vector<BblString*> allocatedStrings;
-    std::vector<BblBinary*> allocatedBinaries;
-    std::vector<BblFn*> allocatedFns;
-    std::vector<BblStruct*> allocatedStructs;
-    std::vector<BblVec*> allocatedVectors;
-    std::vector<BblTable*> allocatedTables;
+    GcObj* gcHead = nullptr;
     SlabAllocator<BblTable> tableSlab;
-    std::vector<BblUserData*> allocatedUserDatas;
-    std::vector<BblClosure*> allocatedClosures;
     std::unique_ptr<VmState> vm;
 
     // Type descriptors

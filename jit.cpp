@@ -138,7 +138,7 @@ void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, 
     closure->name = proto->name;
     closure->captureDescs = proto->captureDescs;
     closure->captures.resize(proto->captureDescs.size());
-    state->allocatedClosures.push_back(closure);
+    closure->gcNext = state->gcHead; state->gcHead = closure;
 
     for (size_t i = 0; i < proto->captureDescs.size(); i++) {
         auto& desc = proto->captureDescs[i];

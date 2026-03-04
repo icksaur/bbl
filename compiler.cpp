@@ -836,7 +836,7 @@ static void compileFn(BblState& state, CompilerState& cs, const AstNode& node, c
     proto->chunk = std::move(fnCs.chunk);
     proto->arity = fnCs.arity;
     proto->name = assignName;
-    state.allocatedClosures.push_back(proto);
+    proto->gcNext = state.gcHead; state.gcHead = proto;
 
     uint16_t protoIdx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeClosure(proto)));
     cs.chunk.emitABx(OP_CLOSURE, dest, protoIdx, node.line);

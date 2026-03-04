@@ -624,34 +624,32 @@ BblState::BblState() {
 }
 
 BblState::~BblState() {
-    for (auto* s : allocatedStrings) {
-        delete s;
-    }
-    for (auto* b : allocatedBinaries) {
-        delete b;
-    }
-    for (auto* f : allocatedFns) {
-        delete f;
-    }
-    for (auto* s : allocatedStructs) {
-        delete s;
-    }
-    for (auto* v : allocatedVectors) {
-        delete v;
-    }
-    for (auto* t : allocatedTables) {
-        t->~BblTable();
-    }
-    // tableSlab owns the memory, no delete needed
-    for (auto* u : allocatedUserDatas) {
-        if (u->desc && u->desc->destructor && u->data) {
-            u->desc->destructor(u->data);
+    GcObj* obj = gcHead;
+    while (obj) {
+        GcObj* next = obj->gcNext;
+        switch (obj->gcType) {
+            case GcType::String:  delete static_cast<BblString*>(obj); break;
+            case GcType::Binary:  delete static_cast<BblBinary*>(obj); break;
+            case GcType::Fn:      delete static_cast<BblFn*>(obj); break;
+            case GcType::Struct:  delete static_cast<BblStruct*>(obj); break;
+            case GcType::Vec:     delete static_cast<BblVec*>(obj); break;
+            case GcType::Table:   static_cast<BblTable*>(obj)->~BblTable(); break;
+            case GcType::UserData: {
+                auto* u = static_cast<BblUserData*>(obj);
+                if (u->desc && u->desc->destructor && u->data) u->desc->destructor(u->data);
+                delete u;
+                break;
+            }
+            case GcType::Closure: {
+                auto* c = static_cast<BblClosure*>(obj);
+                if (c->chunk.traceCode) munmap(c->chunk.traceCode, c->chunk.traceCapacity);
+                delete c;
+                break;
+            }
         }
-        delete u;
+        obj = next;
     }
-    for (auto* c : allocatedClosures) {
-        delete c;
-    }
+    gcHead = nullptr;
 }
 
 BblString* BblState::intern(const std::string& s) {
@@ -660,7 +658,7 @@ BblString* BblState::intern(const std::string& s) {
         return it->second;
     }
     auto* str = new BblString{s, false, true};
-    allocatedStrings.push_back(str);
+    str->gcNext = gcHead; gcHead = str;
     internTable[str->data] = str;
     allocCount++;
     return str;
@@ -668,42 +666,48 @@ BblString* BblState::intern(const std::string& s) {
 
 BblString* BblState::allocString(std::string s) {
     auto* str = new BblString{std::move(s)};
-    allocatedStrings.push_back(str);
+    str->gcNext = gcHead; gcHead = str;
     allocCount++;
     return str;
 }
 
 BblBinary* BblState::allocBinary(std::vector<uint8_t> data) {
-    auto* b = new BblBinary{ObjKind::Binary, std::move(data)};
-    allocatedBinaries.push_back(b);
+    auto* b = new BblBinary();
+    b->data = std::move(data);
+    b->gcNext = gcHead; gcHead = b;
     allocCount++;
     return b;
 }
 
 BblFn* BblState::allocFn() {
     auto* f = new BblFn{};
-    allocatedFns.push_back(f);
+    f->gcNext = gcHead; gcHead = f;
     allocCount++;
     return f;
 }
 
 BblStruct* BblState::allocStruct(StructDesc* desc) {
-    auto* s = new BblStruct{ObjKind::Struct, desc, std::vector<uint8_t>(desc->totalSize, 0)};
-    allocatedStructs.push_back(s);
+    auto* s = new BblStruct();
+    s->desc = desc;
+    s->data.resize(desc->totalSize, 0);
+    s->gcNext = gcHead; gcHead = s;
     allocCount++;
     return s;
 }
 
 BblVec* BblState::allocVector(const std::string& elemType, BBL::Type elemTypeTag, size_t elemSize) {
-    auto* v = new BblVec{ObjKind::Vector, elemType, elemTypeTag, elemSize, {}};
-    allocatedVectors.push_back(v);
+    auto* v = new BblVec();
+    v->elemType = elemType;
+    v->elemTypeTag = elemTypeTag;
+    v->elemSize = elemSize;
+    v->gcNext = gcHead; gcHead = v;
     allocCount++;
     return v;
 }
 
 BblTable* BblState::allocTable() {
     BblTable* t = tableSlab.alloc();
-    allocatedTables.push_back(t);
+    t->gcNext = gcHead; gcHead = t;
     allocCount++;
     return t;
 }
@@ -713,8 +717,10 @@ BblUserData* BblState::allocUserData(const std::string& typeName, void* data) {
     if (it == userDataDescs.end()) {
         throw BBL::Error{"unknown userdata type: " + typeName};
     }
-    auto* u = new BblUserData{ObjKind::UserData, &it->second, data, false};
-    allocatedUserDatas.push_back(u);
+    auto* u = new BblUserData();
+    u->desc = &it->second;
+    u->data = data;
+    u->gcNext = gcHead; gcHead = u;
     allocCount++;
     return u;
 }
@@ -816,53 +822,45 @@ void BblState::gc() {
             gcMark(val);
     }
 
-    // Sweep helper — partition by mark, cleanup + delete unmarked, clear marks
-    auto sweepPool = [](auto& pool, auto cleanup) {
-        auto mid = std::partition(pool.begin(), pool.end(),
-                                  [](auto* obj) { return obj->marked; });
-        for (auto it = mid; it != pool.end(); ++it) {
-            cleanup(*it);
-            delete *it;
+    // Sweep: walk linked list, free unmarked, clear marks on survivors
+    size_t liveCount = 0;
+    GcObj** p = &gcHead;
+    while (*p) {
+        if (!(*p)->marked) {
+            GcObj* dead = *p;
+            *p = dead->gcNext;
+            switch (dead->gcType) {
+                case GcType::String:
+                    internTable.erase(static_cast<BblString*>(dead)->data);
+                    delete static_cast<BblString*>(dead);
+                    break;
+                case GcType::Table:
+                    tableSlab.free(static_cast<BblTable*>(dead));
+                    break;
+                case GcType::Closure: {
+                    auto* c = static_cast<BblClosure*>(dead);
+                    if (c->chunk.traceCode) munmap(c->chunk.traceCode, c->chunk.traceCapacity);
+                    delete c;
+                    break;
+                }
+                case GcType::UserData: {
+                    auto* u = static_cast<BblUserData*>(dead);
+                    if (u->desc && u->desc->destructor && u->data) u->desc->destructor(u->data);
+                    delete u;
+                    break;
+                }
+                case GcType::Binary:  delete static_cast<BblBinary*>(dead); break;
+                case GcType::Fn:      delete static_cast<BblFn*>(dead); break;
+                case GcType::Struct:  delete static_cast<BblStruct*>(dead); break;
+                case GcType::Vec:     delete static_cast<BblVec*>(dead); break;
+            }
+        } else {
+            (*p)->marked = false;
+            p = &(*p)->gcNext;
+            liveCount++;
         }
-        pool.erase(mid, pool.end());
-        for (auto* obj : pool) obj->marked = false;
-    };
-    auto noop = [](auto*) {};
-
-    sweepPool(allocatedBinaries, noop);
-    sweepPool(allocatedFns, noop);
-    sweepPool(allocatedClosures, [](BblClosure* c) {
-        if (c->chunk.traceCode) {
-            munmap(c->chunk.traceCode, c->chunk.traceCapacity);
-        }
-    });
-    sweepPool(allocatedStructs, noop);
-    sweepPool(allocatedVectors, noop);
-    // Tables: recycle dead ones via slab allocator
-    {
-        auto mid = std::partition(allocatedTables.begin(), allocatedTables.end(),
-                                   [](BblTable* obj) { return obj->marked; });
-        for (auto it = mid; it != allocatedTables.end(); ++it) {
-            tableSlab.free(*it);
-        }
-        allocatedTables.erase(mid, allocatedTables.end());
-        for (auto* obj : allocatedTables) obj->marked = false;
     }
-    sweepPool(allocatedUserDatas, [](BblUserData* u) {
-        if (u->desc && u->desc->destructor && u->data) {
-            u->desc->destructor(u->data);
-        }
-    });
-    sweepPool(allocatedStrings, [this](BblString* s) {
-        internTable.erase(s->data);
-    });
 
-    // Adaptive threshold: next GC when allocations double the surviving set
-    size_t liveCount = allocatedBinaries.size() + allocatedFns.size()
-                     + allocatedClosures.size()
-                     + allocatedStructs.size() + allocatedVectors.size()
-                     + allocatedTables.size() + allocatedUserDatas.size()
-                     + allocatedStrings.size();
     gcThreshold = std::max<size_t>(4096, liveCount * 2);
     allocCount = 0;
 }
