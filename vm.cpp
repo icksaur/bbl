@@ -559,8 +559,19 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                     size_t idx = static_cast<size_t>(argsBuf[0].intVal());
                     if (idx >= tbl->order.size()) throw BBL::Error{"table index out of range"};
                     R(A) = tbl->get(tbl->order[idx]).value_or(BblValue::makeNull());
+                } else {
+                    auto val = tbl->get(BblValue::makeString(const_cast<BblString*>(methodStr)));
+                    if (val.has_value() && val->type() == BBL::Type::Fn) {
+                        BblValue fn = val.value();
+                        R(A + 1) = BblValue::makeTable(tbl);
+                        for (int i = 0; i < nargs; i++) R(A + 2 + i) = argsBuf[i];
+                        R(A) = fn;
+                        if (!callValue(state, frame, A, nargs + 1, A))
+                            throw BBL::Error{"table method not callable"};
+                    } else {
+                        throw BBL::Error{"unknown table method: " + methodStr->data};
+                    }
                 }
-                else throw BBL::Error{"unknown table method: " + methodStr->data};
             } else if (receiver.type() == BBL::Type::UserData) {
                 auto it = receiver.userdataVal()->desc->methods.find(methodStr->data);
                 if (it == receiver.userdataVal()->desc->methods.end())

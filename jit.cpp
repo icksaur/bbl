@@ -192,7 +192,17 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             if (idx >= tbl->order.size()) JIT_ERROR(state, "table index out of range");
             BblValue key = tbl->order[idx];
             regs[base] = tbl->get(key).value_or(BblValue::makeNull());
-        } else JIT_ERROR(state, "unknown table method: " + methodStr->data);
+        } else {
+            auto val = tbl->get(BblValue::makeString(const_cast<BblString*>(methodStr)));
+            if (val.has_value() && val->type() == BBL::Type::Fn) {
+                regs[base + 1] = BblValue::makeTable(tbl);
+                for (int i = 0; i < argc; i++) regs[base + 2 + i] = args[i];
+                regs[base] = val.value();
+                jitCall(regs, state, base, argc + 1);
+            } else {
+                JIT_ERROR(state, "unknown table method: " + methodStr->data);
+            }
+        }
     } else if (receiver.type() == BBL::Type::Vector) {
         BblVec* vec = receiver.vectorVal();
         if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(vec->length()));
