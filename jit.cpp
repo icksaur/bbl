@@ -58,6 +58,10 @@ static std::string jitValToStr(BblState& state, const BblValue& v);
     g_jitError = true; \
     g_jitErrorMsg = _e.what; \
     return; \
+} catch (const BblTerminated&) { \
+    g_jitError = true; \
+    g_jitErrorMsg = "terminated"; \
+    return; \
 } catch (const std::exception& _e) { \
     g_jitError = true; \
     g_jitErrorMsg = _e.what(); \
@@ -108,6 +112,8 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
     }
     } catch (const BBL::Error& e) {
         JIT_ERROR(state, e.what);
+    } catch (const BblTerminated&) {
+        JIT_ERROR(state, "terminated");
     } catch (const std::exception& e) {
         JIT_ERROR(state, e.what());
     }
@@ -345,6 +351,8 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
     } else JIT_ERROR(state, "cannot call method on " + std::string(typeName(receiver.type())));
     } catch (const BBL::Error& e) {
         JIT_ERROR(state, e.what);
+    } catch (const BblTerminated&) {
+        JIT_ERROR(state, "terminated");
     } catch (const std::exception& e) {
         JIT_ERROR(state, e.what());
     }
