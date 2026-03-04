@@ -1172,6 +1172,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     std::vector<JumpPatch> patches;
     std::unordered_map<uint8_t, BblClosure*> closureRegs;
     std::set<uint8_t> selfRefRegs;
+    bool hasSelfCalls = false;
     std::vector<size_t> selfCallPatches;
     std::vector<size_t> errorExitPatches;
 
@@ -1217,6 +1218,10 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             emitMove(jit.buf, jit.size, A, B);
             break;
         case OP_ADD: {
+            if (hasSelfCalls) {
+                emitAdd(jit.buf, jit.size, A, B, C);
+                break;
+            }
             // Type guard: if R[B] and R[C] are both int, fast path
             // Check B
             uint8_t ld[] = { 0x48, 0x8b, 0x83 };
@@ -1305,6 +1310,10 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
         case OP_SUB: {
+            if (hasSelfCalls) {
+                emitSub(jit.buf, jit.size, A, B, C);
+                break;
+            }
             uint8_t ld[] = { 0x48, 0x8b, 0x83 };
             emit(jit.buf, jit.size, ld, 3);
             emit32(jit.buf, jit.size, B * VAL_SIZE);
@@ -1396,6 +1405,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                     it->second.isClosure() &&
                     it->second.closureVal() == self) {
                     selfRefRegs.insert(A);
+                    hasSelfCalls = true;
                     break;
                 }
             }
