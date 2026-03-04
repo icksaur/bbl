@@ -16,3 +16,4 @@ benchmark.md
 # Benchmark non-BBL files (lua, csharp, binaries)
 tests/bench/lua/
 tests/bench/csharp/
+tests/bench/node/
