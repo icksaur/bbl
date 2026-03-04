@@ -597,7 +597,47 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "struct") {
-        throw BBL::Error{"'struct' declarations must use tree-walker (define structs before --bytecode)"};
+        if (node.children.size() < 4 || node.children.size() % 2 != 0)
+            throw BBL::Error{"struct: expected (struct Name type field ...)"};
+        if (node.children[1].type != NodeType::Symbol)
+            throw BBL::Error{"struct: name must be a symbol"};
+        auto& sname = node.children[1].stringVal;
+        if (state.structDescs.find(sname) != state.structDescs.end())
+            throw BBL::Error{"struct " + sname + " already defined"};
+
+        static const std::unordered_map<std::string, std::pair<CType, size_t>> typeTable = {
+            {"bool", {CType::Bool, 1}}, {"int8", {CType::Int8, 1}}, {"uint8", {CType::Uint8, 1}},
+            {"int16", {CType::Int16, 2}}, {"uint16", {CType::Uint16, 2}},
+            {"int32", {CType::Int32, 4}}, {"uint32", {CType::Uint32, 4}},
+            {"int64", {CType::Int64, 8}}, {"uint64", {CType::Uint64, 8}},
+            {"float32", {CType::Float32, 4}}, {"float64", {CType::Float64, 8}},
+        };
+        StructDesc desc;
+        desc.name = sname;
+        size_t offset = 0;
+        for (size_t i = 2; i < node.children.size(); i += 2) {
+            if (node.children[i].type != NodeType::Symbol || node.children[i+1].type != NodeType::Symbol)
+                throw BBL::Error{"struct " + sname + ": expected type and field name symbols"};
+            auto& typeSym = node.children[i].stringVal;
+            auto& fieldName = node.children[i+1].stringVal;
+            for (auto& f : desc.fields)
+                if (f.name == fieldName) throw BBL::Error{"struct " + sname + ": duplicate field name " + fieldName};
+            auto tit = typeTable.find(typeSym);
+            if (tit != typeTable.end()) {
+                desc.fields.push_back(FieldDesc{fieldName, offset, tit->second.second, tit->second.first, ""});
+                offset += tit->second.second;
+            } else {
+                auto sit = state.structDescs.find(typeSym);
+                if (sit != state.structDescs.end()) {
+                    desc.fields.push_back(FieldDesc{fieldName, offset, sit->second.totalSize, CType::Struct, typeSym});
+                    offset += sit->second.totalSize;
+                } else throw BBL::Error{"struct " + sname + ": unknown type " + typeSym};
+            }
+        }
+        desc.totalSize = offset;
+        state.structDescs[sname] = desc;
+        cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
+        return dest;
     }
 
     if (op == "binary") {
@@ -608,6 +648,8 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "sizeof") {
+        if (node.children.size() < 2) throw BBL::Error{"'sizeof' requires a type name"};
+        if (node.children[1].type != NodeType::Symbol) throw BBL::Error{"'sizeof' argument must be a type name"};
         uint8_t nameIdx = addStrConst(state, cs, node.children[1].stringVal);
         cs.chunk.emitABC(OP_SIZEOF, dest, nameIdx, 0, node.line);
         return dest;

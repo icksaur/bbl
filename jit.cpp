@@ -365,7 +365,15 @@ void jitVector(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, u
     else if (elemType == "int32") { elemTypeTag = BBL::Type::Int; elemSize = 4; }
     else JIT_ERROR(state, "unknown vector element type: " + elemType);
     BblVec* vec = state->allocVector(elemType, elemTypeTag, elemSize);
-    for (int i = 0; i < argc; i++) state->packValue(vec, regs[destReg + 1 + i]);
+    if (argc == 1 && regs[destReg + 1].type() == BBL::Type::Binary) {
+        BblBinary* bin = regs[destReg + 1].binaryVal();
+        if (elemSize == 0 || bin->data.size() % elemSize != 0)
+            JIT_ERROR(state, "vector: binary size " + std::to_string(bin->data.size()) +
+                      " is not a multiple of element size " + std::to_string(elemSize));
+        vec->data = bin->data;
+    } else {
+        for (int i = 0; i < argc; i++) state->packValue(vec, regs[destReg + 1 + i]);
+    }
     regs[destReg] = BblValue::makeVector(vec);
     JIT_CATCH
 }
@@ -484,8 +492,19 @@ void jitSizeof(BblValue* regs, BblState* state, Chunk* chunk, uint8_t A, uint8_t
     JIT_TRY
     std::string tname = chunk->constants[constIdx].stringVal()->data;
     auto dit = state->structDescs.find(tname);
-    if (dit == state->structDescs.end()) JIT_ERROR(state, "unknown struct type: " + tname);
-    regs[A] = BblValue::makeInt(static_cast<int64_t>(dit->second.totalSize));
+    if (dit != state->structDescs.end()) {
+        regs[A] = BblValue::makeInt(static_cast<int64_t>(dit->second.totalSize));
+        return;
+    }
+    uint32_t symId = state->resolveSymbol(tname);
+    if (state->vm) {
+        auto git = state->vm->globals.find(symId);
+        if (git != state->vm->globals.end() && git->second.type() == BBL::Type::Struct) {
+            regs[A] = BblValue::makeInt(static_cast<int64_t>(git->second.structVal()->desc->totalSize));
+            return;
+        }
+    }
+    JIT_ERROR(state, "sizeof: unknown type or variable: " + tname);
     JIT_CATCH
 }
 
