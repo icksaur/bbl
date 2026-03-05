@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <iostream>
 #include <string>
 
 static void printVersion() {
@@ -13,9 +14,10 @@ static void printVersion() {
 
 static void printUsage() {
     fputs("usage: bbl [options] [script.bbl] [args...]\n"
-          "  -e <code>   evaluate code string (may be repeated)\n"
-          "  -v          print version\n"
-          "  -h          print this help\n", stdout);
+          "  -e <code>     evaluate code string (may be repeated)\n"
+          "  --compress    compress binary literals in stdin to stdout\n"
+          "  -v            print version\n"
+          "  -h            print this help\n", stdout);
 }
 
 static void printValue(const BblValue& v) {
@@ -137,7 +139,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // First pass: handle -v/-h early
+    // First pass: handle -v/-h/--compress early
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-v") == 0) {
             printVersion();
@@ -145,6 +147,26 @@ int main(int argc, char* argv[]) {
         }
         if (strcmp(argv[i], "-h") == 0) {
             printUsage();
+            return 0;
+        }
+        if (strcmp(argv[i], "--compress") == 0) {
+            std::string source((std::istreambuf_iterator<char>(std::cin)),
+                               std::istreambuf_iterator<char>());
+            BblLexer lexer(source.c_str(), source.size());
+            int prevEnd = 0;
+            Token tok = lexer.nextToken();
+            while (tok.type != TokenType::Eof) {
+                if (tok.type == TokenType::Binary && !tok.isCompressed && tok.binarySource) {
+                    fwrite(source.c_str() + prevEnd, 1, tok.sourceStart - prevEnd, stdout);
+                    auto comp = BBL::lz4Compress(
+                        reinterpret_cast<const uint8_t*>(tok.binarySource), tok.binarySize);
+                    fprintf(stdout, "0z%zu:", comp.size());
+                    fwrite(comp.data(), 1, comp.size(), stdout);
+                    prevEnd = tok.sourceEnd;
+                }
+                tok = lexer.nextToken();
+            }
+            fwrite(source.c_str() + prevEnd, 1, source.size() - prevEnd, stdout);
             return 0;
         }
     }
@@ -200,7 +222,7 @@ int main(int argc, char* argv[]) {
         }
         bbl.set("args", BblValue::makeTable(argsTable));
 
-        std::ifstream file(scriptPath);
+        std::ifstream file(scriptPath, std::ios::binary);
         if (!file.is_open()) {
             fprintf(stderr, "bbl: cannot open %s\n", scriptFile);
             return 1;

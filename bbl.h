@@ -99,16 +99,10 @@ struct BblBinary : GcObj {
     std::vector<uint8_t> data;
     const char* lazySource = nullptr;
     size_t lazySize = 0;
+    bool compressed = false;
 
-    void materialize() {
-        if (lazySource) {
-            data.assign(reinterpret_cast<const uint8_t*>(lazySource),
-                        reinterpret_cast<const uint8_t*>(lazySource) + lazySize);
-            lazySource = nullptr;
-        }
-    }
-
-    size_t length() const { return lazySource ? lazySize : data.size(); }
+    void materialize();
+    size_t length() const;
     BblBinary() { gcType = GcType::Binary; }
 };
 
@@ -396,7 +390,10 @@ struct Token {
     std::vector<uint8_t> binaryData;
     const char* binarySource = nullptr;
     size_t binarySize = 0;
+    bool isCompressed = false;
     int line = 1;
+    int sourceStart = 0;
+    int sourceEnd = 0;
 };
 
 class BblLexer {
@@ -412,9 +409,11 @@ class BblLexer {
     Token readNumber();
     Token readSymbolOrKeyword();
     Token readBinary();
+    Token readCompressedBinary();
 
 public:
     explicit BblLexer(const char* source);
+    BblLexer(const char* source, size_t length);
     Token nextToken();
     int currentLine() const { return line; }
 };
@@ -459,6 +458,7 @@ struct AstNode {
     std::vector<uint8_t> binaryData;
     const char* binarySource = nullptr;
     size_t binarySize = 0;
+    bool isCompressed = false;
     std::vector<AstNode> children;
     int line = 1;
     mutable uint32_t symbolId = 0;                // lazy-resolved symbol ID for Symbol nodes
@@ -653,7 +653,7 @@ struct BblState {
     BblString* intern(const std::string& s);
     BblString* allocString(std::string s);
     BblBinary* allocBinary(std::vector<uint8_t> data);
-    BblBinary* allocLazyBinary(const char* src, size_t size);
+    BblBinary* allocLazyBinary(const char* src, size_t size, bool compressed = false);
     BblFn* allocFn();
     BblStruct* allocStruct(StructDesc* desc);
     BblVec* allocVector(const std::string& elemType, BBL::Type elemTypeTag, size_t elemSize);
@@ -754,4 +754,7 @@ namespace BBL {
     void addOs(BblState& bbl);
     void addChildStates(BblState& bbl, bool childMode = false);
     void addStdLib(BblState& bbl);
+
+    std::vector<uint8_t> lz4Compress(const uint8_t* data, size_t size);
+    std::vector<uint8_t> lz4Decompress(const uint8_t* data, size_t size);
 }

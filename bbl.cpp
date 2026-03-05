@@ -137,6 +137,7 @@ uint32_t BblState::resolveSymbol(const std::string& name) const {
 // ---------- Lexer ----------
 
 BblLexer::BblLexer(const char* source) : src(source), len(static_cast<int>(strlen(source))) {}
+BblLexer::BblLexer(const char* source, size_t length) : src(source), len(static_cast<int>(length)) {}
 
 char BblLexer::peek() const {
     if (pos >= len) {
@@ -218,6 +219,9 @@ Token BblLexer::readNumber() {
     if (!isNegative && peek() == '0' && pos + 1 < len && src[pos + 1] == 'b') {
         return readBinary();
     }
+    if (!isNegative && peek() == '0' && pos + 1 < len && src[pos + 1] == 'z') {
+        return readCompressedBinary();
+    }
 
     bool isFloat = false;
     while (pos < len && (peek() >= '0' && peek() <= '9')) {
@@ -263,6 +267,30 @@ Token BblLexer::readBinary() {
     t.type = TokenType::Binary;
     t.binarySource = src + pos;
     t.binarySize = size;
+    t.line = startLine;
+    for (size_t i = 0; i < size; i++) {
+        if (src[pos] == '\n') line++;
+        pos++;
+    }
+    return t;
+}
+
+Token BblLexer::readCompressedBinary() {
+    int startLine = line;
+    pos += 2; // skip 0z
+    int sizeStart = pos;
+    while (pos < len && peek() >= '0' && peek() <= '9') pos++;
+    if (pos >= len || peek() != ':')
+        throw BBL::Error{"invalid compressed binary literal at line " + std::to_string(startLine)};
+    size_t size = std::stoull(std::string(src + sizeStart, src + pos));
+    pos++; // skip :
+    if (static_cast<size_t>(len - pos) < size)
+        throw BBL::Error{"compressed binary literal: insufficient bytes at line " + std::to_string(startLine)};
+    Token t;
+    t.type = TokenType::Binary;
+    t.binarySource = src + pos;
+    t.binarySize = size;
+    t.isCompressed = true;
     t.line = startLine;
     for (size_t i = 0; i < size; i++) {
         if (src[pos] == '\n') line++;
@@ -325,49 +353,60 @@ Token BblLexer::nextToken() {
         Token t;
         t.type = TokenType::Eof;
         t.line = line;
+        t.sourceStart = pos;
+        t.sourceEnd = pos;
         return t;
     }
 
+    int startP = pos;
     char c = peek();
 
     if (c == '(') {
         advance();
-        return {TokenType::LParen, 0, 0, false, "", {}, nullptr, 0, line};
+        return {TokenType::LParen, 0, 0, false, "", {}, nullptr, 0, false, line, startP, pos};
     }
     if (c == ')') {
         advance();
-        return {TokenType::RParen, 0, 0, false, "", {}, nullptr, 0, line};
+        return {TokenType::RParen, 0, 0, false, "", {}, nullptr, 0, false, line, startP, pos};
     }
     if (c == '"') {
-        return readString();
+        Token t = readString();
+        t.sourceStart = startP; t.sourceEnd = pos;
+        return t;
     }
 
-    // Negative number: - followed by digit (but only when not inside a symbol context)
     if (c == '-' && pos + 1 < len && src[pos + 1] >= '0' && src[pos + 1] <= '9') {
-        return readNumber();
+        Token t = readNumber();
+        t.sourceStart = startP; t.sourceEnd = pos;
+        return t;
     }
 
     if ((c >= '0' && c <= '9')) {
-        return readNumber();
+        Token t = readNumber();
+        t.sourceStart = startP; t.sourceEnd = pos;
+        return t;
     }
 
-    // The - symbol by itself or operator symbols
     if (c == '-' || isOperatorChar(c)) {
-        return readSymbolOrKeyword();
+        Token t = readSymbolOrKeyword();
+        t.sourceStart = startP; t.sourceEnd = pos;
+        return t;
     }
 
     if (c == '.') {
         advance();
-        return {TokenType::Dot, 0, 0, false, "", {}, nullptr, 0, line};
+        return {TokenType::Dot, 0, 0, false, "", {}, nullptr, 0, false, line, startP, pos};
     }
 
     if (c == ':') {
         advance();
-        return {TokenType::Colon, 0, 0, false, "", {}, nullptr, 0, line};
+        return {TokenType::Colon, 0, 0, false, "", {}, nullptr, 0, false, line, startP, pos};
     }
 
     if (isSymbolStart(c)) {
-        return readSymbolOrKeyword();
+        Token t = readSymbolOrKeyword();
+        t.sourceStart = startP; t.sourceEnd = pos;
+        return t;
     }
 
     throw BBL::Error{"unexpected character '" + std::string(1, c) + "' at line " + std::to_string(line)};
@@ -405,6 +444,7 @@ static AstNode parsePrimary(BblLexer& lexer, Token& tok) {
             node.type = NodeType::BinaryLiteral;
             node.binarySource = tok.binarySource;
             node.binarySize = tok.binarySize;
+            node.isCompressed = tok.isCompressed;
             break;
         case TokenType::Symbol:
             node.type = NodeType::Symbol;
@@ -588,6 +628,33 @@ BblString* BblState::allocString(std::string s) {
     return str;
 }
 
+#include <lz4frame.h>
+
+void BblBinary::materialize() {
+    if (!lazySource) return;
+    if (compressed) {
+        data = BBL::lz4Decompress(reinterpret_cast<const uint8_t*>(lazySource), lazySize);
+    } else {
+        data.assign(reinterpret_cast<const uint8_t*>(lazySource),
+                    reinterpret_cast<const uint8_t*>(lazySource) + lazySize);
+    }
+    lazySource = nullptr;
+}
+
+size_t BblBinary::length() const {
+    if (!lazySource) return data.size();
+    if (!compressed) return lazySize;
+    LZ4F_dctx* ctx = nullptr;
+    LZ4F_createDecompressionContext(&ctx, LZ4F_VERSION);
+    LZ4F_frameInfo_t info = {};
+    size_t consumed = lazySize;
+    size_t ret = LZ4F_getFrameInfo(ctx, &info, lazySource, &consumed);
+    LZ4F_freeDecompressionContext(ctx);
+    if (LZ4F_isError(ret) || !info.contentSize)
+        throw BBL::Error{"compressed binary: invalid LZ4 frame"};
+    return static_cast<size_t>(info.contentSize);
+}
+
 BblBinary* BblState::allocBinary(std::vector<uint8_t> data) {
     auto* b = new BblBinary();
     b->data = std::move(data);
@@ -596,10 +663,11 @@ BblBinary* BblState::allocBinary(std::vector<uint8_t> data) {
     return b;
 }
 
-BblBinary* BblState::allocLazyBinary(const char* src, size_t size) {
+BblBinary* BblState::allocLazyBinary(const char* src, size_t size, bool isCompressed) {
     auto* b = new BblBinary();
     b->lazySource = src;
     b->lazySize = size;
+    b->compressed = isCompressed;
     b->gcNext = gcHead; gcHead = b;
     allocCount++;
     return b;
@@ -848,7 +916,7 @@ void BblState::materializeLazyBinaries() {
 }
 
 void BblState::exec(const std::string& source) {
-    BblLexer lexer(source.c_str());
+    BblLexer lexer(source.c_str(), source.size());
     auto nodes = parse(lexer);
     Chunk chunk = compile(*this, nodes);
     jitExecute(*this, chunk);
@@ -856,7 +924,7 @@ void BblState::exec(const std::string& source) {
 }
 
 BblValue BblState::execExpr(const std::string& source) {
-    BblLexer lexer(source.c_str());
+    BblLexer lexer(source.c_str(), source.size());
     auto nodes = parse(lexer);
     Chunk chunk = compile(*this, nodes);
     auto result = jitExecute(*this, chunk);
@@ -919,7 +987,7 @@ void BblState::execfile(const std::string& path) {
             }
         }
     }
-    std::ifstream file(resolved);
+    std::ifstream file(resolved, std::ios::binary);
     if (!file.is_open()) {
         throw BBL::Error{"file read failed: " + resolved.string()};
     }
@@ -2198,12 +2266,67 @@ void BBL::addOs(BblState& bbl) {
     bbl.defn("spawn-detached", bblOs_spawnDetached);
 }
 
+std::vector<uint8_t> BBL::lz4Compress(const uint8_t* data, size_t size) {
+    LZ4F_preferences_t prefs = LZ4F_INIT_PREFERENCES;
+    prefs.frameInfo.contentSize = size;
+    size_t bound = LZ4F_compressFrameBound(size, &prefs);
+    std::vector<uint8_t> out(bound);
+    size_t written = LZ4F_compressFrame(out.data(), bound, data, size, &prefs);
+    if (LZ4F_isError(written))
+        throw BBL::Error{"LZ4 compress failed: " + std::string(LZ4F_getErrorName(written))};
+    out.resize(written);
+    return out;
+}
+
+std::vector<uint8_t> BBL::lz4Decompress(const uint8_t* data, size_t size) {
+    LZ4F_dctx* ctx = nullptr;
+    size_t ret = LZ4F_createDecompressionContext(&ctx, LZ4F_VERSION);
+    if (LZ4F_isError(ret))
+        throw BBL::Error{"LZ4 decompress: init failed"};
+    LZ4F_frameInfo_t info = {};
+    size_t consumed = size;
+    ret = LZ4F_getFrameInfo(ctx, &info, data, &consumed);
+    if (LZ4F_isError(ret)) {
+        LZ4F_freeDecompressionContext(ctx);
+        throw BBL::Error{"LZ4 decompress: invalid frame"};
+    }
+    size_t outSize = info.contentSize ? static_cast<size_t>(info.contentSize) : size * 4;
+    if (outSize > 256 * 1024 * 1024) {
+        LZ4F_freeDecompressionContext(ctx);
+        throw BBL::Error{"LZ4 decompress: output too large"};
+    }
+    std::vector<uint8_t> out(outSize);
+    size_t dstSize = outSize;
+    size_t srcSize = size - consumed;
+    ret = LZ4F_decompress(ctx, out.data(), &dstSize, data + consumed, &srcSize, nullptr);
+    if (LZ4F_isError(ret)) {
+        LZ4F_freeDecompressionContext(ctx);
+        throw BBL::Error{"LZ4 decompress failed: " + std::string(LZ4F_getErrorName(ret))};
+    }
+    out.resize(dstSize);
+    LZ4F_freeDecompressionContext(ctx);
+    return out;
+}
+
 void BBL::addStdLib(BblState& bbl) {
     BBL::addPrint(bbl);
     BBL::addMath(bbl);
     BBL::addFileIo(bbl);
     BBL::addOs(bbl);
     BBL::addChildStates(bbl, false);
+
+    bbl.defn("compress", [](BblState* b) -> int {
+        BblBinary* bin = b->getBinaryArg(0);
+        auto out = BBL::lz4Compress(bin->data.data(), bin->data.size());
+        b->pushBinary(out.data(), out.size());
+        return 1;
+    });
+    bbl.defn("decompress", [](BblState* b) -> int {
+        BblBinary* bin = b->getBinaryArg(0);
+        auto out = BBL::lz4Decompress(bin->data.data(), bin->data.size());
+        b->pushBinary(out.data(), out.size());
+        return 1;
+    });
 }
 
 // ---------- Child States ----------
