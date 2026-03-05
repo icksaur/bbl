@@ -11,30 +11,53 @@ legend:
 
 ---
 
-## LSP server: `bbl --lsp`
+## VS Code extension for BBL (../bbl-vscode/)
 
-### Vendor yyjson
-- [ ] Download yyjson.c + yyjson.h into `vendor/yyjson/`. Add to CMakeLists.txt as static lib.
+### Scaffold
+- [ ] Create `../bbl-vscode/` with `package.json`, `language-configuration.json`, `syntaxes/bbl.tmLanguage.json`, `src/extension.js`.
+- [ ] `npm init` and add `vscode-languageclient` as dependency.
 
-### LSP core (`src/lsp.cpp`)
-- [ ] JSON-RPC transport: read `Content-Length: N\r\n\r\n<N bytes>` from stdin, parse with yyjson. Write responses with same framing to stdout.
-- [ ] Initialize handshake: respond with capabilities (textDocumentSync=Full, completionProvider, hoverProvider, definitionProvider, foldingRangeProvider). Handle `initialized`.
-- [ ] Document sync: `didOpen` stores (uri → text), `didChange` updates, `didClose` removes.
-- [ ] Diagnostics: on open/change, lex+parse. Catch BBL::Error, publish diagnostics with line/character range.
-- [ ] Completions: after `(` → keywords + builtins. After `:` → method names. Bare symbol → in-scope variables + builtins.
-- [ ] Hover: static table of builtin signatures. Variables → definition line.
-- [ ] Go-to-definition: find `(= name ...)` binding for symbol under cursor.
-- [ ] Folding ranges: matched paren pairs as foldable regions.
-- [ ] Shutdown/exit.
+### package.json
+- [ ] Name: `bbl-language`. Publisher: `icksaur`. Engines: `vscode ^1.75.0`.
+- [ ] Register language `bbl` with extensions `.bbl`.
+- [ ] Register TextMate grammar `source.bbl`.
+- [ ] Register language configuration.
+- [ ] Main: `src/extension.js`. Activation: `onLanguage:bbl`.
 
-### CLI integration
-- [ ] `main.cpp`: `--lsp` flag calls `lspMain()`.
-- [ ] `src/lsp.cpp` added to CMakeLists.txt.
+### TextMate grammar (syntaxes/bbl.tmLanguage.json)
+- [ ] Comments: `//` line comments, `#!` shebang.
+- [ ] Strings: begin/end `"` with escape captures for `\"`, `\\`, `\n`, `\t`.
+- [ ] Numbers: integers and floats.
+- [ ] Binary literals: `0b[0-9]+:` and `0z[0-9]+:` prefixes.
+- [ ] Keywords: `if`, `loop`, `each`, `fn`, `do`, `with`, `try`, `catch`, `break`, `continue`, `and`, `or`, `not`.
+- [ ] Type constructors: `vector`, `table`, `struct`, `binary`, `int`, `sizeof`, `exec`, `execfile`.
+- [ ] Constants: `true`, `false`, `null`.
+- [ ] Builtins: `print`, `str`, `typeof`, `float`, `fmt`, `compress`, `decompress`, math functions.
+- [ ] Method calls: `:method-name` pattern.
+- [ ] Variable bindings: `(= name` captures name as variable.
 
-### Tests
-- [ ] Unit test in `test_bbl.cpp`: construct JSON-RPC initialize message, pipe to lspMain via string, verify response contains capabilities.
-- [ ] Unit test: send didOpen with parse error, verify diagnostics notification.
-- [ ] Shell script `tests/test_lsp.sh`: pipe multi-message JSON-RPC sequence to `bbl --lsp`, validate responses.
-- [ ] Verify all 736 existing tests + 24 functional tests still pass.
+### language-configuration.json
+- [ ] Comments: lineComment `//`.
+- [ ] Brackets: `(` `)`.
+- [ ] Auto-closing pairs: parens, double quotes.
+- [ ] Folding markers: `(` and `)`.
 
-## VS Code extension (deferred — separate repo)
+### extension.js (LSP client)
+- [ ] Import `vscode-languageclient`.
+- [ ] On activate: create LanguageClient with server command `bbl --lsp`, stdio transport.
+- [ ] On deactivate: stop client.
+
+### Install bbl (prerequisite)
+- [ ] Update PKGBUILD in bbl/ if needed. `makepkg -si` installs `bbl` to /usr/bin.
+- [ ] Verify `bbl --lsp` works from PATH.
+
+### Install extension
+- [ ] `cd ../bbl-vscode && npm install && npx vsce package` → produces .vsix.
+- [ ] `code --install-extension bbl-language-0.0.1.vsix`.
+- [ ] Or: symlink `ln -s $(pwd) ~/.vscode/extensions/bbl-language`.
+
+### Test
+- [ ] Open a `.bbl` file in VS Code. Verify syntax highlighting.
+- [ ] Introduce parse error. Verify red squiggle.
+- [ ] Type `(` and verify completion list appears.
+- [ ] Hover over `print` and verify signature popup.
