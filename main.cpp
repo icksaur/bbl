@@ -1,4 +1,5 @@
 #include "bbl.h"
+#include "src/lsp.h"
 #include <cstdio>
 #include <cstring>
 #include <cinttypes>
@@ -147,6 +148,10 @@ int main(int argc, char* argv[]) {
         }
         if (strcmp(argv[i], "-h") == 0) {
             printUsage();
+            return 0;
+        }
+        if (strcmp(argv[i], "--lsp") == 0) {
+            lspMain();
             return 0;
         }
         if (strcmp(argv[i], "--compress") == 0) {

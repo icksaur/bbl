@@ -14,8 +14,8 @@ add_library(bbl_lib STATIC bbl.cpp compiler.cpp vm.cpp disasm.cpp jit.cpp)
 target_include_directories(bbl_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(bbl_lib PUBLIC Threads::Threads lz4)
 
-add_executable(bbl main.cpp)
-target_link_libraries(bbl PRIVATE bbl_lib)
+add_executable(bbl main.cpp src/lsp.cpp)
+target_link_libraries(bbl PRIVATE bbl_lib yyjson)
 
 install(TARGETS bbl RUNTIME DESTINATION bin)
 
@@ -23,3 +23,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     add_executable(bbl_tests tests/test_bbl.cpp)
     target_link_libraries(bbl_tests PRIVATE bbl_lib)
 endif()
+
+add_library(yyjson STATIC vendor/yyjson/yyjson.c)
+set_target_properties(yyjson PROPERTIES C_STANDARD 99)
+target_include_directories(yyjson PUBLIC vendor/yyjson)
