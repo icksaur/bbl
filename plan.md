@@ -1,14 +1,14 @@
-# plan: lazy binary loading
+# plan: compressed binary blobs
 
-Per `doc/features/lazy-binary.md`.
+Per `doc/features/compressed-binary.md`. Depends on LZ4 (`-llz4`).
 
 ## steps
 
-- [ ] **Lexer: skip binary data** — In `readBinary()` (bbl.cpp ~line 247), instead of copying bytes into `Token::binaryData`, store `binarySource` pointer (into source string) and `binarySize`. Skip forward by `size` bytes but still scan for `\n` to maintain line counter accuracy. Add `const char* binarySource` and `size_t binarySize` fields to Token struct.
-- [ ] **AST: store reference** — Change `AstNode::binaryData` from `vector<uint8_t>` to `const char* binarySource + size_t binarySize`. Update `parsePrimary()` to copy pointer/size, not data.
-- [ ] **BblBinary: add lazy fields** — Add `const char* lazySource = nullptr` and `size_t lazySize = 0` to BblBinary. Add `materialize()` method. Update `length()` to return `lazySize` when unmaterialized. Add `allocLazyBinary(const char* src, size_t size)` factory on BblState.
-- [ ] **Compiler: create lazy constant** — In compiler.cpp BinaryLiteral handling, create BblBinary via `allocLazyBinary()` instead of copying data via `allocBinary()`.
-- [ ] **JIT: materialize on access** — In jitMcall binary methods (`:at`, `:set`, `:slice`, `:copy-from`, `:resize`), call `bin->materialize()` before accessing `data`. In `jitBinary()` for binary→vector conversion, materialize. `:length` uses `length()` which handles lazy case without materializing.
-- [ ] **C++ API: materialize on access** — In `getBinary()` and `getBinaryArg()`, call `materialize()` before returning pointer to host code. In `File.write-bytes`, materialize before writing.
-- [ ] **End-of-exec sweep** — At end of `exec()` and `execExpr()`, walk `gcHead` unconditionally and call `materialize()` on all lazy BblBinary objects. This prevents dangling source pointers in REPL mode and after execfile().
-- [ ] **Tests** — Verify all existing binary tests pass unchanged. Add test: large binary literal where only `:length` is queried (should not allocate data vector).
+- [ ] **CMake: add LZ4** — `find_library(LZ4 lz4)`, link to bbl target. Optional via `HAVE_LZ4` define.
+- [ ] **Lexer: `0z` prefix** — In number parsing, detect `0z` like `0b`. Same readBinary logic but sets `isCompressed=true` on token. Add `bool isCompressed` to Token and AstNode.
+- [ ] **BblBinary: compressed materialize** — Add `bool compressed` field. `materialize()` calls `LZ4F_decompress` when compressed. `length()` reads LZ4 frame header for content size via `LZ4F_getFrameInfo()` without full decompression.
+- [ ] **Compiler: propagate compressed flag** — BinaryLiteral with `isCompressed` creates lazy binary with `compressed=true`.
+- [ ] **CLI: `bbl --compress`** — In main.cpp, new flag. Lex input file, find `0b` tokens, compress payloads with `LZ4F_compressFrame()`, output source with `0b` → `0z` and compressed payloads. Non-binary tokens output verbatim.
+- [ ] **C++ API** — `BBL::compress(data, size)` and `BBL::decompress(data, size)` returning `vector<uint8_t>`. Pure LZ4 wrappers.
+- [ ] **Stdlib** — Register `compress` and `decompress` as BBL functions taking and returning BblBinary.
+- [ ] **Tests** — Compress a binary literal, verify decompression matches. Test `:length` without decompressing. Round-trip test.
