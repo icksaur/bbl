@@ -80,7 +80,9 @@ static uint8_t compileExpr(BblState& state, CompilerState& cs, const AstNode& no
             cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
             return dest;
         case NodeType::BinaryLiteral: {
-            BblBinary* bin = state.allocBinary(node.binaryData);
+            BblBinary* bin = node.binarySource
+                ? state.allocLazyBinary(node.binarySource, node.binarySize)
+                : state.allocBinary(node.binaryData);
             uint16_t idx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeBinary(bin)));
             cs.chunk.emitABx(OP_LOADK, dest, idx, node.line);
             return dest;

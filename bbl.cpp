@@ -261,14 +261,11 @@ Token BblLexer::readBinary() {
     }
     Token t;
     t.type = TokenType::Binary;
-    t.binaryData.assign(reinterpret_cast<const uint8_t*>(src + pos),
-                        reinterpret_cast<const uint8_t*>(src + pos + size));
+    t.binarySource = src + pos;
+    t.binarySize = size;
     t.line = startLine;
-    // Advance pos through raw bytes, tracking newlines
     for (size_t i = 0; i < size; i++) {
-        if (src[pos] == '\n') {
-            line++;
-        }
+        if (src[pos] == '\n') line++;
         pos++;
     }
     return t;
@@ -335,11 +332,11 @@ Token BblLexer::nextToken() {
 
     if (c == '(') {
         advance();
-        return {TokenType::LParen, 0, 0, false, "", {}, line};
+        return {TokenType::LParen, 0, 0, false, "", {}, nullptr, 0, line};
     }
     if (c == ')') {
         advance();
-        return {TokenType::RParen, 0, 0, false, "", {}, line};
+        return {TokenType::RParen, 0, 0, false, "", {}, nullptr, 0, line};
     }
     if (c == '"') {
         return readString();
@@ -361,12 +358,12 @@ Token BblLexer::nextToken() {
 
     if (c == '.') {
         advance();
-        return {TokenType::Dot, 0, 0, false, "", {}, line};
+        return {TokenType::Dot, 0, 0, false, "", {}, nullptr, 0, line};
     }
 
     if (c == ':') {
         advance();
-        return {TokenType::Colon, 0, 0, false, "", {}, line};
+        return {TokenType::Colon, 0, 0, false, "", {}, nullptr, 0, line};
     }
 
     if (isSymbolStart(c)) {
@@ -406,7 +403,8 @@ static AstNode parsePrimary(BblLexer& lexer, Token& tok) {
             break;
         case TokenType::Binary:
             node.type = NodeType::BinaryLiteral;
-            node.binaryData = std::move(tok.binaryData);
+            node.binarySource = tok.binarySource;
+            node.binarySize = tok.binarySize;
             break;
         case TokenType::Symbol:
             node.type = NodeType::Symbol;
@@ -593,6 +591,15 @@ BblString* BblState::allocString(std::string s) {
 BblBinary* BblState::allocBinary(std::vector<uint8_t> data) {
     auto* b = new BblBinary();
     b->data = std::move(data);
+    b->gcNext = gcHead; gcHead = b;
+    allocCount++;
+    return b;
+}
+
+BblBinary* BblState::allocLazyBinary(const char* src, size_t size) {
+    auto* b = new BblBinary();
+    b->lazySource = src;
+    b->lazySize = size;
     b->gcNext = gcHead; gcHead = b;
     allocCount++;
     return b;
@@ -832,18 +839,29 @@ static BblValue stringNoArgMethod(BblState& bbl, const std::string& data, const 
 
 // ---------- exec / execfile ----------
 
+void BblState::materializeLazyBinaries() {
+    for (GcObj* obj = gcHead; obj; obj = obj->gcNext) {
+        if (obj->gcType == GcType::Binary) {
+            static_cast<BblBinary*>(obj)->materialize();
+        }
+    }
+}
+
 void BblState::exec(const std::string& source) {
     BblLexer lexer(source.c_str());
     auto nodes = parse(lexer);
     Chunk chunk = compile(*this, nodes);
     jitExecute(*this, chunk);
+    materializeLazyBinaries();
 }
 
 BblValue BblState::execExpr(const std::string& source) {
     BblLexer lexer(source.c_str());
     auto nodes = parse(lexer);
     Chunk chunk = compile(*this, nodes);
-    return jitExecute(*this, chunk);
+    auto result = jitExecute(*this, chunk);
+    materializeLazyBinaries();
+    return result;
 }
 
 std::filesystem::path BblState::resolveSandboxPath(const std::string& path, const char* context) {
@@ -980,6 +998,7 @@ std::expected<BblBinary*, BBL::GetError> BblState::getBinary(const std::string& 
     auto v = get(name);
     if (!v) return std::unexpected(v.error());
     if (v->type() != BBL::Type::Binary) return std::unexpected(BBL::GetError::TypeMismatch);
+    v->binaryVal()->materialize();
     return v->binaryVal();
 }
 
@@ -1081,7 +1100,9 @@ BblBinary* BblState::getBinaryArg(int i) const {
     if (callArgs[i].type() != BBL::Type::Binary) {
         throw BBL::Error{"type mismatch: expected binary arg, got " + typeName(callArgs[i].type())};
     }
-    return callArgs[i].binaryVal();
+    auto* bin = callArgs[i].binaryVal();
+    bin->materialize();
+    return bin;
 }
 
 BblValue BblState::getArg(int i) const {

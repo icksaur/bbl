@@ -1,3 +1,0 @@
-(= t (table))
-(:set t key value)
-(print (:get t key default))

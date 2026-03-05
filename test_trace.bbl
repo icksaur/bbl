@@ -1,6 +1,0 @@
-(= i 0)
-(= sum 0)
-(loop (< i 10)
-  (= sum (+ sum i))
-  (= i (+ i 1)))
-sum

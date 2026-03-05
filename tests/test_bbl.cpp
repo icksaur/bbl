@@ -160,9 +160,9 @@ TEST(test_lexer_binary) {
     BblLexer lex("0b5:hello");
     auto t = lex.nextToken();
     ASSERT_EQ(t.type, TokenType::Binary);
-    ASSERT_EQ(t.binaryData.size(), (size_t)5);
-    ASSERT_EQ(t.binaryData[0], (uint8_t)'h');
-    ASSERT_EQ(t.binaryData[4], (uint8_t)'o');
+    ASSERT_EQ(t.binarySize, (size_t)5);
+    ASSERT_EQ(t.binarySource[0], 'h');
+    ASSERT_EQ(t.binarySource[4], 'o');
 }
 
 TEST(test_lexer_unterminated_string) {

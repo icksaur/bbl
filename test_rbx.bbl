@@ -1,9 +1,0 @@
-// Test that accesses local variable AFTER recursive call
-(= test-rbx (fn (n x)
-  (if (< n 1)
-    x
-    (do
-      (= result (test-rbx (- n 1) (* x 2)))
-      (+ result x)))))  // Uses x after recursive call - requires rbx to be intact
-
-(print (test-rbx 3 1) "\n")  // Should print: 1 + 2 + 4 + 8 = 15

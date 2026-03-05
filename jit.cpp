@@ -360,27 +360,33 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         BblBinary* bin = receiver.binaryVal();
         if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(bin->length()));
         else if (methodStr == state->m.at) {
+            bin->materialize();
             int64_t idx = args[0].intVal();
             if (idx < 0 || static_cast<size_t>(idx) >= bin->length()) JIT_ERROR(state, "binary index out of bounds");
             regs[base] = BblValue::makeInt(bin->data[static_cast<size_t>(idx)]);
         } else if (methodStr == state->m.set) {
+            bin->materialize();
             int64_t idx = args[0].intVal();
             if (idx < 0 || static_cast<size_t>(idx) >= bin->length()) JIT_ERROR(state, "binary index out of bounds");
             if (args[1].type() != BBL::Type::Int) JIT_ERROR(state, "binary.set: value must be integer");
             bin->data[static_cast<size_t>(idx)] = static_cast<uint8_t>(args[1].intVal());
             regs[base] = BblValue::makeNull();
         } else if (methodStr == state->m.slice) {
+            bin->materialize();
             int64_t s = args[0].intVal(), l = args[1].intVal();
             if (s < 0 || l < 0 || static_cast<size_t>(s + l) > bin->length()) JIT_ERROR(state, "binary.slice: out of bounds");
             regs[base] = BblValue::makeBinary(state->allocBinary(std::vector<uint8_t>(bin->data.begin() + s, bin->data.begin() + s + l)));
         } else if (methodStr == state->m.resize) {
+            bin->materialize();
             int64_t sz = args[0].intVal();
             if (sz < 0) JIT_ERROR(state, "binary.resize: size must be non-negative");
             bin->data.resize(static_cast<size_t>(sz), 0);
             regs[base] = BblValue::makeNull();
         } else if (methodStr == state->m.copy_from) {
+            bin->materialize();
             if (args[0].type() != BBL::Type::Binary) JIT_ERROR(state, "binary.copy-from: source must be binary");
             BblBinary* src = args[0].binaryVal();
+            src->materialize();
             int64_t dO = argc > 1 ? args[1].intVal() : 0;
             int64_t sO = argc > 2 ? args[2].intVal() : 0;
             int64_t ln = argc > 3 ? args[3].intVal() : static_cast<int64_t>(src->length()) - sO;

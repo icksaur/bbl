@@ -1,9 +1,0 @@
-// Test capture access when R[0] is not a closure
-// This shouldn't happen with correct bytecode, but let's see if we can trigger it
-
-(= broken (fn ()
-  // If we could somehow call this as a non-closure context...
-  // Actually this is hard to trigger from valid bbl code
-  42))
-
-(print (broken) "\n")

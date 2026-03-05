@@ -513,14 +513,16 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
             } else if (receiver.type() == BBL::Type::Binary) {
                 BblBinary* bin = receiver.binaryVal();
                 if (methodStr == state.m.length) R(A) = BblValue::makeInt(static_cast<int64_t>(bin->length()));
-                else if (methodStr == state.m.at) R(A) = BblValue::makeInt(bin->data[static_cast<size_t>(argsBuf[0].intVal())]);
-                else if (methodStr == state.m.set) { bin->data[static_cast<size_t>(argsBuf[0].intVal())] = static_cast<uint8_t>(argsBuf[1].intVal()); R(A) = BblValue::makeNull(); }
+                else if (methodStr == state.m.at) { bin->materialize(); R(A) = BblValue::makeInt(bin->data[static_cast<size_t>(argsBuf[0].intVal())]); }
+                else if (methodStr == state.m.set) { bin->materialize(); bin->data[static_cast<size_t>(argsBuf[0].intVal())] = static_cast<uint8_t>(argsBuf[1].intVal()); R(A) = BblValue::makeNull(); }
                 else if (methodStr == state.m.slice) {
+                    bin->materialize();
                     size_t s = static_cast<size_t>(argsBuf[0].intVal()), l = static_cast<size_t>(argsBuf[1].intVal());
                     R(A) = BblValue::makeBinary(state.allocBinary(std::vector<uint8_t>(bin->data.begin() + s, bin->data.begin() + s + l)));
-                } else if (methodStr == state.m.resize) { bin->data.resize(static_cast<size_t>(argsBuf[0].intVal()), 0); R(A) = BblValue::makeNull(); }
+                } else if (methodStr == state.m.resize) { bin->materialize(); bin->data.resize(static_cast<size_t>(argsBuf[0].intVal()), 0); R(A) = BblValue::makeNull(); }
                 else if (methodStr == state.m.copy_from) {
-                    BblBinary* src = argsBuf[0].binaryVal();
+                    bin->materialize();
+                    BblBinary* src = argsBuf[0].binaryVal(); src->materialize();
                     size_t dO = static_cast<size_t>(nargs) > 1 ? static_cast<size_t>(argsBuf[1].intVal()) : 0;
                     size_t sO = static_cast<size_t>(nargs) > 2 ? static_cast<size_t>(argsBuf[2].intVal()) : 0;
                     size_t ln = static_cast<size_t>(nargs) > 3 ? static_cast<size_t>(argsBuf[3].intVal()) : src->length() - sO;

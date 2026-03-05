@@ -1,3 +1,0 @@
-(= add-test (fn (a b) (+ a b)))
-(= result (add-test -5 3))
-(print "Result:" result)

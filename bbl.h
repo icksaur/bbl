@@ -97,7 +97,18 @@ enum class ObjKind : uint8_t { Table, Vector, Struct, Binary, UserData };
 
 struct BblBinary : GcObj {
     std::vector<uint8_t> data;
-    size_t length() const { return data.size(); }
+    const char* lazySource = nullptr;
+    size_t lazySize = 0;
+
+    void materialize() {
+        if (lazySource) {
+            data.assign(reinterpret_cast<const uint8_t*>(lazySource),
+                        reinterpret_cast<const uint8_t*>(lazySource) + lazySize);
+            lazySource = nullptr;
+        }
+    }
+
+    size_t length() const { return lazySource ? lazySize : data.size(); }
     BblBinary() { gcType = GcType::Binary; }
 };
 
@@ -383,6 +394,8 @@ struct Token {
     bool boolVal = false;
     std::string stringVal;
     std::vector<uint8_t> binaryData;
+    const char* binarySource = nullptr;
+    size_t binarySize = 0;
     int line = 1;
 };
 
@@ -444,6 +457,8 @@ struct AstNode {
     bool boolVal = false;
     std::string stringVal;
     std::vector<uint8_t> binaryData;
+    const char* binarySource = nullptr;
+    size_t binarySize = 0;
     std::vector<AstNode> children;
     int line = 1;
     mutable uint32_t symbolId = 0;                // lazy-resolved symbol ID for Symbol nodes
@@ -638,6 +653,7 @@ struct BblState {
     BblString* intern(const std::string& s);
     BblString* allocString(std::string s);
     BblBinary* allocBinary(std::vector<uint8_t> data);
+    BblBinary* allocLazyBinary(const char* src, size_t size);
     BblFn* allocFn();
     BblStruct* allocStruct(StructDesc* desc);
     BblVec* allocVector(const std::string& elemType, BBL::Type elemTypeTag, size_t elemSize);
@@ -647,6 +663,7 @@ struct BblState {
     void gc();
 
     void exec(const std::string& source);
+    void materializeLazyBinaries();
     BblValue execExpr(const std::string& source);
     void execfile(const std::string& path);
     std::filesystem::path resolveSandboxPath(const std::string& path, const char* context);
