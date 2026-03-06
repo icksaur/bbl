@@ -593,6 +593,8 @@ struct BblState {
     std::string currentFile;
     std::string scriptDir;
     bool allowOpenFilesystem = false;
+    size_t execDepth = 0;
+    static constexpr size_t MAX_EXEC_DEPTH = 64;
 
     // Pre-interned method name cache for O(1) dispatch
     struct MethodNames {
@@ -666,6 +668,7 @@ struct BblState {
     void materializeLazyBinaries();
     BblValue execExpr(const std::string& source);
     void execfile(const std::string& path);
+    BblValue execfileExpr(const std::string& path);
     std::filesystem::path resolveSandboxPath(const std::string& path, const char* context);
     void defn(const std::string& name, BblCFunction fn);
     void registerStruct(const BBL::StructBuilder& builder);

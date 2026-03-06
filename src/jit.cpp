@@ -573,8 +573,7 @@ void jitSizeof(BblValue* regs, BblState* state, Chunk* chunk, uint8_t A, uint8_t
 void jitExecFile(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
     JIT_TRY
     if (regs[srcReg].type() != BBL::Type::String) JIT_ERROR(state, "execfile: argument must be string");
-    state->execfile(regs[srcReg].stringVal()->data);
-    regs[destReg] = BblValue::makeNull();
+    regs[destReg] = state->execfileExpr(regs[srcReg].stringVal()->data);
     JIT_CATCH
 }
 
