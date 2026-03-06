@@ -10,11 +10,11 @@ add_library(lz4 STATIC vendor/lz4/lz4.c vendor/lz4/lz4frame.c vendor/lz4/lz4hc.c
 set_target_properties(lz4 PROPERTIES C_STANDARD 99)
 target_include_directories(lz4 PUBLIC vendor/lz4)
 
-add_library(bbl_lib STATIC bbl.cpp compiler.cpp vm.cpp disasm.cpp jit.cpp)
-target_include_directories(bbl_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_library(bbl_lib STATIC src/bbl.cpp src/compiler.cpp src/vm.cpp src/disasm.cpp src/jit.cpp)
+target_include_directories(bbl_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(bbl_lib PUBLIC Threads::Threads lz4)
 
-add_executable(bbl main.cpp src/lsp.cpp)
+add_executable(bbl src/main.cpp src/lsp.cpp)
 target_link_libraries(bbl PRIVATE bbl_lib yyjson)
 
 install(TARGETS bbl RUNTIME DESTINATION bin)

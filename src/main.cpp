@@ -1,5 +1,5 @@
 #include "bbl.h"
-#include "src/lsp.h"
+#include "lsp.h"
 #include <cstdio>
 #include <cstring>
 #include <cinttypes>

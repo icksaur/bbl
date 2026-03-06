@@ -1,19 +1,28 @@
-doc/
 build/
 build_dbg/
 build_rel/
+build_prof/
 build-release/
+pkg/
+tmp/
+doc/
+
+*.pkg.tar.zst
+luac.out
+
+# Session/planning files
 plan.md
 spec.md
 backlog.md
-pkg/
-*.zstbuild_prof/
-luac.out
-build_prof/
-*.pkg.tar.zst
-luac.out
 benchmark.md
-# Benchmark non-BBL files (lua, csharp, binaries)
+api.md
+bbl.md
+bytecode.md
+caco-bytecode-spec.md
+implementation.md
+performance.md
+
+# Benchmark non-BBL files
 tests/bench/lua/
 tests/bench/csharp/
 tests/bench/node/
