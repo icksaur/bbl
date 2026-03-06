@@ -93,6 +93,13 @@ static void addLspStdLib(BblState& bbl) {
 }
 
 static std::unique_ptr<BblState> analyzeDocument(const std::string& text, const std::string& uri) {
+    try {
+        BblLexer lexer(text.c_str(), text.size());
+        parse(lexer);
+    } catch (...) {
+        return nullptr;
+    }
+
     auto state = std::make_unique<BblState>();
     addLspStdLib(*state);
     state->allowOpenFilesystem = true;
