@@ -844,6 +844,53 @@ facilities for general-purpose shell scripting.
 (print "is directory: " info.is-dir "\n")
 ```
 
+### Compression
+
+LZ4 compress and decompress for binary data:
+
+```bbl
+(= data (binary (vector int 1 2 3 4 5)))
+(= compressed (compress data))
+(= original (decompress compressed))
+(print (data:length) " → " (compressed:length) " → " (original:length))
+```
+
+### Child States
+
+Concurrent execution with message passing (web worker model):
+
+```bbl
+// worker.bbl
+(= msg (recv))
+(= result (+ (msg:get "a") (msg:get "b")))
+(post (table "sum" result))
+```
+
+```bbl
+// main.bbl
+(= child (state-new "worker.bbl"))
+(child:post (table "a" 10 "b" 20))
+(= reply (child:recv))
+(print (reply:get "sum"))  // 30
+(child:join)
+```
+
+| Function | Description |
+|---|---|
+| `(state-new "file.bbl")` | Spawn child state running file |
+| `(child:post table)` | Send message to child |
+| `(child:recv)` | Receive message from child (blocks) |
+| `(child:join)` | Wait for child to complete |
+| `(child:is-done)` | Check if child has finished |
+| `(state-destroy child)` | Terminate child |
+
+Inside a child state:
+
+| Function | Description |
+|---|---|
+| `(post table)` | Send message to parent |
+| `(recv)` | Receive message from parent (blocks) |
+
 ---
 
 ## CLI
@@ -858,6 +905,8 @@ bbl [options] [script [args...]]
 | `bbl script.bbl arg1 arg2` | Run with arguments                       |
 | `bbl`                      | Interactive REPL                         |
 | `bbl -e "(+ 1 2)"`        | Evaluate expression                      |
+| `bbl --compress`           | Compress binary literals in stdin to stdout |
+| `bbl --lsp`               | Start Language Server Protocol server     |
 | `bbl -v`                   | Version                                  |
 | `bbl -h`                   | Help                                     |
 

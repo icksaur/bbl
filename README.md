@@ -174,11 +174,27 @@ bbl.execfile("script.bbl");
 
 ## binary data
 
-Binary blob literal: `0b<size>:<raw bytes>`.  The lexer reads all bytes immediately into memory.
+Binary blob literal: `0b<size>:<raw bytes>`. Lazily loaded — the parser skips binary data at parse time and only copies it into memory on first access.
 
 ```bbl
 (= png-texture 0b4096:<4096 bytes of png>)
 (load-texture "character-skin" png-texture)
+```
+
+### Compressed binary
+
+LZ4-compressed binary literal: `0z<size>:<compressed bytes>`. Decompresses transparently on first access.
+
+```bbl
+(= texture 0z2048:<2048 bytes of LZ4-compressed data>)
+(print (texture:length))  // decompressed size, no copy until :at/:slice
+```
+
+Compress a BBL file's binary literals:
+
+```bash
+bbl --compress < scene.bbl > scene_compressed.bbl
+bbl scene_compressed.bbl  # runs normally, decompresses on access
 ```
 
 Read from file:
@@ -195,3 +211,13 @@ printf '(= texture 0b%d:' "$SIZE" > scene.bbl
 cat texture.png >> scene.bbl
 printf ')\n' >> scene.bbl
 ```
+
+## editor support
+
+`bbl --lsp` runs a Language Server Protocol server on stdin/stdout. Provides:
+- Parse error diagnostics
+- Context-aware completions (table keys after `.`, methods after `:`, keywords after `(`)
+- Hover with type info and function signatures
+- Runtime analysis using a sandboxed BBL interpreter
+
+VS Code extension: [bbl-vscode](https://github.com/icksaur/bbl-vscode)
