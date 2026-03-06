@@ -248,17 +248,33 @@ static std::string handleCompletion(int id, yyjson_val* params) {
                 switch (val->type()) {
                 case BBL::Type::Table: {
                     BblTable* tbl = val->tableVal();
-                    if (tbl->order) {
-                        for (auto& k : *tbl->order) {
-                            if (k.type() == BBL::Type::String) {
-                                yyjson_mut_val* item = yyjson_mut_obj(doc);
-                                yyjson_mut_obj_add_strcpy(doc, item, "label", k.stringVal()->data.c_str());
-                                yyjson_mut_obj_add_int(doc, item, "kind", 10);
-                                yyjson_mut_arr_add_val(items, item);
+                    if (trigger == '.') {
+                        if (tbl->order) {
+                            for (auto& k : *tbl->order) {
+                                if (k.type() == BBL::Type::String) {
+                                    yyjson_mut_val* item = yyjson_mut_obj(doc);
+                                    yyjson_mut_obj_add_strcpy(doc, item, "label", k.stringVal()->data.c_str());
+                                    yyjson_mut_obj_add_int(doc, item, "kind", 10);
+                                    yyjson_mut_arr_add_val(items, item);
+                                }
                             }
                         }
+                    } else {
+                        if (tbl->order) {
+                            for (auto& k : *tbl->order) {
+                                if (k.type() == BBL::Type::String) {
+                                    auto v = tbl->get(k);
+                                    if (v && v->type() == BBL::Type::Fn) {
+                                        yyjson_mut_val* item = yyjson_mut_obj(doc);
+                                        yyjson_mut_obj_add_strcpy(doc, item, "label", k.stringVal()->data.c_str());
+                                        yyjson_mut_obj_add_int(doc, item, "kind", 2);
+                                        yyjson_mut_arr_add_val(items, item);
+                                    }
+                                }
+                            }
+                        }
+                        addMethodCompletions(doc, items, TABLE_METHODS);
                     }
-                    if (trigger == ':') addMethodCompletions(doc, items, TABLE_METHODS);
                     break;
                 }
                 case BBL::Type::String: addMethodCompletions(doc, items, STRING_METHODS); break;
