@@ -202,11 +202,13 @@ static std::string extractVarBefore(const std::string& text, int line, int ch, c
         if (text[idx] == '\n') curLine++;
     idx += ch - 1;
     if (idx < 0 || idx >= (int)text.size()) return "";
+    auto isSym = [](char c) { return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-'; };
+    while (idx >= 0 && isSym(text[idx])) idx--;
+    if (idx < 0) return "";
     trigger = text[idx];
     if (trigger != ':' && trigger != '.') return "";
     int end = idx;
     idx--;
-    auto isSym = [](char c) { return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-'; };
     while (idx >= 0 && isSym(text[idx])) idx--;
     return text.substr(idx + 1, end - idx - 1);
 }
@@ -486,7 +488,22 @@ void lspMain() {
             yyjson_val* first = yyjson_arr_get_first(changes);
             std::string text = jsonStr(yyjson_obj_get(first, "text"));
             auto analysis = analyzeDocument(text, uri);
-            documents[uri] = {uri, text, std::move(analysis)};
+            auto it = documents.find(uri);
+            if (it != documents.end()) {
+                it->second.text = text;
+                bool hasUserGlobals = false;
+                if (analysis && analysis->vm) {
+                    for (auto& [id, v] : analysis->vm->globals) {
+                        if (v.type() == BBL::Type::Table || v.type() == BBL::Type::Struct ||
+                            (v.type() == BBL::Type::Fn && v.isClosure())) {
+                            hasUserGlobals = true; break;
+                        }
+                    }
+                }
+                if (hasUserGlobals) it->second.analysis = std::move(analysis);
+            } else {
+                documents[uri] = {uri, text, std::move(analysis)};
+            }
             sendMessage(publishDiagnostics(uri, text));
         } else if (method == "textDocument/didClose") {
             yyjson_val* td = yyjson_obj_get(params, "textDocument");

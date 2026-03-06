@@ -1,6 +1,6 @@
 # Maintainer: Carl <carl@example.com>
 pkgname=bbl-git
-pkgver=r118.03a5f5f
+pkgver=r120.107b074
 pkgrel=1
 pkgdesc='Basic Binary Lisp — embeddable scripting language for C++ data serialization'
 arch=('x86_64')
