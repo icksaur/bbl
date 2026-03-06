@@ -196,12 +196,14 @@ static const char* METHODS[] = {
     nullptr
 };
 
-static std::string extractVarBeforeColon(const std::string& text, int line, int ch) {
+static std::string extractVarBefore(const std::string& text, int line, int ch, char& trigger) {
     int curLine = 0, idx = 0;
     for (; idx < (int)text.size() && curLine < line; idx++)
         if (text[idx] == '\n') curLine++;
     idx += ch - 1;
-    if (idx < 0 || idx >= (int)text.size() || text[idx] != ':') return "";
+    if (idx < 0 || idx >= (int)text.size()) return "";
+    trigger = text[idx];
+    if (trigger != ':' && trigger != '.') return "";
     int end = idx;
     idx--;
     auto isSym = [](char c) { return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-'; };
@@ -234,9 +236,10 @@ static std::string handleCompletion(int id, yyjson_val* params) {
     int ch = yyjson_get_int(yyjson_obj_get(pos, "character"));
 
     auto dit = documents.find(uri);
-    std::string varName = (dit != documents.end()) ? extractVarBeforeColon(dit->second.text, line, ch) : "";
+    char trigger = 0;
+    std::string varName = (dit != documents.end()) ? extractVarBefore(dit->second.text, line, ch, trigger) : "";
 
-    if (!varName.empty()) {
+    if (!varName.empty() && (trigger == ':' || trigger == '.')) {
         bool specialized = false;
         if (dit != documents.end() && dit->second.analysis) {
             auto val = dit->second.analysis->get(varName);
@@ -255,7 +258,7 @@ static std::string handleCompletion(int id, yyjson_val* params) {
                             }
                         }
                     }
-                    addMethodCompletions(doc, items, TABLE_METHODS);
+                    if (trigger == ':') addMethodCompletions(doc, items, TABLE_METHODS);
                     break;
                 }
                 case BBL::Type::String: addMethodCompletions(doc, items, STRING_METHODS); break;
@@ -442,6 +445,7 @@ void lspMain() {
             yyjson_mut_val* triggers = yyjson_mut_arr(rdoc);
             yyjson_mut_arr_add_str(rdoc, triggers, "(");
             yyjson_mut_arr_add_str(rdoc, triggers, ":");
+            yyjson_mut_arr_add_str(rdoc, triggers, ".");
             yyjson_mut_obj_add_val(rdoc, compProv, "triggerCharacters", triggers);
             yyjson_mut_obj_add_val(rdoc, caps, "completionProvider", compProv);
 
