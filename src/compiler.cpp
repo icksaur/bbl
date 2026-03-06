@@ -252,12 +252,14 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "bnot") {
+        if (node.children.size() < 2) throw BBL::Error{"'bnot' requires an argument"};
         uint8_t regA = compileExpr(state, cs, node.children[1], dest);
         cs.chunk.emitABC(OP_BNOT, dest, regA, 0, node.line);
         return dest;
     }
 
     if (op == "not") {
+        if (node.children.size() < 2) throw BBL::Error{"'not' requires an argument"};
         uint8_t regA = compileExpr(state, cs, node.children[1], dest);
         cs.chunk.emitABC(OP_NOT, dest, regA, 0, node.line);
         return dest;
@@ -336,6 +338,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
 
     // Control flow
     if (op == "if") {
+        if (node.children.size() < 3) throw BBL::Error{"'if' requires condition and body"};
         auto& cond = node.children[1];
         bool fusedCmp = false;
         if (cond.type == NodeType::List && cond.children.size() == 3 &&
@@ -497,6 +500,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "and") {
+        if (node.children.size() < 3) throw BBL::Error{"'and' requires 2 arguments"};
         compileExpr(state, cs, node.children[1], dest);
         int endJump = emitJump(cs, OP_AND, dest, node.line);
         compileExpr(state, cs, node.children[2], dest);
@@ -505,6 +509,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "or") {
+        if (node.children.size() < 3) throw BBL::Error{"'or' requires 2 arguments"};
         compileExpr(state, cs, node.children[1], dest);
         int endJump = emitJump(cs, OP_OR, dest, node.line);
         compileExpr(state, cs, node.children[2], dest);
