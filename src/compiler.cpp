@@ -709,12 +709,14 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "exec") {
+        if (node.children.size() < 2) throw BBL::Error{"'exec' requires an argument"};
         uint8_t srcReg = compileExpr(state, cs, node.children[1], dest);
         cs.chunk.emitABC(OP_EXEC, dest, srcReg, 0, node.line);
         return dest;
     }
 
     if (op == "execfile") {
+        if (node.children.size() < 2) throw BBL::Error{"'execfile' requires an argument"};
         uint8_t srcReg = compileExpr(state, cs, node.children[1], dest);
         cs.chunk.emitABC(OP_EXECFILE, dest, srcReg, 0, node.line);
         return dest;
