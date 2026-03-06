@@ -1,5 +1,6 @@
 #include "lsp.h"
 #include "bbl.h"
+#include "vm.h"
 #include <yyjson.h>
 #include <cstdio>
 #include <cstdlib>
@@ -7,6 +8,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <memory>
+#include <filesystem>
 
 static std::string readMessage() {
     char buf[256];
@@ -51,9 +54,64 @@ static std::string makeResponse(int id, yyjson_mut_doc* doc, yyjson_mut_val* res
     return serializeDoc(doc);
 }
 
+static int lspNoOp(BblState*) { return 0; }
+static int lspReturnNull(BblState* b) { b->pushNull(); return 1; }
+static int lspReturnZero(BblState* b) { b->pushFloat(0); return 1; }
+static int lspReturnEmptyStr(BblState* b) { b->pushString(""); return 1; }
+
+static void addLspStdLib(BblState& bbl) {
+    BBL::addMath(bbl);
+    BBL::addPrint(bbl);
+    bbl.defn("print", lspNoOp);
+
+    bbl.defn("fopen", lspReturnNull);
+    bbl.defn("filebytes", lspReturnNull);
+    bbl.defn("getenv", lspReturnNull);
+    bbl.defn("setenv", lspNoOp);
+    bbl.defn("unsetenv", lspNoOp);
+    bbl.defn("clock", lspReturnZero);
+    bbl.defn("time", lspReturnZero);
+    bbl.defn("sleep", lspNoOp);
+    bbl.defn("exit", lspNoOp);
+    bbl.defn("execute", lspNoOp);
+    bbl.defn("spawn", lspReturnNull);
+    bbl.defn("spawn-detached", lspReturnNull);
+    bbl.defn("getpid", lspReturnZero);
+    bbl.defn("getcwd", lspReturnEmptyStr);
+    bbl.defn("chdir", lspNoOp);
+    bbl.defn("mkdir", lspNoOp);
+    bbl.defn("remove", lspNoOp);
+    bbl.defn("rename", lspNoOp);
+    bbl.defn("tmpname", lspReturnEmptyStr);
+    bbl.defn("date", lspReturnEmptyStr);
+    bbl.defn("difftime", lspReturnZero);
+    bbl.defn("stat", lspReturnNull);
+    bbl.defn("glob", [](BblState* b) -> int { b->pushTable(b->allocTable()); return 1; });
+    bbl.defn("state-new", lspReturnNull);
+    bbl.defn("compress", lspReturnNull);
+    bbl.defn("decompress", lspReturnNull);
+}
+
+static std::unique_ptr<BblState> analyzeDocument(const std::string& text, const std::string& uri) {
+    auto state = std::make_unique<BblState>();
+    addLspStdLib(*state);
+    state->allowOpenFilesystem = true;
+    state->maxSteps = 1000000;
+    namespace fs = std::filesystem;
+    if (uri.starts_with("file://")) {
+        std::string path = uri.substr(7);
+        state->scriptDir = fs::path(path).parent_path().string();
+    }
+    try {
+        state->exec(text);
+    } catch (...) {}
+    return state;
+}
+
 struct LspDoc {
     std::string uri;
     std::string text;
+    std::unique_ptr<BblState> analysis;
 };
 
 static std::unordered_map<std::string, LspDoc> documents;
@@ -138,6 +196,33 @@ static const char* METHODS[] = {
     nullptr
 };
 
+static std::string extractVarBeforeColon(const std::string& text, int line, int ch) {
+    int curLine = 0, idx = 0;
+    for (; idx < (int)text.size() && curLine < line; idx++)
+        if (text[idx] == '\n') curLine++;
+    idx += ch - 1;
+    if (idx < 0 || idx >= (int)text.size() || text[idx] != ':') return "";
+    int end = idx;
+    idx--;
+    auto isSym = [](char c) { return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-'; };
+    while (idx >= 0 && isSym(text[idx])) idx--;
+    return text.substr(idx + 1, end - idx - 1);
+}
+
+static void addMethodCompletions(yyjson_mut_doc* doc, yyjson_mut_val* items, const char** methods) {
+    for (int i = 0; methods[i]; i++) {
+        yyjson_mut_val* item = yyjson_mut_obj(doc);
+        yyjson_mut_obj_add_str(doc, item, "label", methods[i]);
+        yyjson_mut_obj_add_int(doc, item, "kind", 2);
+        yyjson_mut_arr_add_val(items, item);
+    }
+}
+
+static const char* TABLE_METHODS[] = { "length", "push", "pop", "get", "set", "has", "delete", "keys", "at", "clear", nullptr };
+static const char* STRING_METHODS[] = { "length", "at", "find", "slice", "split", "replace", "contains", "starts-with", "ends-with", "upper", "lower", "trim", "trim-left", "trim-right", "pad-left", "pad-right", "join", nullptr };
+static const char* VECTOR_METHODS[] = { "length", "push", "pop", "at", "set", "resize", "reserve", "clear", nullptr };
+static const char* BINARY_METHODS[] = { "length", "at", "set", "slice", "resize", "copy-from", nullptr };
+
 static std::string handleCompletion(int id, yyjson_val* params) {
     yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
     yyjson_mut_val* items = yyjson_mut_arr(doc);
@@ -148,25 +233,51 @@ static std::string handleCompletion(int id, yyjson_val* params) {
     int line = yyjson_get_int(yyjson_obj_get(pos, "line"));
     int ch = yyjson_get_int(yyjson_obj_get(pos, "character"));
 
-    bool afterColon = false;
     auto dit = documents.find(uri);
-    if (dit != documents.end() && ch > 0) {
-        const std::string& text = dit->second.text;
-        int curLine = 0, idx = 0;
-        for (; idx < (int)text.size() && curLine < line; idx++)
-            if (text[idx] == '\n') curLine++;
-        idx += ch - 1;
-        if (idx >= 0 && idx < (int)text.size() && text[idx] == ':')
-            afterColon = true;
-    }
+    std::string varName = (dit != documents.end()) ? extractVarBeforeColon(dit->second.text, line, ch) : "";
 
-    if (afterColon) {
-        for (int i = 0; METHODS[i]; i++) {
-            yyjson_mut_val* item = yyjson_mut_obj(doc);
-            yyjson_mut_obj_add_str(doc, item, "label", METHODS[i]);
-            yyjson_mut_obj_add_int(doc, item, "kind", 2);
-            yyjson_mut_arr_add_val(items, item);
+    if (!varName.empty()) {
+        bool specialized = false;
+        if (dit != documents.end() && dit->second.analysis) {
+            auto val = dit->second.analysis->get(varName);
+            if (val) {
+                specialized = true;
+                switch (val->type()) {
+                case BBL::Type::Table: {
+                    BblTable* tbl = val->tableVal();
+                    if (tbl->order) {
+                        for (auto& k : *tbl->order) {
+                            if (k.type() == BBL::Type::String) {
+                                yyjson_mut_val* item = yyjson_mut_obj(doc);
+                                yyjson_mut_obj_add_strcpy(doc, item, "label", k.stringVal()->data.c_str());
+                                yyjson_mut_obj_add_int(doc, item, "kind", 10);
+                                yyjson_mut_arr_add_val(items, item);
+                            }
+                        }
+                    }
+                    addMethodCompletions(doc, items, TABLE_METHODS);
+                    break;
+                }
+                case BBL::Type::String: addMethodCompletions(doc, items, STRING_METHODS); break;
+                case BBL::Type::Vector: addMethodCompletions(doc, items, VECTOR_METHODS); break;
+                case BBL::Type::Binary: addMethodCompletions(doc, items, BINARY_METHODS); break;
+                case BBL::Type::Struct: {
+                    BblStruct* s = val->structVal();
+                    if (s->desc) {
+                        for (auto& f : s->desc->fields) {
+                            yyjson_mut_val* item = yyjson_mut_obj(doc);
+                            yyjson_mut_obj_add_strcpy(doc, item, "label", f.name.c_str());
+                            yyjson_mut_obj_add_int(doc, item, "kind", 10);
+                            yyjson_mut_arr_add_val(items, item);
+                        }
+                    }
+                    break;
+                }
+                default: specialized = false; break;
+                }
+            }
         }
+        if (!specialized) addMethodCompletions(doc, items, METHODS);
     } else {
         for (int i = 0; KEYWORDS[i]; i++) {
             yyjson_mut_val* item = yyjson_mut_obj(doc);
@@ -179,6 +290,23 @@ static std::string handleCompletion(int id, yyjson_val* params) {
             yyjson_mut_obj_add_str(doc, item, "label", BUILTIN_FUNCS[i]);
             yyjson_mut_obj_add_int(doc, item, "kind", 3);
             yyjson_mut_arr_add_val(items, item);
+        }
+        if (dit != documents.end() && dit->second.analysis && dit->second.analysis->vm) {
+            for (auto& [symId, val] : dit->second.analysis->vm->globals) {
+                if (val.type() == BBL::Type::Fn && val.isClosure()) {
+                    for (auto& [name, id] : dit->second.analysis->symbolIds) {
+                        if (id == symId && name[0] != '_') {
+                            yyjson_mut_val* item = yyjson_mut_obj(doc);
+                            yyjson_mut_obj_add_strcpy(doc, item, "label", name.c_str());
+                            yyjson_mut_obj_add_int(doc, item, "kind", 3);
+                            std::string detail = "fn(" + std::to_string(val.closureVal()->arity) + " args)";
+                            yyjson_mut_obj_add_strcpy(doc, item, "detail", detail.c_str());
+                            yyjson_mut_arr_add_val(items, item);
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -240,6 +368,48 @@ static std::string handleHover(int id, yyjson_val* params) {
         yyjson_mut_obj_add_str(doc, contents, "kind", "markdown");
         yyjson_mut_obj_add_str(doc, contents, "value", it->second.c_str());
         yyjson_mut_obj_add_val(doc, result, "contents", contents);
+    } else if (dit != documents.end() && dit->second.analysis && !word.empty()) {
+        auto val = dit->second.analysis->get(word);
+        if (val) {
+            std::string info;
+            switch (val->type()) {
+            case BBL::Type::Int: info = "int = " + std::to_string(val->intVal()); break;
+            case BBL::Type::Float: info = "float = " + std::to_string(val->floatVal()); break;
+            case BBL::Type::String: info = "string = \"" + val->stringVal()->data.substr(0, 50) + "\""; break;
+            case BBL::Type::Bool: info = val->boolVal() ? "bool = true" : "bool = false"; break;
+            case BBL::Type::Table: {
+                BblTable* tbl = val->tableVal();
+                info = "table (" + std::to_string(tbl->count) + " entries)";
+                if (tbl->order) {
+                    info += ": ";
+                    int n = 0;
+                    for (auto& k : *tbl->order) {
+                        if (n++ > 5) { info += "..."; break; }
+                        if (n > 1) info += ", ";
+                        if (k.type() == BBL::Type::String) info += k.stringVal()->data;
+                        else info += std::to_string(k.intVal());
+                    }
+                }
+                break;
+            }
+            case BBL::Type::Vector: info = "vector<" + val->vectorVal()->elemType + "> length=" + std::to_string(val->vectorVal()->length()); break;
+            case BBL::Type::Binary: info = "binary length=" + std::to_string(val->binaryVal()->length()); break;
+            case BBL::Type::Struct: info = "struct " + val->structVal()->desc->name; break;
+            case BBL::Type::Fn:
+                if (val->isClosure()) info = "fn(" + std::to_string(val->closureVal()->arity) + " args)";
+                else if (val->isCFn()) info = "builtin function";
+                else info = "function";
+                break;
+            default: info = "null"; break;
+            }
+            result = yyjson_mut_obj(doc);
+            yyjson_mut_val* contents = yyjson_mut_obj(doc);
+            yyjson_mut_obj_add_str(doc, contents, "kind", "markdown");
+            yyjson_mut_obj_add_strcpy(doc, contents, "value", info.c_str());
+            yyjson_mut_obj_add_val(doc, result, "contents", contents);
+        } else {
+            result = yyjson_mut_null(doc);
+        }
     } else {
         result = yyjson_mut_null(doc);
     }
@@ -286,7 +456,8 @@ void lspMain() {
             yyjson_val* td = yyjson_obj_get(params, "textDocument");
             std::string uri = jsonStr(yyjson_obj_get(td, "uri"));
             std::string text = jsonStr(yyjson_obj_get(td, "text"));
-            documents[uri] = {uri, text};
+            auto analysis = analyzeDocument(text, uri);
+            documents[uri] = {uri, text, std::move(analysis)};
             sendMessage(publishDiagnostics(uri, text));
         } else if (method == "textDocument/didChange") {
             yyjson_val* td = yyjson_obj_get(params, "textDocument");
@@ -294,7 +465,8 @@ void lspMain() {
             yyjson_val* changes = yyjson_obj_get(params, "contentChanges");
             yyjson_val* first = yyjson_arr_get_first(changes);
             std::string text = jsonStr(yyjson_obj_get(first, "text"));
-            documents[uri] = {uri, text};
+            auto analysis = analyzeDocument(text, uri);
+            documents[uri] = {uri, text, std::move(analysis)};
             sendMessage(publishDiagnostics(uri, text));
         } else if (method == "textDocument/didClose") {
             yyjson_val* td = yyjson_obj_get(params, "textDocument");
