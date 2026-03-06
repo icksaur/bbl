@@ -2261,9 +2261,9 @@ static int bblOs_spawnDetached(BblState* bbl) {
         if (pid2 > 0) _exit(0); // first child exits immediately
         // Grandchild: detach session and redirect streams
         setsid();
-        (void)freopen("/dev/null", "r", stdin);
-        (void)freopen("/dev/null", "w", stdout);
-        (void)freopen("/dev/null", "w", stderr);
+        if (!freopen("/dev/null", "r", stdin)) _exit(127);
+        if (!freopen("/dev/null", "w", stdout)) _exit(127);
+        if (!freopen("/dev/null", "w", stderr)) _exit(127);
         execl("/bin/sh", "sh", "-c", cmd, nullptr);
         _exit(127);
     }
