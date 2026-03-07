@@ -676,6 +676,23 @@ call is a runtime error.  Integer-colon (`v:0`) is a parse error.
 Last child of `try` must be `(catch symbol body...)`.  The error message
 (a string) is bound to the error variable.  Only BBL runtime errors are caught.
 
+### error / assert
+
+```bbl
+(error "something went wrong")       // raises catchable error
+
+(assert (> x 0) "x must be positive") // throws if falsy
+(assert (exists "data.bbl"))          // default message: "assertion failed"
+```
+
+`error` raises a catchable error with a message string. `assert` throws
+if its first argument is falsy (null, false, or 0).
+
+Unhandled errors include file and line:
+```
+script.bbl:12: x must be positive
+```
+
 ### Error Conditions
 
 Type mismatch, non-bool condition, out of bounds, undefined symbol, arity

@@ -1061,6 +1061,14 @@ static void emitErrorCheck(uint8_t* buf, size_t& pos, std::vector<size_t>& error
     emit32(buf, pos, 0);
 }
 
+static void emitLineStore(uint8_t* buf, size_t& pos, size_t runtimeLineOff, int line) {
+    // mov dword [r12 + offset], imm32
+    uint8_t prefix[] = { 0x41, 0xc7, 0x84, 0x24 };
+    emit(buf, pos, prefix, 4);
+    emit32(buf, pos, static_cast<uint32_t>(runtimeLineOff));
+    emit32(buf, pos, static_cast<uint32_t>(line));
+}
+
 static void emitCallHelper2(uint8_t* buf, size_t& pos, void* fn, uint32_t arg3, uint32_t arg4, std::vector<size_t>* errPatches = nullptr) {
     uint8_t a1[] = { 0x48, 0x89, 0xdf };
     emit(buf, pos, a1, 3);
@@ -1243,6 +1251,9 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     struct TryCatchPatch { size_t patchOffset; size_t catchInst; uint8_t destReg; };
     std::vector<TryCatchPatch> tryCatchPatches;
 
+    BblState dummy;
+    size_t runtimeLineOff = reinterpret_cast<char*>(&dummy.runtimeLine) - reinterpret_cast<char*>(&dummy);
+
     for (size_t i = 0; i < chunk.code.size(); i++) {
         nativeOffsets[i] = jit.size;
         uint32_t inst = chunk.code[i];
@@ -1250,11 +1261,19 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         uint8_t A = decodeA(inst), B = decodeB(inst), C = decodeC(inst);
         uint16_t Bx = decodeBx(inst);
         int sBx = decodesBx(inst);
+        int lineNum = (i < chunk.lines.size()) ? chunk.lines[i] : 0;
+        static thread_local int lastEmittedLine = -1;
+        if (lineNum != lastEmittedLine) {
+            emitLineStore(jit.buf, jit.size, runtimeLineOff, lineNum);
+            lastEmittedLine = lineNum;
+        }
 
         if (op != OP_GETGLOBAL && op != OP_CLOSURE && op != OP_CALL) {
             selfRefRegs.erase(A);
             closureRegs.erase(A);
         }
+
+        emitLineStore(jit.buf, jit.size, runtimeLineOff, lineNum);
 
         switch (op) {
         case OP_LOADK:

@@ -1635,7 +1635,12 @@ void BblState::packValue(BblVec* vec, const BblValue& val) {
 // ---------- Backtrace ----------
 
 void BblState::printBacktrace(const std::string& what) {
-    fprintf(stderr, "error: %s\n", what.c_str());
+    if (!currentFile.empty() && runtimeLine > 0)
+        fprintf(stderr, "%s:%d: %s\n", currentFile.c_str(), runtimeLine, what.c_str());
+    else if (runtimeLine > 0)
+        fprintf(stderr, "line %d: %s\n", runtimeLine, what.c_str());
+    else
+        fprintf(stderr, "error: %s\n", what.c_str());
     for (int i = static_cast<int>(callStack.size()) - 1; i >= 0; i--) {
         auto& f = callStack[i];
         fprintf(stderr, "  at %s  %s:%d\n", f.expr.c_str(), f.file.c_str(), f.line);
@@ -2697,6 +2702,23 @@ void BBL::addStdLib(BblState& bbl) {
     });
     bbl.defn("random-seed", [](BblState* b) -> int {
         b->rng.seed(static_cast<uint64_t>(b->getIntArg(0)));
+        return 0;
+    });
+
+    // --- Error / Assert ---
+    bbl.defn("error", [](BblState* b) -> int {
+        std::string msg = b->argCount() > 0 ? b->getStringArg(0) : "error";
+        throw BBL::Error{msg};
+    });
+    bbl.defn("assert", [](BblState* b) -> int {
+        BblValue cond = b->getArg(0);
+        bool falsy = (cond.type() == BBL::Type::Null) ||
+                     (cond.type() == BBL::Type::Bool && !cond.boolVal()) ||
+                     (cond.type() == BBL::Type::Int && cond.intVal() == 0);
+        if (falsy) {
+            std::string msg = b->argCount() > 1 ? b->getStringArg(1) : "assertion failed";
+            throw BBL::Error{msg};
+        }
         return 0;
     });
 

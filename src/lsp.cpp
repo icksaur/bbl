@@ -182,6 +182,7 @@ static const char* BUILTIN_FUNCS[] = {
     "glob", "spawn", "compress", "decompress", "exec-binary",
     "exists", "path-join", "path-dir", "path-base", "path-ext", "path-abs",
     "tcp-connect", "tcp-listen", "udp-open",
+    "error", "assert",
     nullptr
 };
 
@@ -454,6 +455,8 @@ static std::string handleHover(int id, yyjson_val* params) {
         {"tcp-connect", "`(tcp-connect host port)` — connect to TCP server, return Socket"},
         {"tcp-listen", "`(tcp-listen addr port)` — bind and listen, return Server"},
         {"udp-open", "`(udp-open)` — create UDP socket"},
+        {"error", "`(error msg)` — raise a catchable error"},
+        {"assert", "`(assert cond msg?)` — throw if condition is falsy"},
     };
 
     yyjson_mut_val* result;

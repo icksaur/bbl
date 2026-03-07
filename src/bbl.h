@@ -593,6 +593,7 @@ struct BblState {
     size_t stepCount = 0;
     BblFn* currentFn = nullptr;
     std::string currentFile;
+    int runtimeLine = 0;
     std::mt19937_64 rng{std::random_device{}()};
     std::string scriptDir;
     bool allowOpenFilesystem = false;
