@@ -200,7 +200,7 @@ bbl scene_compressed.bbl  # runs normally, decompresses on access
 Read from file:
 
 ```bbl
-(= texture (filebytes "texture.png"))
+(= texture (file-bytes "texture.png"))
 ```
 
 Generate from shell:

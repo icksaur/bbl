@@ -510,7 +510,7 @@ Raw byte buffers for textures, audio, mesh data, or any binary content.
 ### From File
 
 ```bbl
-(= texture (filebytes "texture.png"))
+(= texture (file-bytes "texture.png"))
 ```
 
 ### Methods
@@ -570,11 +570,11 @@ Field types: `bool`, `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`,
 `int64`, `uint64`, `float32`, `float64`.  Other struct names are also valid
 (nested structs).
 
-Layout is packed -- fields are placed sequentially with no padding.  `sizeof`
+Layout is packed -- fields are placed sequentially with no padding.  `size-of`
 returns the total byte size:
 
 ```bbl
-(print (sizeof Pixel))         // 4
+(print (size-of Pixel))         // 4
 ```
 
 ### C++-Registered Structs
@@ -601,7 +601,7 @@ Chained writes are NOT allowed -- use an intermediate variable.
 
 - Copy semantics (assignment copies bytes, no GC)
 - Script-defined structs use packed layout (no alignment padding)
-- C++-registered structs use C layout (sizeof, offsetof, alignment)
+- C++-registered structs use C layout (size-of, offsetof, alignment)
 - No member functions (use free functions)
 - Type descriptors are global on `BblState`, never freed during execution
 
@@ -686,7 +686,7 @@ Errors print a backtrace to stderr showing each call frame with file and line.
 
 ---
 
-## exec / execfile
+## exec / exec-file
 
 ### exec
 
@@ -715,11 +715,11 @@ Evaluates a binary buffer as BBL source code. Same semantics as `exec`
 but takes a `binary` instead of a `string`. Useful for executing compressed
 or file-loaded BBL code.
 
-### execfile
+### exec-file
 
 ```bbl
-(= module (execfile "utils.bbl"))   // returns last expression
-(execfile "setup.bbl")              // side effects only
+(= module (exec-file "utils.bbl"))   // returns last expression
+(exec-file "setup.bbl")              // side effects only
 ```
 
 Runs another `.bbl` file. Shares the global scope. Returns the last
@@ -739,7 +739,7 @@ Loaded from C++ via `BBL::addStdLib(bbl)`.  Individual modules available:
 |-------------------------|--------------------------------------------------|
 | `(print args...)`       | Print to stdout, no trailing newline              |
 | `(str val)`             | Convert any value to string                      |
-| `(typeof val)`          | Type name as string ("int", "table", etc.)       |
+| `(type-of val)`          | Type name as string ("int", "table", etc.)       |
 | `(int val)`             | Parse string to int, or truncate float           |
 | `(float val)`           | Parse string to float, or promote int            |
 | `(fmt "{} + {}" 1 2)`  | Format string (`{{`/`}}` for literal braces)     |
@@ -756,7 +756,7 @@ Constants: `pi`, `e`.
 | Function / Method          | Description                              |
 |----------------------------|------------------------------------------|
 | `(fopen path [mode])`      | Open file, returns File userdata         |
-| `(filebytes path)`         | Read entire file into binary             |
+| `(file-bytes path)`         | Read entire file into binary             |
 | `(f:read)`                 | Read file as string                      |
 | `(f:read-line)`            | Read one line (strips newline), null at EOF |
 | `(f:read-bytes n)`         | Read n bytes as binary                   |
@@ -800,9 +800,9 @@ facilities for general-purpose shell scripting.
 
 | Function                      | Description                                  |
 |-------------------------------|----------------------------------------------|
-| `(getenv name)`               | Read environment variable, null if unset     |
-| `(setenv name value)`         | Set environment variable                     |
-| `(unsetenv name)`             | Remove environment variable                  |
+| `(get-env name)`               | Read environment variable, null if unset     |
+| `(set-env name value)`         | Set environment variable                     |
+| `(unset-env name)`             | Remove environment variable                  |
 
 #### Time
 
@@ -812,18 +812,18 @@ facilities for general-purpose shell scripting.
 | `(clock)`                     | CPU time used in seconds (float)             |
 | `(sleep seconds)`             | Sleep for `seconds` (float, sub-second OK)   |
 | `(date [fmt [timestamp]])`    | Format time via strftime (default `"%Y-%m-%d %H:%M:%S"`) |
-| `(difftime t2 t1)`            | Difference in seconds between timestamps (float) |
+| `(diff-time t2 t1)`            | Difference in seconds between timestamps (float) |
 
 #### Filesystem
 
 | Function                      | Description                                  |
 |-------------------------------|----------------------------------------------|
-| `(getcwd)`                    | Current working directory (string)           |
+| `(get-cwd)`                    | Current working directory (string)           |
 | `(chdir path)`                | Change directory, returns bool               |
 | `(mkdir path)`                | Create directory, returns bool               |
 | `(remove path)`               | Delete file or empty directory, returns bool |
 | `(rename old new)`            | Rename/move file, returns bool               |
-| `(tmpname)`                   | Create temp file, return its path (string)   |
+| `(tmp-name)`                   | Create temp file, return its path (string)   |
 | `(stat path)`                 | File metadata table (`size`, `mtime`, `is-dir`, `is-file`), null if missing |
 | `(glob pattern)`              | Expand shell glob, returns table with 1-based int keys |
 
@@ -832,7 +832,7 @@ facilities for general-purpose shell scripting.
 | Function                      | Description                                  |
 |-------------------------------|----------------------------------------------|
 | `(execute command)`           | Run shell command, return exit status (int)  |
-| `(getpid)`                    | Current process ID (int)                     |
+| `(get-pid)`                    | Current process ID (int)                     |
 | `(exit [code])`               | Terminate process (default code 0)           |
 | `(spawn command)`             | Launch child process, return Process userdata |
 | `(spawn-detached command)`    | Launch detached background process, return PID (int) |
@@ -969,7 +969,7 @@ Exit with Ctrl-D or Ctrl-C.
 
 ### Environment
 
-`BBL_PATH`: colon-separated directory list for `execfile` resolution.  Falls
+`BBL_PATH`: colon-separated directory list for `exec-file` resolution.  Falls
 back to script-relative paths.
 
 ---
@@ -978,7 +978,7 @@ back to script-relative paths.
 
 One scope type: a symbol-to-value table.
 
-- **Fresh scope** (new table): `fn` calls, `execfile` from script, `exec` from script
+- **Fresh scope** (new table): `fn` calls, `exec-file` from script, `exec` from script
 - **Shared scope** (enclosing table): `do`, `loop`, `if`, `each`
 
 "Root scope" is just the outermost scope of the current script -- same data
@@ -1008,11 +1008,11 @@ Default: zero filesystem access.  Capabilities are opt-in:
 | No stdlib       | Pure computation only                              |
 | `addPrint()`    | stdout only                                        |
 | `addMath()`     | No filesystem                                      |
-| `addFileIo()`   | `fopen`, `filebytes`, `stdin`/`stdout`/`stderr` globals |
+| `addFileIo()`   | `fopen`, `file-bytes`, `stdin`/`stdout`/`stderr` globals |
 | `addOs()`       | Process execution, filesystem mutation, env mutation, exit |
 | `defn()`        | Whatever the host function exposes                 |
 
-Path rules for `execfile` and `filebytes` from script:
+Path rules for `exec-file` and `file-bytes` from script:
 - Relative paths only (absolute paths rejected)
 - No `..` traversal
 - Resolved relative to calling script's directory
@@ -1042,10 +1042,10 @@ CLI binary).
 | `catch`     | error handling | Error handler (inside try)                     |
 | `with`      | resource mgmt  | Scoped userdata with deterministic destructor  |
 | `struct`    | data           | Define a struct type                           |
-| `sizeof`    | data           | Return byte size of struct type or instance    |
+| `size-of`    | data           | Return byte size of struct type or instance    |
 | `binary`    | data           | Construct binary from vector, struct, or size  |
 | `exec`      | evaluation     | Evaluate string as code                        |
-| `execfile`  | evaluation     | Execute file                                   |
+| `exec-file`  | evaluation     | Execute file                                   |
 | `and`       | logic          | Short-circuit logical AND                      |
 | `or`        | logic          | Short-circuit logical OR                       |
 | `not`       | logic          | Logical negation                               |

@@ -94,7 +94,7 @@ check_multi_e
 # Phase 6: BBL_PATH test
 check_bbl_path() {
     local actual
-    actual=$(BBL_PATH="$DIR" "$BBL" -e '(execfile "hello.bbl")' 2>/dev/null)
+    actual=$(BBL_PATH="$DIR" "$BBL" -e '(exec-file "hello.bbl")' 2>/dev/null)
     if [ "$actual" = "Hello, world!" ]; then
         echo "  PASS  bbl_path"
         PASS=$((PASS + 1))
@@ -134,7 +134,7 @@ check_worker() {
 check_worker worker_echo "hello"
 check_worker worker_roundtrip "150"
 
-# Phase 8: Binary data in execfile
+# Phase 8: Binary data in exec-file
 BINARY_DIR="/tmp/bbl_func_binary"
 mkdir -p "$BINARY_DIR"
 python3 -c "
@@ -157,7 +157,7 @@ check_binary() {
         FAIL=$((FAIL + 1))
     fi
 }
-check_binary binary_execfile "v1 8 84"
+check_binary binary_exec-file "v1 8 84"
 check_binary binary_compress "24 42"
 check_binary binary_typed "100 2.5 3 4 -999"
 

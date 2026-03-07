@@ -65,10 +65,10 @@ static void addLspStdLib(BblState& bbl) {
     bbl.defn("print", lspNoOp);
 
     bbl.defn("fopen", lspReturnNull);
-    bbl.defn("filebytes", lspReturnNull);
-    bbl.defn("getenv", lspReturnNull);
-    bbl.defn("setenv", lspNoOp);
-    bbl.defn("unsetenv", lspNoOp);
+    bbl.defn("file-bytes", lspReturnNull);
+    bbl.defn("get-env", lspReturnNull);
+    bbl.defn("set-env", lspNoOp);
+    bbl.defn("unset-env", lspNoOp);
     bbl.defn("clock", lspReturnZero);
     bbl.defn("time", lspReturnZero);
     bbl.defn("sleep", lspNoOp);
@@ -76,15 +76,15 @@ static void addLspStdLib(BblState& bbl) {
     bbl.defn("execute", lspNoOp);
     bbl.defn("spawn", lspReturnNull);
     bbl.defn("spawn-detached", lspReturnNull);
-    bbl.defn("getpid", lspReturnZero);
-    bbl.defn("getcwd", lspReturnEmptyStr);
+    bbl.defn("get-pid", lspReturnZero);
+    bbl.defn("get-cwd", lspReturnEmptyStr);
     bbl.defn("chdir", lspNoOp);
     bbl.defn("mkdir", lspNoOp);
     bbl.defn("remove", lspNoOp);
     bbl.defn("rename", lspNoOp);
-    bbl.defn("tmpname", lspReturnEmptyStr);
+    bbl.defn("tmp-name", lspReturnEmptyStr);
     bbl.defn("date", lspReturnEmptyStr);
-    bbl.defn("difftime", lspReturnZero);
+    bbl.defn("diff-time", lspReturnZero);
     bbl.defn("stat", lspReturnNull);
     bbl.defn("glob", [](BblState* b) -> int { b->pushTable(b->allocTable()); return 1; });
     bbl.defn("state-new", lspReturnNull);
@@ -172,13 +172,13 @@ static std::string publishDiagnostics(const std::string& uri, const std::string&
 }
 
 static const char* BUILTIN_FUNCS[] = {
-    "print", "str", "typeof", "int", "float", "fmt",
+    "print", "str", "type-of", "int", "float", "fmt",
     "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
     "sqrt", "abs", "floor", "ceil", "min", "max", "pow",
     "log", "log2", "log10", "exp",
-    "filebytes", "fopen",
-    "getenv", "setenv", "clock", "time", "sleep", "exit",
-    "getcwd", "chdir", "mkdir", "remove", "rename", "execute",
+    "file-bytes", "fopen",
+    "get-env", "set-env", "clock", "time", "sleep", "exit",
+    "get-cwd", "chdir", "mkdir", "remove", "rename", "execute",
     "glob", "spawn", "compress", "decompress", "exec-binary",
     nullptr
 };
@@ -186,8 +186,8 @@ static const char* BUILTIN_FUNCS[] = {
 static const char* KEYWORDS[] = {
     "if", "loop", "each", "fn", "do", "with", "try", "catch",
     "break", "continue", "and", "or", "not",
-    "vector", "table", "struct", "binary", "int", "sizeof",
-    "exec", "execfile", "=",
+    "vector", "table", "struct", "binary", "int", "size-of",
+    "exec", "exec-file", "=",
     "shl", "shr", "band", "bor", "bxor", "bnot",
     nullptr
 };
@@ -370,7 +370,7 @@ static std::string handleHover(int id, yyjson_val* params) {
     static const std::unordered_map<std::string, std::string> docs = {
         {"print", "`print(args...)` — output values to stdout"},
         {"str", "`str(val)` — convert value to string"},
-        {"typeof", "`typeof(val)` — return type name as string"},
+        {"type-of", "`typeof(val)` — return type name as string"},
         {"int", "`int(val)` — convert string/float to integer"},
         {"float", "`float(val)` — convert string/int to float"},
         {"fmt", "`fmt(template, args...)` — format string with `{}` placeholders"},
@@ -390,10 +390,10 @@ static std::string handleHover(int id, yyjson_val* params) {
         {"table", "`(table key val ...)` — hash map with string/int keys"},
         {"struct", "`(struct Name type field ...)` — define C-compatible struct type"},
         {"binary", "`(binary size)` or `(binary vec)` — create byte buffer"},
-        {"sizeof", "`(sizeof TypeName)` — byte size of a struct type"},
+        {"size-of", "`(sizeof TypeName)` — byte size of a struct type"},
         {"exec", "`(exec string)` — evaluate BBL code string, return result"},
         {"exec-binary", "`(exec-binary bin)` — evaluate binary buffer as BBL code"},
-        {"execfile", "`(execfile path)` — execute BBL file, imports definitions"},
+        {"exec-file", "`(execfile path)` — execute BBL file, imports definitions"},
         {"compress", "`(compress binary)` — LZ4 compress, returns compressed binary"},
         {"decompress", "`(decompress binary)` — LZ4 decompress, returns original binary"},
         {"sin", "`sin(x)` — sine (radians)"},
@@ -417,14 +417,14 @@ static std::string handleHover(int id, yyjson_val* params) {
         {"pi", "`pi` — 3.14159... (constant)"},
         {"e", "`e` — 2.71828... (constant)"},
         {"fopen", "`(fopen path mode)` — open file, returns file handle. mode: \"r\", \"w\", \"a\""},
-        {"filebytes", "`(filebytes path)` — read entire file as binary"},
-        {"getenv", "`(getenv name)` — get environment variable, null if unset"},
-        {"setenv", "`(setenv name value)` — set environment variable"},
+        {"file-bytes", "`(filebytes path)` — read entire file as binary"},
+        {"get-env", "`(getenv name)` — get environment variable, null if unset"},
+        {"set-env", "`(setenv name value)` — set environment variable"},
         {"clock", "`(clock)` — monotonic time in seconds (float)"},
         {"time", "`(time)` — unix timestamp in seconds (float)"},
         {"sleep", "`(sleep seconds)` — pause execution"},
         {"exit", "`(exit code?)` — exit process with status code"},
-        {"getcwd", "`(getcwd)` — current working directory"},
+        {"get-cwd", "`(getcwd)` — current working directory"},
         {"chdir", "`(chdir path)` — change working directory"},
         {"mkdir", "`(mkdir path)` — create directory"},
         {"remove", "`(remove path)` — delete file or empty directory"},
@@ -435,7 +435,7 @@ static std::string handleHover(int id, yyjson_val* params) {
         {"glob", "`(glob pattern)` — list files matching glob pattern"},
         {"stat", "`(stat path)` — file metadata: .size, .is-dir, .is-file, .mtime"},
         {"date", "`(date format time?)` — format time as string (strftime)"},
-        {"difftime", "`(difftime t1 t2)` — difference in seconds"},
+        {"diff-time", "`(difftime t1 t2)` — difference in seconds"},
         {"state-new", "`(state-new path)` — spawn child state running BBL file"},
         {"band", "`(band a b)` — bitwise AND"},
         {"bor", "`(bor a b)` — bitwise OR"},

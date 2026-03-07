@@ -1,5 +1,5 @@
 // Load binary data from an asset file via execfile
-(= assets (execfile "/tmp/bbl_func_binary/assets.bbl"))
+(= assets (exec-file "/tmp/bbl_func_binary/assets.bbl"))
 // Access after execfile returns (tests lazy materialization)
 (= i 0)
 (loop (< i 100) (= junk (table "x" i)) (= i (+ i 1)))

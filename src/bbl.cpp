@@ -969,7 +969,7 @@ void BblState::execfile(const std::string& path) {
     if (++execDepth > MAX_EXEC_DEPTH)
         throw BBL::Error{"execfile: recursion depth exceeded (max " + std::to_string(MAX_EXEC_DEPTH) + ")"};
     namespace fs = std::filesystem;
-    fs::path resolved = resolveSandboxPath(path, "execfile");
+    fs::path resolved = resolveSandboxPath(path, "exec-file");
     if (!fs::exists(resolved)) {
         // Try BBL_PATH directories
         const char* bblPath = std::getenv("BBL_PATH");
@@ -1009,7 +1009,7 @@ void BblState::execfile(const std::string& path) {
 
 BblValue BblState::execfileExpr(const std::string& path) {
     namespace fs = std::filesystem;
-    fs::path resolved = resolveSandboxPath(path, "execfile");
+    fs::path resolved = resolveSandboxPath(path, "exec-file");
     if (!fs::exists(resolved)) {
         const char* bblPath = std::getenv("BBL_PATH");
         if (bblPath) {
@@ -1814,7 +1814,7 @@ static int bblFmt(BblState* bbl) {
 void BBL::addPrint(BblState& bbl) {
     bbl.defn("print", bblPrint);
     bbl.defn("str", bblStr);
-    bbl.defn("typeof", bblTypeof);
+    bbl.defn("type-of", bblTypeof);
     bbl.defn("int", bblInt);
     bbl.defn("float", bblFloat);
     bbl.defn("fmt", bblFmt);
@@ -1969,7 +1969,7 @@ void BBL::addFileIo(BblState& bbl) {
       .method("flush", bblFileFlush)
       .destructor(fileDestructor);
     bbl.registerType(fb);
-    bbl.defn("filebytes", bblFilebytes);
+    bbl.defn("file-bytes", bblFilebytes);
     bbl.defn("fopen", bblFopen);
     bbl.set("stdin", BblValue::makeUserData(bbl.allocUserData("File", static_cast<void*>(stdin))));
     bbl.set("stdout", BblValue::makeUserData(bbl.allocUserData("File", static_cast<void*>(stdout))));
@@ -2285,23 +2285,23 @@ void BBL::addOs(BblState& bbl) {
       .destructor(processDestructor);
     bbl.registerType(pb);
 
-    bbl.defn("getenv", bblOs_getenv);
-    bbl.defn("setenv", bblOs_setenv);
-    bbl.defn("unsetenv", bblOs_unsetenv);
+    bbl.defn("get-env", bblOs_getenv);
+    bbl.defn("set-env", bblOs_setenv);
+    bbl.defn("unset-env", bblOs_unsetenv);
     bbl.defn("clock", bblOs_clock);
     bbl.defn("time", bblOs_time);
     bbl.defn("sleep", bblOs_sleep);
     bbl.defn("exit", bblOs_exit);
-    bbl.defn("getpid", bblOs_getpid);
-    bbl.defn("getcwd", bblOs_getcwd);
+    bbl.defn("get-pid", bblOs_getpid);
+    bbl.defn("get-cwd", bblOs_getcwd);
     bbl.defn("chdir", bblOs_chdir);
     bbl.defn("mkdir", bblOs_mkdir);
     bbl.defn("remove", bblOs_remove);
     bbl.defn("rename", bblOs_rename);
-    bbl.defn("tmpname", bblOs_tmpname);
+    bbl.defn("tmp-name", bblOs_tmpname);
     bbl.defn("execute", bblOs_execute);
     bbl.defn("date", bblOs_date);
-    bbl.defn("difftime", bblOs_difftime);
+    bbl.defn("diff-time", bblOs_difftime);
     bbl.defn("stat", bblOs_stat);
     bbl.defn("glob", bblOs_glob);
     bbl.defn("spawn", bblOs_spawn);

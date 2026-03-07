@@ -1737,13 +1737,13 @@ TEST(test_file_read_bytes) {
 TEST(test_filebytes_sandbox_absolute) {
     BblState bbl;
     BBL::addStdLib(bbl);
-    ASSERT_THROW(bbl.exec(R"((filebytes "/etc/passwd"))"));
+    ASSERT_THROW(bbl.exec(R"((file-bytes "/etc/passwd"))"));
 }
 
 TEST(test_filebytes_sandbox_parent) {
     BblState bbl;
     BBL::addStdLib(bbl);
-    ASSERT_THROW(bbl.exec(R"((filebytes "../etc/passwd"))"));
+    ASSERT_THROW(bbl.exec(R"((file-bytes "../etc/passwd"))"));
 }
 
 // ========== Phase 5: addStdLib idempotent ==========
@@ -1835,15 +1835,15 @@ TEST(test_sandbox_chain) {
     BblState bbl;
     namespace fs = std::filesystem;
     // Create: /tmp/bbl_sandbox/main.bbl -> loads subdir/helper.bbl
-    // helper.bbl tries (execfile "../main.bbl") -> should fail
+    // helper.bbl tries (exec-file "../main.bbl") -> should fail
     fs::create_directories("/tmp/bbl_sandbox/subdir");
     {
         std::ofstream f("/tmp/bbl_sandbox/subdir/helper.bbl");
-        f << R"((execfile "../main.bbl"))";
+        f << R"((exec-file "../main.bbl"))";
     }
     bbl.currentFile = "/tmp/bbl_sandbox/main.bbl";
     bbl.scriptDir = "/tmp/bbl_sandbox";
-    ASSERT_THROW(bbl.exec(R"((execfile "subdir/helper.bbl"))"));
+    ASSERT_THROW(bbl.exec(R"((exec-file "subdir/helper.bbl"))"));
 }
 
 // ========== Recursive Functions ==========
@@ -2476,80 +2476,80 @@ TEST(test_cfn_multiple_aliases) {
 
 TEST(test_typeof_int) {
     BblState bbl; BBL::addStdLib(bbl);
-    bbl.exec("(= r (typeof 42))");
+    bbl.exec("(= r (type-of 42))");
     ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("int"));
 }
 
 TEST(test_typeof_float) {
     BblState bbl; BBL::addStdLib(bbl);
-    bbl.exec("(= r (typeof 3.14))");
+    bbl.exec("(= r (type-of 3.14))");
     ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("float"));
 }
 
 TEST(test_typeof_string) {
     BblState bbl; BBL::addStdLib(bbl);
-    bbl.exec("(= r (typeof \"hello\"))");
+    bbl.exec("(= r (type-of \"hello\"))");
     ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("string"));
 }
 
 TEST(test_typeof_bool) {
     BblState bbl; BBL::addStdLib(bbl);
-    bbl.exec("(= r (typeof true))");
+    bbl.exec("(= r (type-of true))");
     ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("bool"));
 }
 
 TEST(test_typeof_null) {
     BblState bbl; BBL::addStdLib(bbl);
-    bbl.exec("(= r (typeof null))");
+    bbl.exec("(= r (type-of null))");
     ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("null"));
 }
 
 TEST(test_typeof_cfn) {
     BblState bbl; BBL::addStdLib(bbl);
-    bbl.exec("(= r (typeof sqrt))");
+    bbl.exec("(= r (type-of sqrt))");
     ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("fn"));
 }
 
 TEST(test_typeof_bbl_fn) {
     BblState bbl; BBL::addStdLib(bbl);
-    bbl.exec("(= r (typeof (fn (x) x)))");
+    bbl.exec("(= r (type-of (fn (x) x)))");
     ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("fn"));
 }
 
 TEST(test_typeof_table) {
     BblState bbl; BBL::addStdLib(bbl);
-    bbl.exec("(= r (typeof (table)))");
+    bbl.exec("(= r (type-of (table)))");
     ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("table"));
 }
 
 TEST(test_typeof_vector) {
     BblState bbl; BBL::addStdLib(bbl);
-    bbl.exec("(= r (typeof (vector int)))");
+    bbl.exec("(= r (type-of (vector int)))");
     ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("vector"));
 }
 
 TEST(test_typeof_binary) {
     BblState bbl; BBL::addStdLib(bbl);
-    bbl.exec("(= r (typeof 0b4:test))");
+    bbl.exec("(= r (type-of 0b4:test))");
     ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("binary"));
 }
 
 TEST(test_typeof_expression) {
     BblState bbl; BBL::addStdLib(bbl);
-    bbl.exec("(= r (typeof (+ 1 2)))");
+    bbl.exec("(= r (type-of (+ 1 2)))");
     ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("int"));
 }
 
 TEST(test_typeof_arity_error) {
     BblState bbl; BBL::addStdLib(bbl);
     ASSERT_THROW(bbl.exec("(typeof)"));
-    ASSERT_THROW(bbl.exec("(typeof 1 2)"));
+    ASSERT_THROW(bbl.exec("(type-of 1 2)"));
 }
 
 TEST(test_typeof_struct) {
     BblState bbl; BBL::addStdLib(bbl);
     addVertex(bbl);
-    bbl.exec("(= r (typeof (vertex 1.0 2.0 3.0)))");
+    bbl.exec("(= r (type-of (vertex 1.0 2.0 3.0)))");
     ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("struct"));
 }
 
@@ -2561,7 +2561,7 @@ TEST(test_typeof_userdata) {
     int val = 0;
     auto* ud = bbl.allocUserData("Counter", &val);
     bbl.set("c", BblValue::makeUserData(ud));
-    bbl.exec("(= r (typeof c))");
+    bbl.exec("(= r (type-of c))");
     ASSERT_EQ(std::string(bbl.getString("r").value()), std::string("userdata"));
 }
 
@@ -2705,12 +2705,12 @@ TEST(test_execfile_dotdot_blocked) {
 
 TEST(test_filebytes_abs_blocked) {
     BblState bbl; BBL::addFileIo(bbl);
-    ASSERT_THROW(bbl.exec("(filebytes \"/tmp/nonexistent.bin\")"));
+    ASSERT_THROW(bbl.exec("(file-bytes \"/tmp/nonexistent.bin\")"));
 }
 
 TEST(test_filebytes_dotdot_blocked) {
     BblState bbl; BBL::addFileIo(bbl);
-    ASSERT_THROW(bbl.exec("(filebytes \"../escape.bin\")"));
+    ASSERT_THROW(bbl.exec("(file-bytes \"../escape.bin\")"));
 }
 
 TEST(test_execfile_abs_open) {
@@ -2733,7 +2733,7 @@ TEST(test_execfile_dotdot_open) {
     BblState bbl;
     bbl.allowOpenFilesystem = true;
     bbl.scriptDir = "/tmp/bbl_test_openfs/child";
-    bbl.exec("(execfile \"../target.bbl\")");
+    bbl.exec("(exec-file \"../target.bbl\")");
     ASSERT_EQ(bbl.getInt("dotdot_result").value(), (int64_t)99);
     fs::remove_all("/tmp/bbl_test_openfs");
 }
@@ -2744,7 +2744,7 @@ TEST(test_filebytes_abs_open) {
     { std::ofstream f(path, std::ios::binary); f << "hello"; }
     BblState bbl; BBL::addFileIo(bbl);
     bbl.allowOpenFilesystem = true;
-    bbl.exec("(= data (filebytes \"/tmp/bbl_test_open_fb.bin\"))");
+    bbl.exec("(= data (file-bytes \"/tmp/bbl_test_open_fb.bin\"))");
     ASSERT_EQ(bbl.getType("data").value(), BBL::Type::Binary);
     fs::remove(path);
 }
@@ -2757,7 +2757,7 @@ TEST(test_filebytes_dotdot_open) {
     BblState bbl; BBL::addFileIo(bbl);
     bbl.allowOpenFilesystem = true;
     bbl.scriptDir = "/tmp/bbl_test_openfs2/child";
-    bbl.exec("(= data (filebytes \"../target.bin\"))");
+    bbl.exec("(= data (file-bytes \"../target.bin\"))");
     ASSERT_EQ(bbl.getType("data").value(), BBL::Type::Binary);
     fs::remove_all("/tmp/bbl_test_openfs2");
 }
@@ -3487,20 +3487,20 @@ TEST(test_std_stream_close_noop) {
 TEST(test_os_getenv) {
     BblState bbl;
     BBL::addStdLib(bbl);
-    bbl.exec("(= h (getenv \"HOME\"))");
+    bbl.exec("(= h (get-env \"HOME\"))");
     ASSERT_EQ(bbl.get("h").value().type(), BBL::Type::String);
-    bbl.exec("(= n (getenv \"BBL_NONEXISTENT_VAR_XYZ\"))");
+    bbl.exec("(= n (get-env \"BBL_NONEXISTENT_VAR_XYZ\"))");
     ASSERT_EQ(bbl.get("n").value().type(), BBL::Type::Null);
 }
 
 TEST(test_os_setenv_getenv) {
     BblState bbl;
     BBL::addStdLib(bbl);
-    bbl.exec("(setenv \"BBL_TEST_VAR\" \"hello\")");
-    bbl.exec("(= v (getenv \"BBL_TEST_VAR\"))");
+    bbl.exec("(set-env \"BBL_TEST_VAR\" \"hello\")");
+    bbl.exec("(= v (get-env \"BBL_TEST_VAR\"))");
     ASSERT_EQ(std::string(bbl.getString("v").value()), std::string("hello"));
-    bbl.exec("(unsetenv \"BBL_TEST_VAR\")");
-    bbl.exec("(= v2 (getenv \"BBL_TEST_VAR\"))");
+    bbl.exec("(unset-env \"BBL_TEST_VAR\")");
+    bbl.exec("(= v2 (get-env \"BBL_TEST_VAR\"))");
     ASSERT_EQ(bbl.get("v2").value().type(), BBL::Type::Null);
 }
 
@@ -3535,7 +3535,7 @@ TEST(test_os_execute) {
 TEST(test_os_getcwd) {
     BblState bbl;
     BBL::addStdLib(bbl);
-    bbl.exec("(= d (getcwd))");
+    bbl.exec("(= d (get-cwd))");
     ASSERT_EQ(bbl.get("d").value().type(), BBL::Type::String);
     ASSERT_TRUE(std::string(bbl.getString("d").value()).size() > 0);
 }
@@ -3543,16 +3543,16 @@ TEST(test_os_getcwd) {
 TEST(test_os_getpid) {
     BblState bbl;
     BBL::addStdLib(bbl);
-    bbl.exec("(= p (getpid))");
+    bbl.exec("(= p (get-pid))");
     ASSERT_TRUE(bbl.getInt("p").value() > 0);
 }
 
 TEST(test_os_chdir_getcwd) {
     BblState bbl;
     BBL::addStdLib(bbl);
-    bbl.exec("(= orig (getcwd))");
+    bbl.exec("(= orig (get-cwd))");
     bbl.exec("(chdir \"/tmp\")");
-    bbl.exec("(= now (getcwd))");
+    bbl.exec("(= now (get-cwd))");
     std::string now = bbl.getString("now").value();
     ASSERT_TRUE(now.find("/tmp") != std::string::npos);
     // chdir back
@@ -3572,7 +3572,7 @@ TEST(test_os_mkdir_remove) {
 TEST(test_os_rename) {
     BblState bbl;
     BBL::addStdLib(bbl);
-    bbl.exec("(= src (tmpname))");
+    bbl.exec("(= src (tmp-name))");
     std::string src = bbl.getString("src").value();
     std::string dst = src + ".renamed";
     bbl.exec("(= r (rename \"" + src + "\" \"" + dst + "\"))");
@@ -3583,7 +3583,7 @@ TEST(test_os_rename) {
 TEST(test_os_tmpname) {
     BblState bbl;
     BBL::addStdLib(bbl);
-    bbl.exec("(= t (tmpname))");
+    bbl.exec("(= t (tmp-name))");
     ASSERT_EQ(bbl.get("t").value().type(), BBL::Type::String);
     std::string path = bbl.getString("t").value();
     ASSERT_TRUE(path.size() > 0);
@@ -3605,7 +3605,7 @@ TEST(test_os_date) {
 TEST(test_os_difftime) {
     BblState bbl;
     BBL::addStdLib(bbl);
-    bbl.exec("(= t (time)) (= d (difftime t t))");
+    bbl.exec("(= t (time)) (= d (diff-time t t))");
     ASSERT_NEAR(bbl.getFloat("d").value(), 0.0, 0.001);
 }
 
@@ -3625,7 +3625,7 @@ TEST(test_os_glob) {
     BBL::addStdLib(bbl);
     bbl.exec("(= g (glob \"/tmp/*\"))");
     ASSERT_EQ(bbl.get("g").value().type(), BBL::Type::Table);
-    bbl.exec("(= t (typeof (glob \"/tmp/*\")))");
+    bbl.exec("(= t (type-of (glob \"/tmp/*\")))");
     ASSERT_EQ(std::string(bbl.getString("t").value()), std::string("table"));
 }
 
@@ -3757,13 +3757,13 @@ TEST(test_script_struct_sizeof) {
     BblState bbl;
     BBL::addStdLib(bbl);
     bbl.exec("(struct Pixel uint8 r uint8 g uint8 b uint8 a)");
-    bbl.exec("(= sz1 (sizeof Pixel))");
+    bbl.exec("(= sz1 (size-of Pixel))");
     ASSERT_EQ(bbl.getInt("sz1").value(), (int64_t)4);
-    bbl.exec("(= p (Pixel 1 2 3 4)) (= sz2 (sizeof p))");
+    bbl.exec("(= p (Pixel 1 2 3 4)) (= sz2 (size-of p))");
     ASSERT_EQ(bbl.getInt("sz2").value(), (int64_t)4);
     // Larger struct
     bbl.exec("(struct Big float64 a float64 b int32 c)");
-    bbl.exec("(= sz3 (sizeof Big))");
+    bbl.exec("(= sz3 (size-of Big))");
     ASSERT_EQ(bbl.getInt("sz3").value(), (int64_t)20);
 }
 
@@ -3772,7 +3772,7 @@ TEST(test_script_struct_packed_layout) {
     BBL::addStdLib(bbl);
     // float32(4) + uint8(1) + float64(8) = 13 bytes, no padding
     bbl.exec("(struct Packed float32 a uint8 b float64 c)");
-    bbl.exec("(= sz (sizeof Packed))");
+    bbl.exec("(= sz (size-of Packed))");
     ASSERT_EQ(bbl.getInt("sz").value(), (int64_t)13);
     bbl.exec("(= p (Packed 1.0 42 3.14)) (= pa p.a) (= pb p.b) (= pc p.c)");
     ASSERT_NEAR(bbl.getFloat("pa").value(), 1.0, 0.001);
@@ -3808,7 +3808,7 @@ TEST(test_script_struct_errors) {
     // Nested struct: undefined type
     ASSERT_THROW(bbl.exec("(struct Bad4 Nonexistent a)"));
     // sizeof non-struct
-    ASSERT_THROW(bbl.exec("(sizeof 42)"));
+    ASSERT_THROW(bbl.exec("(size-of 42)"));
     // sizeof arity
     ASSERT_THROW(bbl.exec("(sizeof)"));
 }
@@ -4121,7 +4121,7 @@ TEST(test_state_post_recv_value_types) {
         (= child (state-new "/tmp/bbl_test_workers/echo_all.bbl"))
         (child:post (table "i" 42 "f" 3.14 "b" true "n" null "s" "hi"))
         (= reply (child:recv))
-        (print (reply:get "i") " " (reply:get "f") " " (reply:get "b") " " (typeof (reply:get "n")) " " (reply:get "s"))
+        (print (reply:get "i") " " (reply:get "f") " " (reply:get "b") " " (type-of (reply:get "n")) " " (reply:get "s"))
         (child:join)
     )");
     bbl.printCapture = nullptr;
@@ -4790,7 +4790,7 @@ TEST(test_bc_recursion) {
 
 TEST(test_bc_cfn_call) {
     BblState bbl; BBL::addPrint(bbl);
-    auto v = bbl.execExpr("(typeof 42)");
+    auto v = bbl.execExpr("(type-of 42)");
     ASSERT_EQ(std::string(v.stringVal()->data), std::string("int"));
 }
 

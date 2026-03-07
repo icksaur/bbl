@@ -705,9 +705,9 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
         return dest;
     }
 
-    if (op == "sizeof") {
-        if (node.children.size() < 2) throw BBL::Error{"'sizeof' requires a type name"};
-        if (node.children[1].type != NodeType::Symbol) throw BBL::Error{"'sizeof' argument must be a type name"};
+    if (op == "size-of") {
+        if (node.children.size() < 2) throw BBL::Error{"'size-of' requires a type name"};
+        if (node.children[1].type != NodeType::Symbol) throw BBL::Error{"'size-of' argument must be a type name"};
         uint8_t nameIdx = addStrConst(state, cs, node.children[1].stringVal);
         cs.chunk.emitABC(OP_SIZEOF, dest, nameIdx, 0, node.line);
         return dest;
@@ -720,8 +720,8 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
         return dest;
     }
 
-    if (op == "execfile") {
-        if (node.children.size() < 2) throw BBL::Error{"'execfile' requires an argument"};
+    if (op == "exec-file") {
+        if (node.children.size() < 2) throw BBL::Error{"'exec-file' requires an argument"};
         uint8_t srcReg = compileExpr(state, cs, node.children[1], dest);
         cs.chunk.emitABC(OP_EXECFILE, dest, srcReg, 0, node.line);
         return dest;

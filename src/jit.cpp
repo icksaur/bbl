@@ -624,13 +624,13 @@ void jitSizeof(BblValue* regs, BblState* state, Chunk* chunk, uint8_t A, uint8_t
             return;
         }
     }
-    JIT_ERROR(state, "sizeof: unknown type or variable: " + tname);
+    JIT_ERROR(state, "size-of: unknown type or variable: " + tname);
     JIT_CATCH
 }
 
 void jitExecFile(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
     JIT_TRY
-    if (regs[srcReg].type() != BBL::Type::String) JIT_ERROR(state, "execfile: argument must be string");
+    if (regs[srcReg].type() != BBL::Type::String) JIT_ERROR(state, "exec-file: argument must be string");
     regs[destReg] = state->execfileExpr(regs[srcReg].stringVal()->data);
     JIT_CATCH
 }
