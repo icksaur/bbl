@@ -761,6 +761,7 @@ namespace BBL {
     void addFileIo(BblState& bbl);
     void addOs(BblState& bbl);
     void addChildStates(BblState& bbl, bool childMode = false);
+    void addNet(BblState& bbl);
     void addStdLib(BblState& bbl);
 
     std::vector<uint8_t> lz4Compress(const uint8_t* data, size_t size);

@@ -62,3 +62,38 @@ inline const char* devNull() {
     return "/dev/null";
 #endif
 }
+
+// --- Socket abstractions ---
+
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #pragma comment(lib, "ws2_32.lib")
+    using socket_t = SOCKET;
+    #define SOCKET_INVALID INVALID_SOCKET
+    inline void socketClose(socket_t s) { closesocket(s); }
+#else
+    #include <sys/socket.h>
+    #include <netdb.h>
+    #include <arpa/inet.h>
+    using socket_t = int;
+    #define SOCKET_INVALID (-1)
+    inline void socketClose(socket_t s) { close(s); }
+#endif
+
+inline void socketInit() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+#ifdef _WIN32
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+    atexit([]{ WSACleanup(); });
+#else
+    signal(SIGPIPE, SIG_IGN);
+#endif
+}
+
+#ifndef MSG_NOSIGNAL
+    #define MSG_NOSIGNAL 0
+#endif

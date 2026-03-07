@@ -181,6 +181,7 @@ static const char* BUILTIN_FUNCS[] = {
     "get-cwd", "chdir", "mkdir", "remove", "rename", "execute",
     "glob", "spawn", "compress", "decompress", "exec-binary",
     "exists", "path-join", "path-dir", "path-base", "path-ext", "path-abs",
+    "tcp-connect", "tcp-listen", "udp-open",
     nullptr
 };
 
@@ -450,6 +451,9 @@ static std::string handleHover(int id, yyjson_val* params) {
         {"path-base", "`(path-base path)` — filename component of path"},
         {"path-ext", "`(path-ext path)` — file extension including dot"},
         {"path-abs", "`(path-abs path)` — resolve to absolute path"},
+        {"tcp-connect", "`(tcp-connect host port)` — connect to TCP server, return Socket"},
+        {"tcp-listen", "`(tcp-listen addr port)` — bind and listen, return Server"},
+        {"udp-open", "`(udp-open)` — create UDP socket"},
     };
 
     yyjson_mut_val* result;

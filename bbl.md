@@ -919,6 +919,49 @@ Inside a child state:
 | `(post table)` | Send message to parent |
 | `(recv)` | Receive message from parent (blocks) |
 
+### Networking
+
+TCP and UDP sockets with RAII cleanup via `with`.
+
+```bbl
+// TCP client
+(with sock (tcp-connect "example.com" 80)
+    (sock:write "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+    (print (sock:read)))
+
+// TCP server
+(= server (tcp-listen "0.0.0.0" 8080))
+(= client (server:accept))
+(= line (client:read-line))
+(client:write "HTTP/1.0 200 OK\r\n\r\nHello\n")
+(client:close)
+(server:close)
+
+// UDP
+(= sock (udp-open))
+(sock:send-to "127.0.0.1" 5000 "hello")
+(sock:close)
+```
+
+| Function | Description |
+|---|---|
+| `(tcp-connect host port)` | Connect to TCP server, return Socket |
+| `(tcp-listen addr port)` | Bind and listen, return Server |
+| `(udp-open)` | Create UDP socket |
+
+| Socket Method | Description |
+|---|---|
+| `(sock:read)` | Read until EOF (max 16MB) |
+| `(sock:read-line)` | Read one line (max 64KB) |
+| `(sock:read-bytes n)` | Read exactly n bytes as binary |
+| `(sock:write str)` | Write string, return bytes sent |
+| `(sock:write-bytes bin)` | Write binary data |
+| `(sock:close)` | Close the socket |
+| `(server:accept)` | Accept connection, return Socket |
+| `(sock:bind addr port)` | Bind UDP socket |
+| `(sock:send-to addr port data)` | Send UDP datagram |
+| `(sock:recv-from max)` | Receive UDP, returns `{data, addr, port}` |
+
 ---
 
 ## CLI

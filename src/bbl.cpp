@@ -2399,11 +2399,259 @@ std::vector<uint8_t> BBL::lz4Decompress(const uint8_t* data, size_t size) {
     return out;
 }
 
+// ---------- Networking ----------
+
+struct BblSocket { socket_t fd; bool closed = false; };
+
+static void socketDestructor(void* p) {
+    auto* s = static_cast<BblSocket*>(p);
+    if (!s->closed) socketClose(s->fd);
+    delete s;
+}
+
+static void checkSocketOpen(BblSocket* s) {
+    if (s->closed) throw BBL::Error{"socket is closed"};
+}
+
+static int socketRead(BblState* bbl) {
+    auto* s = static_cast<BblSocket*>(bbl->callArgs[0].userdataVal()->data);
+    checkSocketOpen(s);
+    std::string result;
+    char buf[4096];
+    while (true) {
+        auto n = recv(s->fd, buf, sizeof(buf), 0);
+        if (n <= 0) break;
+        result.append(buf, static_cast<size_t>(n));
+        if (result.size() > 16 * 1024 * 1024) throw BBL::Error{"socket read: exceeded 16MB"};
+    }
+    bbl->pushString(result.c_str());
+    return 1;
+}
+
+static int socketReadLine(BblState* bbl) {
+    auto* s = static_cast<BblSocket*>(bbl->callArgs[0].userdataVal()->data);
+    checkSocketOpen(s);
+    std::string line;
+    char c;
+    while (line.size() < 65536) {
+        auto n = recv(s->fd, &c, 1, 0);
+        if (n <= 0) break;
+        if (c == '\n') break;
+        line += c;
+    }
+    bbl->pushString(line.c_str());
+    return 1;
+}
+
+static int socketReadBytes(BblState* bbl) {
+    auto* s = static_cast<BblSocket*>(bbl->callArgs[0].userdataVal()->data);
+    checkSocketOpen(s);
+    size_t want = static_cast<size_t>(bbl->getIntArg(1));
+    if (want > 16 * 1024 * 1024) throw BBL::Error{"socket read-bytes: max 16MB"};
+    std::vector<uint8_t> data(want);
+    size_t got = 0;
+    while (got < want) {
+        auto n = recv(s->fd, reinterpret_cast<char*>(data.data() + got), static_cast<int>(want - got), 0);
+        if (n <= 0) throw BBL::Error{"socket read-bytes: connection closed"};
+        got += static_cast<size_t>(n);
+    }
+    bbl->pushBinary(data.data(), data.size());
+    return 1;
+}
+
+static int socketWrite(BblState* bbl) {
+    auto* s = static_cast<BblSocket*>(bbl->callArgs[0].userdataVal()->data);
+    checkSocketOpen(s);
+    const char* str = bbl->getStringArg(1);
+    size_t len = strlen(str);
+    size_t sent = 0;
+    while (sent < len) {
+        auto n = send(s->fd, str + sent, static_cast<int>(len - sent), MSG_NOSIGNAL);
+        if (n <= 0) throw BBL::Error{"socket write failed"};
+        sent += static_cast<size_t>(n);
+    }
+    bbl->pushInt(static_cast<int64_t>(sent));
+    return 1;
+}
+
+static int socketWriteBytes(BblState* bbl) {
+    auto* s = static_cast<BblSocket*>(bbl->callArgs[0].userdataVal()->data);
+    checkSocketOpen(s);
+    auto* bin = bbl->getBinaryArg(1);
+    size_t len = bin->data.size();
+    size_t sent = 0;
+    while (sent < len) {
+        auto n = send(s->fd, reinterpret_cast<const char*>(bin->data.data() + sent),
+                      static_cast<int>(len - sent), MSG_NOSIGNAL);
+        if (n <= 0) throw BBL::Error{"socket write-bytes failed"};
+        sent += static_cast<size_t>(n);
+    }
+    bbl->pushInt(static_cast<int64_t>(sent));
+    return 1;
+}
+
+static int socketCloseMethod(BblState* bbl) {
+    auto* s = static_cast<BblSocket*>(bbl->callArgs[0].userdataVal()->data);
+    if (!s->closed) { socketClose(s->fd); s->closed = true; }
+    return 0;
+}
+
+static int serverAccept(BblState* bbl) {
+    auto* s = static_cast<BblSocket*>(bbl->callArgs[0].userdataVal()->data);
+    checkSocketOpen(s);
+    socket_t client = accept(s->fd, nullptr, nullptr);
+    if (client == SOCKET_INVALID) throw BBL::Error{"accept failed"};
+    auto* cs = new BblSocket{client, false};
+    bbl->pushUserData("Socket", static_cast<void*>(cs));
+    return 1;
+}
+
+static int udpBind(BblState* bbl) {
+    auto* s = static_cast<BblSocket*>(bbl->callArgs[0].userdataVal()->data);
+    checkSocketOpen(s);
+    const char* addr = bbl->getStringArg(1);
+    int port = static_cast<int>(bbl->getIntArg(2));
+    struct addrinfo hints = {}, *res = nullptr;
+    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags = AI_PASSIVE;
+    std::string portStr = std::to_string(port);
+    if (getaddrinfo(addr, portStr.c_str(), &hints, &res) != 0)
+        throw BBL::Error{"udp bind: address resolution failed"};
+    int r = ::bind(s->fd, res->ai_addr, static_cast<int>(res->ai_addrlen));
+    freeaddrinfo(res);
+    if (r < 0) throw BBL::Error{"udp bind failed"};
+    return 0;
+}
+
+static int udpSendTo(BblState* bbl) {
+    auto* s = static_cast<BblSocket*>(bbl->callArgs[0].userdataVal()->data);
+    checkSocketOpen(s);
+    const char* addr = bbl->getStringArg(1);
+    int port = static_cast<int>(bbl->getIntArg(2));
+    const char* data; size_t len;
+    if (bbl->getArgType(3) == BBL::Type::String) {
+        data = bbl->getStringArg(3); len = strlen(data);
+    } else {
+        auto* bin = bbl->getBinaryArg(3);
+        data = reinterpret_cast<const char*>(bin->data.data()); len = bin->data.size();
+    }
+    struct addrinfo hints = {}, *res = nullptr;
+    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM;
+    std::string portStr = std::to_string(port);
+    if (getaddrinfo(addr, portStr.c_str(), &hints, &res) != 0)
+        throw BBL::Error{"udp send-to: address resolution failed"};
+    auto n = sendto(s->fd, data, static_cast<int>(len), 0, res->ai_addr, static_cast<int>(res->ai_addrlen));
+    freeaddrinfo(res);
+    if (n < 0) throw BBL::Error{"udp send-to failed"};
+    return 0;
+}
+
+static int udpRecvFrom(BblState* bbl) {
+    auto* s = static_cast<BblSocket*>(bbl->callArgs[0].userdataVal()->data);
+    checkSocketOpen(s);
+    size_t maxBytes = static_cast<size_t>(bbl->getIntArg(1));
+    if (maxBytes > 65536) maxBytes = 65536;
+    std::vector<char> buf(maxBytes);
+    struct sockaddr_in from = {};
+    socklen_t fromLen = sizeof(from);
+    auto n = recvfrom(s->fd, buf.data(), static_cast<int>(maxBytes), 0,
+                      reinterpret_cast<struct sockaddr*>(&from), &fromLen);
+    if (n < 0) throw BBL::Error{"udp recv-from failed"};
+    BblTable* tbl = bbl->allocTable();
+    tbl->set(BblValue::makeString(bbl->intern("data")),
+             BblValue::makeString(bbl->intern(std::string(buf.data(), static_cast<size_t>(n)))));
+    char addrBuf[INET_ADDRSTRLEN] = {};
+    inet_ntop(AF_INET, &from.sin_addr, addrBuf, sizeof(addrBuf));
+    tbl->set(BblValue::makeString(bbl->intern("addr")), BblValue::makeString(bbl->intern(addrBuf)));
+    tbl->set(BblValue::makeString(bbl->intern("port")), BblValue::makeInt(ntohs(from.sin_port)));
+    bbl->pushTable(tbl);
+    return 1;
+}
+
+void BBL::addNet(BblState& bbl) {
+    if (bbl.has("tcp-connect")) return;
+    socketInit();
+
+    BBL::TypeBuilder sb("Socket");
+    sb.method("read", socketRead)
+      .method("read-line", socketReadLine)
+      .method("read-bytes", socketReadBytes)
+      .method("write", socketWrite)
+      .method("write-bytes", socketWriteBytes)
+      .method("close", socketCloseMethod)
+      .destructor(socketDestructor);
+    bbl.registerType(sb);
+
+    BBL::TypeBuilder svb("Server");
+    svb.method("accept", serverAccept)
+       .method("close", socketCloseMethod)
+       .destructor(socketDestructor);
+    bbl.registerType(svb);
+
+    BBL::TypeBuilder ub("UdpSocket");
+    ub.method("bind", udpBind)
+      .method("send-to", udpSendTo)
+      .method("recv-from", udpRecvFrom)
+      .method("close", socketCloseMethod)
+      .destructor(socketDestructor);
+    bbl.registerType(ub);
+
+    bbl.defn("tcp-connect", [](BblState* b) -> int {
+        const char* host = b->getStringArg(0);
+        int port = static_cast<int>(b->getIntArg(1));
+        struct addrinfo hints = {}, *res = nullptr;
+        hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
+        std::string portStr = std::to_string(port);
+        int err = getaddrinfo(host, portStr.c_str(), &hints, &res);
+        if (err != 0) throw BBL::Error{"tcp-connect: " + std::string(gai_strerror(err))};
+        socket_t fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        if (fd == SOCKET_INVALID) { freeaddrinfo(res); throw BBL::Error{"tcp-connect: socket failed"}; }
+        if (connect(fd, res->ai_addr, static_cast<int>(res->ai_addrlen)) < 0) {
+            socketClose(fd); freeaddrinfo(res);
+            throw BBL::Error{"tcp-connect: connection refused"};
+        }
+        freeaddrinfo(res);
+        b->pushUserData("Socket", static_cast<void*>(new BblSocket{fd, false}));
+        return 1;
+    });
+
+    bbl.defn("tcp-listen", [](BblState* b) -> int {
+        const char* host = b->getStringArg(0);
+        int port = static_cast<int>(b->getIntArg(1));
+        struct addrinfo hints = {}, *res = nullptr;
+        hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_PASSIVE;
+        std::string portStr = std::to_string(port);
+        if (getaddrinfo(host, portStr.c_str(), &hints, &res) != 0)
+            throw BBL::Error{"tcp-listen: address resolution failed"};
+        socket_t fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        if (fd == SOCKET_INVALID) { freeaddrinfo(res); throw BBL::Error{"tcp-listen: socket failed"}; }
+        int opt = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt), sizeof(opt));
+        if (::bind(fd, res->ai_addr, static_cast<int>(res->ai_addrlen)) < 0) {
+            socketClose(fd); freeaddrinfo(res);
+            throw BBL::Error{"tcp-listen: bind failed"};
+        }
+        freeaddrinfo(res);
+        if (listen(fd, 16) < 0) { socketClose(fd); throw BBL::Error{"tcp-listen: listen failed"}; }
+        b->pushUserData("Server", static_cast<void*>(new BblSocket{fd, false}));
+        return 1;
+    });
+
+    bbl.defn("udp-open", [](BblState* b) -> int {
+        socket_t fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (fd == SOCKET_INVALID) throw BBL::Error{"udp-open: socket failed"};
+        b->pushUserData("UdpSocket", static_cast<void*>(new BblSocket{fd, false}));
+        return 1;
+    });
+}
+
 void BBL::addStdLib(BblState& bbl) {
     BBL::addPrint(bbl);
     BBL::addMath(bbl);
     BBL::addFileIo(bbl);
     BBL::addOs(bbl);
+    BBL::addNet(bbl);
     BBL::addChildStates(bbl, false);
 
     bbl.defn("compress", [](BblState* b) -> int {
