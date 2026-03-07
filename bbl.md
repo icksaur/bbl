@@ -691,23 +691,40 @@ Errors print a backtrace to stderr showing each call frame with file and line.
 ### exec
 
 ```bbl
-(= result (exec "(+ 1 2)"))    // 3, fresh isolated scope
+(= x 10)
+(= result (exec "(+ x 5)"))    // 15 — shares globals
+(exec "(= y 20)")
+(print y)                       // 20 — visible after exec
 ```
 
-Evaluates a string as BBL code.  From script: creates a fresh scope, returns
-last expression.  From C++: accumulates into existing root scope.
+Evaluates a string as BBL code. Shares the global scope — variables set
+inside exec are visible outside, and vice versa. Returns the last expression.
+
+### exec-binary
+
+```bbl
+(= code 0b7:(+ 1 2))
+(print (exec-binary code))      // 3
+
+// With compression:
+(= packed (compress 0b24:(= greeting "hello") (print greeting)))
+(exec-binary (decompress packed))
+```
+
+Evaluates a binary buffer as BBL source code. Same semantics as `exec`
+but takes a `binary` instead of a `string`. Useful for executing compressed
+or file-loaded BBL code.
 
 ### execfile
 
 ```bbl
-(execfile "setup.bbl")
+(= module (execfile "utils.bbl"))   // returns last expression
+(execfile "setup.bbl")              // side effects only
 ```
 
-Runs another `.bbl` file.  From script: fresh isolated scope, returns last
-expression.  From C++: accumulates into root scope (second call sees first
-call's definitions).
-
-Path resolution is relative to the calling script's directory.
+Runs another `.bbl` file. Shares the global scope. Returns the last
+expression's value (can be used as a module import). Path resolution
+is relative to the calling script's directory, then BBL_PATH.
 
 ---
 

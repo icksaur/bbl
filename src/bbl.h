@@ -82,6 +82,7 @@ enum MethodId : uint8_t {
     MID_CONTAINS, MID_STARTS_WITH, MID_ENDS_WITH, MID_SLICE, MID_SPLIT,
     MID_REPLACE, MID_UPPER, MID_LOWER, MID_TRIM, MID_COPY_FROM, MID_JOIN,
     MID_TRIM_LEFT, MID_TRIM_RIGHT, MID_PAD_LEFT, MID_PAD_RIGHT,
+    MID_AS, MID_SET_AS,
 };
 
 struct BblString : GcObj {
@@ -626,6 +627,8 @@ struct BblState {
         BblString* trim_right = nullptr;
         BblString* pad_left = nullptr;
         BblString* pad_right = nullptr;
+        BblString* as = nullptr;
+        BblString* set_as = nullptr;
     } m;
 
     // Print capture (for testing)

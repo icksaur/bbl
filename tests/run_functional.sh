@@ -159,6 +159,7 @@ check_binary() {
 }
 check_binary binary_execfile "v1 8 84"
 check_binary binary_compress "24 42"
+check_binary binary_typed "100 2.5 3 4 -999"
 
 echo ""
 echo "Passed: $PASS  Failed: $FAIL"

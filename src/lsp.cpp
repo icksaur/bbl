@@ -179,7 +179,7 @@ static const char* BUILTIN_FUNCS[] = {
     "filebytes", "fopen",
     "getenv", "setenv", "clock", "time", "sleep", "exit",
     "getcwd", "chdir", "mkdir", "remove", "rename", "execute",
-    "glob", "spawn", "compress", "decompress",
+    "glob", "spawn", "compress", "decompress", "exec-binary",
     nullptr
 };
 
@@ -392,6 +392,7 @@ static std::string handleHover(int id, yyjson_val* params) {
         {"binary", "`(binary size)` or `(binary vec)` — create byte buffer"},
         {"sizeof", "`(sizeof TypeName)` — byte size of a struct type"},
         {"exec", "`(exec string)` — evaluate BBL code string, return result"},
+        {"exec-binary", "`(exec-binary bin)` — evaluate binary buffer as BBL code"},
         {"execfile", "`(execfile path)` — execute BBL file, imports definitions"},
         {"compress", "`(compress binary)` — LZ4 compress, returns compressed binary"},
         {"decompress", "`(decompress binary)` — LZ4 decompress, returns original binary"},

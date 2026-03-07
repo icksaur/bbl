@@ -1,0 +1,12 @@
+// Typed binary access: read/write structs and primitives at byte offsets
+(struct Vec2 float32 x float32 y)
+(= buf (binary 24))
+(buf:set-as "uint32" 0 100)
+(buf:set-as "float32" 4 2.5)
+(buf:set-as "Vec2" 8 (Vec2 3.0 4.0))
+(buf:set-as "int64" 16 -999)
+(= n (buf:as "uint32" 0))
+(= f (buf:as "float32" 4))
+(= v (buf:as "Vec2" 8))
+(= big (buf:as "int64" 16))
+(print n " " f " " v.x " " v.y " " big)

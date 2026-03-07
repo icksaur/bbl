@@ -181,6 +181,22 @@ void jitTable(BblValue* regs, BblState* state, uint8_t destReg, uint8_t pairCoun
     regs[destReg] = BblValue::makeTable(tbl);
 }
 
+static bool resolveTypeName(BblState* state, const std::string& name,
+                            CType& ctype, size_t& size, std::string& structName) {
+    static const std::unordered_map<std::string, std::pair<CType, size_t>> types = {
+        {"bool", {CType::Bool, 1}}, {"int8", {CType::Int8, 1}}, {"uint8", {CType::Uint8, 1}},
+        {"int16", {CType::Int16, 2}}, {"uint16", {CType::Uint16, 2}},
+        {"int32", {CType::Int32, 4}}, {"uint32", {CType::Uint32, 4}},
+        {"int64", {CType::Int64, 8}}, {"uint64", {CType::Uint64, 8}},
+        {"float32", {CType::Float32, 4}}, {"float64", {CType::Float64, 8}},
+    };
+    auto it = types.find(name);
+    if (it != types.end()) { ctype = it->second.first; size = it->second.second; structName.clear(); return true; }
+    auto sit = state->structDescs.find(name);
+    if (sit != state->structDescs.end()) { ctype = CType::Struct; size = sit->second.totalSize; structName = name; return true; }
+    return false;
+}
+
 void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblString* methodStr) {
     try {
     BblValue receiver = regs[base];
@@ -394,6 +410,48 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             if (static_cast<size_t>(dO + ln) > bin->length()) JIT_ERROR(state, "binary.copy-from: destination overflow");
             if (static_cast<size_t>(sO + ln) > src->length()) JIT_ERROR(state, "binary.copy-from: source overflow");
             std::memcpy(bin->data.data() + dO, src->data.data() + sO, static_cast<size_t>(ln));
+            regs[base] = BblValue::makeNull();
+        } else if (methodStr->methodId == MID_AS) {
+            bin->materialize();
+            if (argc < 2) JIT_ERROR(state, "binary.as: requires type and offset");
+            if (args[0].type() != BBL::Type::String) JIT_ERROR(state, "binary.as: type must be a string");
+            int64_t off = args[1].intVal();
+            if (off < 0) JIT_ERROR(state, "binary.as: negative offset");
+            CType ct; size_t sz; std::string sn;
+            if (!resolveTypeName(state, args[0].stringVal()->data, ct, sz, sn))
+                JIT_ERROR(state, "binary.as: unknown type " + args[0].stringVal()->data);
+            if (static_cast<size_t>(off) + sz > bin->data.size()) JIT_ERROR(state, "binary.as: out of bounds");
+            const uint8_t* p = bin->data.data() + off;
+            if (ct == CType::Struct) {
+                auto& desc = state->structDescs[sn];
+                BblStruct* s = state->allocStruct(&desc);
+                std::memcpy(s->data.data(), p, sz);
+                regs[base] = BblValue::makeStruct(s);
+            } else {
+                FieldDesc fd{"", 0, sz, ct, ""};
+                BblStruct tmp; tmp.data.assign(p, p + sz);
+                regs[base] = state->readField(&tmp, fd);
+            }
+        } else if (methodStr->methodId == MID_SET_AS) {
+            bin->materialize();
+            if (argc < 3) JIT_ERROR(state, "binary.set-as: requires type, offset, and value");
+            if (args[0].type() != BBL::Type::String) JIT_ERROR(state, "binary.set-as: type must be a string");
+            int64_t off = args[1].intVal();
+            if (off < 0) JIT_ERROR(state, "binary.set-as: negative offset");
+            CType ct; size_t sz; std::string sn;
+            if (!resolveTypeName(state, args[0].stringVal()->data, ct, sz, sn))
+                JIT_ERROR(state, "binary.set-as: unknown type " + args[0].stringVal()->data);
+            if (static_cast<size_t>(off) + sz > bin->data.size()) JIT_ERROR(state, "binary.set-as: out of bounds");
+            uint8_t* p = bin->data.data() + off;
+            if (ct == CType::Struct) {
+                if (args[2].type() != BBL::Type::Struct) JIT_ERROR(state, "binary.set-as: value must be a struct");
+                std::memcpy(p, args[2].structVal()->data.data(), sz);
+            } else {
+                FieldDesc fd{"", 0, sz, ct, ""};
+                BblStruct tmp; tmp.data.resize(sz, 0);
+                state->writeField(&tmp, fd, args[2]);
+                std::memcpy(p, tmp.data.data(), sz);
+            }
             regs[base] = BblValue::makeNull();
         } else JIT_ERROR(state, "unknown binary method: " + methodStr->data);
     } else if (receiver.type() == BBL::Type::UserData) {

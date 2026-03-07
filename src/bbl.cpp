@@ -555,6 +555,8 @@ BblState::BblState() {
     m.copy_from->methodId = MID_COPY_FROM; m.join->methodId = MID_JOIN;
     m.trim_left->methodId = MID_TRIM_LEFT; m.trim_right->methodId = MID_TRIM_RIGHT;
     m.pad_left->methodId = MID_PAD_LEFT; m.pad_right->methodId = MID_PAD_RIGHT;
+    m.as = intern("as"); m.set_as = intern("set-as");
+    m.as->methodId = MID_AS; m.set_as->methodId = MID_SET_AS;
 
     defn("__with_cleanup", [](BblState* bbl) -> int {
         if (bbl->callArgs.empty()) return 0;
@@ -2365,6 +2367,14 @@ void BBL::addStdLib(BblState& bbl) {
         BblBinary* bin = b->getBinaryArg(0);
         auto out = BBL::lz4Decompress(bin->data.data(), bin->data.size());
         b->pushBinary(out.data(), out.size());
+        return 1;
+    });
+    bbl.defn("exec-binary", [](BblState* b) -> int {
+        BblBinary* bin = b->getBinaryArg(0);
+        std::string source(reinterpret_cast<const char*>(bin->data.data()), bin->data.size());
+        BblValue result = b->execExpr(source);
+        b->returnValue = result;
+        b->hasReturn = true;
         return 1;
     });
 }
