@@ -4850,6 +4850,103 @@ TEST(test_bc_nested_fn) {
     ASSERT_EQ(bbl.execExpr("(= adder (fn (x) (fn (y) (+ x y)))) (= add5 (adder 5)) (add5 10)").intVal(), (int64_t)15);
 }
 
+TEST(test_step_limit_loop) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.maxSteps = 100;
+    bool caught = false;
+    try { bbl.exec("(= x 0) (loop true (= x (+ x 1)))"); }
+    catch (const BBL::Error& e) { caught = true; }
+    ASSERT_TRUE(caught);
+    ASSERT_TRUE(bbl.stepCount <= bbl.maxSteps + 10);
+}
+
+TEST(test_step_limit_recursion) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.maxSteps = 100;
+    bool caught = false;
+    try { bbl.exec("(defn f (n) (f (+ n 1))) (f 0)"); }
+    catch (const BBL::Error& e) { caught = true; }
+    ASSERT_TRUE(caught);
+}
+
+TEST(test_step_limit_try_catch) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.maxSteps = 100;
+    auto result = bbl.execExpr("(try (loop true 1) (catch e e))");
+    ASSERT_EQ(result.type(), BBL::Type::String);
+    std::string msg = result.stringVal()->data;
+    ASSERT_TRUE(msg.find("step limit") != std::string::npos);
+}
+
+TEST(test_sandbox_return_value) {
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"_((sandbox "(+ 2 3)"))_");
+    ASSERT_EQ(result.intVal(), (int64_t)5);
+}
+
+TEST(test_sandbox_return_string) {
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"_((sandbox "(str \"hello\")" (table "allow" (table "print" true))))_");
+    ASSERT_EQ(result.type(), BBL::Type::String);
+    ASSERT_EQ(result.stringVal()->data, std::string("hello"));
+}
+
+TEST(test_sandbox_step_limit) {
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"_((sandbox "(loop true 1)" (table "steps" 50)))_");
+    ASSERT_EQ(result.type(), BBL::Type::Null);
+}
+
+TEST(test_sandbox_no_print) {
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"_((sandbox "(print 1)"))_");
+    ASSERT_EQ(result.type(), BBL::Type::Null);
+}
+
+TEST(test_sandbox_allow_print) {
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"_((sandbox "(+ 1 1)" (table "allow" (table "print" true))))_");
+    ASSERT_EQ(result.intVal(), (int64_t)2);
+}
+
+TEST(test_sandbox_no_file) {
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"_((sandbox "(file-bytes \"/etc/passwd\")"))_");
+    ASSERT_EQ(result.type(), BBL::Type::Null);
+}
+
+TEST(test_sandbox_isolation) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= secret (fn () 42))");
+    auto result = bbl.execExpr(R"_((sandbox "(secret)"))_");
+    ASSERT_EQ(result.type(), BBL::Type::Null);
+}
+
+TEST(test_addcore_only) {
+    BblState bbl; BBL::addCore(bbl);
+    ASSERT_EQ(bbl.execExpr("(+ 1 2)").intVal(), (int64_t)3);
+    ASSERT_EQ(bbl.execExpr(R"_((json-parse "[1,2,3]"))_").type(), BBL::Type::Table);
+    bool caught = false;
+    try { bbl.exec("(print 1)"); } catch (...) { caught = true; }
+    ASSERT_TRUE(caught);
+}
+
+TEST(test_sandbox_no_nested_sandbox) {
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"_((sandbox "(sandbox \"(+ 1 1)\")" (table "steps" 100)))_");
+    ASSERT_EQ(result.type(), BBL::Type::Null);
+}
+
+TEST(test_defn_basic_bbl) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_EQ(bbl.execExpr("(defn f (x) (+ x 1)) (f 5)").intVal(), (int64_t)6);
+}
+
+TEST(test_defn_recursive_bbl) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_EQ(bbl.execExpr("(defn fib (n) (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2))))) (fib 10)").intVal(), (int64_t)55);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -5538,6 +5635,22 @@ int main() {
     RUN(test_bc_method_call);
     RUN(test_bc_each);
     RUN(test_bc_nested_fn);
+
+    std::cout << "--- Sandboxing ---" << std::endl;
+    RUN(test_step_limit_loop);
+    RUN(test_step_limit_recursion);
+    RUN(test_step_limit_try_catch);
+    RUN(test_sandbox_return_value);
+    RUN(test_sandbox_return_string);
+    RUN(test_sandbox_step_limit);
+    RUN(test_sandbox_no_print);
+    RUN(test_sandbox_allow_print);
+    RUN(test_sandbox_no_file);
+    RUN(test_sandbox_isolation);
+    RUN(test_addcore_only);
+    RUN(test_sandbox_no_nested_sandbox);
+    RUN(test_defn_basic_bbl);
+    RUN(test_defn_recursive_bbl);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

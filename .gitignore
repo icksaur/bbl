@@ -15,11 +15,8 @@ plan.md
 spec.md
 backlog.md
 benchmark.md
-api.md
-bbl.md
 bytecode.md
 caco-bytecode-spec.md
-implementation.md
 performance.md
 
 # Benchmark non-BBL files

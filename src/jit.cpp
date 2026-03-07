@@ -43,6 +43,7 @@ extern "C" {
     void jitStoreError(BblValue* regs, BblState* state, uint8_t destReg, uint8_t unused);
     void jitWithCleanup(BblValue* regs, BblState* state, uint8_t varReg, uint8_t unused);
     void jitInt(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
+    void jitStepLimitExceeded(BblValue* regs, BblState* state, uint32_t unused1, uint32_t unused2);
 }
 
 static thread_local bool g_jitError = false;
@@ -669,6 +670,10 @@ void jitInt(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
     JIT_ERROR(state, "int: cannot convert");
 }
 
+void jitStepLimitExceeded(BblValue*, BblState* state, uint32_t, uint32_t) {
+    JIT_ERROR(state, "step limit exceeded: " + std::to_string(state->maxSteps) + " steps");
+}
+
 static std::string jitValToStr(BblState& state, const BblValue& v) {
     switch (v.type()) {
         case BBL::Type::Null: return "null";
@@ -1109,6 +1114,24 @@ static void emitCallHelper3(uint8_t* buf, size_t& pos, void* fn, uint32_t arg3, 
     if (errPatches) emitErrorCheck(buf, pos, *errPatches);
 }
 
+static void emitStepCheck(uint8_t* buf, size_t& pos, size_t stepCountOff, size_t maxStepsOff, std::vector<size_t>& errorExitPatches) {
+    // inc qword [r12 + stepCountOff]
+    emit(buf, pos, (uint8_t[]){ 0x49, 0xff, 0x84, 0x24 }, 4);
+    emit32(buf, pos, static_cast<uint32_t>(stepCountOff));
+    // mov rax, [r12 + stepCountOff]
+    emit(buf, pos, (uint8_t[]){ 0x49, 0x8b, 0x84, 0x24 }, 4);
+    emit32(buf, pos, static_cast<uint32_t>(stepCountOff));
+    // cmp rax, [r12 + maxStepsOff]
+    emit(buf, pos, (uint8_t[]){ 0x49, 0x3b, 0x84, 0x24 }, 4);
+    emit32(buf, pos, static_cast<uint32_t>(maxStepsOff));
+    // jbe skip
+    emit(buf, pos, (uint8_t[]){ 0x76 }, 1);
+    size_t skipPatch = pos;
+    emit8(buf, pos, 0);
+    emitCallHelper2(buf, pos, (void*)jitStepLimitExceeded, 0, 0, &errorExitPatches);
+    buf[skipPatch] = static_cast<uint8_t>(pos - skipPatch - 1);
+}
+
 // isFalsy check for NaN-boxed values: falsy if bits == TAG_NULL, TAG_BOOL|0, or TAG_INT|0
 static size_t emitJmpFalse(uint8_t* buf, size_t& pos, int A) {
     // mov rax, [rbx + A*8]
@@ -1253,6 +1276,9 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
 
     BblState dummy;
     size_t runtimeLineOff = reinterpret_cast<char*>(&dummy.runtimeLine) - reinterpret_cast<char*>(&dummy);
+    size_t stepCountOff = reinterpret_cast<char*>(&dummy.stepCount) - reinterpret_cast<char*>(&dummy);
+    size_t maxStepsOff = reinterpret_cast<char*>(&dummy.maxSteps) - reinterpret_cast<char*>(&dummy);
+    bool emitStepChecks = (state.maxSteps > 0);
 
     for (size_t i = 0; i < chunk.code.size(); i++) {
         nativeOffsets[i] = jit.size;
@@ -1466,7 +1492,8 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
         case OP_LOOP: {
-            // Backward jump — target is already compiled
+            if (emitStepChecks)
+                emitStepCheck(jit.buf, jit.size, stepCountOff, maxStepsOff, errorExitPatches);
             size_t p = emitJmp(jit.buf, jit.size);
             int target = static_cast<int>(i) + 1 - sBx;
             patchRel32(jit.buf, p, nativeOffsets[target]);
@@ -1499,6 +1526,8 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
         case OP_CALL: {
+            if (emitStepChecks)
+                emitStepCheck(jit.buf, jit.size, stepCountOff, maxStepsOff, errorExitPatches);
             if (selfRefRegs.count(A)) {
                 // Light self-recursive call: only save/restore rbx
                 // lea rdi, [rbx + A*8]
@@ -1509,6 +1538,8 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 emit8(jit.buf, jit.size, 0xe8);
                 selfCallPatches.push_back(jit.size);
                 emit32(jit.buf, jit.size, 0);
+                if (emitStepChecks)
+                    emitErrorCheck(jit.buf, jit.size, errorExitPatches);
                 // result in rax → R[A]
                 uint8_t st1[] = { 0x48, 0x89, 0x83 };
                 emit(jit.buf, jit.size, st1, 3);
@@ -1781,7 +1812,7 @@ done_compile:
         emit(jit.buf, jit.size, jnz, 2);
         uint8_t fullEpi[] = { 0x48, 0x83, 0xc4, 0x08, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5b, 0xc3 };
         emit(jit.buf, jit.size, fullEpi, sizeof(fullEpi));
-        uint8_t lightEpi[] = { 0x5b, 0xc3 };
+        uint8_t lightEpi[] = { 0x48, 0x83, 0xc4, 0x08, 0x41, 0x5e, 0x5b, 0xc3 };
         emit(jit.buf, jit.size, lightEpi, sizeof(lightEpi));
     }
     for (size_t p : errorExitPatches) {

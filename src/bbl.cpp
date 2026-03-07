@@ -2651,14 +2651,7 @@ void BBL::addNet(BblState& bbl) {
     });
 }
 
-void BBL::addStdLib(BblState& bbl) {
-    BBL::addPrint(bbl);
-    BBL::addMath(bbl);
-    BBL::addFileIo(bbl);
-    BBL::addOs(bbl);
-    BBL::addNet(bbl);
-    BBL::addChildStates(bbl, false);
-
+void BBL::addCore(BblState& bbl) {
     bbl.defn("compress", [](BblState* b) -> int {
         BblBinary* bin = b->getBinaryArg(0);
         auto out = BBL::lz4Compress(bin->data.data(), bin->data.size());
@@ -2855,6 +2848,78 @@ void BBL::addStdLib(BblState& bbl) {
         b->pushString(json); free(json); yyjson_mut_doc_free(doc);
         return 1;
     });
+}
+
+static void addSandbox(BblState& bbl) {
+    bbl.defn("sandbox", [](BblState* b) -> int {
+        const char* code = b->getStringArg(0);
+        BblTable* opts = (b->argCount() > 1 && b->getArg(1).type() == BBL::Type::Table)
+            ? b->getArg(1).tableVal() : nullptr;
+
+        BblState child;
+        BBL::addMath(child);
+        BBL::addCore(child);
+
+        if (opts) {
+            auto stepsVal = opts->get(BblValue::makeString(b->intern("steps")));
+            if (stepsVal && stepsVal->type() == BBL::Type::Int)
+                child.maxSteps = static_cast<size_t>(stepsVal->intVal());
+
+            auto allowVal = opts->get(BblValue::makeString(b->intern("allow")));
+            if (allowVal && allowVal->type() == BBL::Type::Table) {
+                BblTable* allow = allowVal->tableVal();
+                auto has = [&](const char* name) {
+                    auto v = allow->get(BblValue::makeString(b->intern(name)));
+                    return v && v->type() == BBL::Type::Bool && v->boolVal();
+                };
+                if (has("print")) BBL::addPrint(child);
+                if (has("file"))  BBL::addFileIo(child);
+                if (has("os"))    BBL::addOs(child);
+                if (has("net"))   BBL::addNet(child);
+                if (has("state")) BBL::addChildStates(child);
+                if (has("all")) {
+                    BBL::addPrint(child);
+                    BBL::addFileIo(child);
+                    BBL::addOs(child);
+                    BBL::addNet(child);
+                    BBL::addChildStates(child);
+                }
+            }
+        }
+
+        try {
+            BblValue result = child.execExpr(code);
+            switch (result.type()) {
+            case BBL::Type::Int:
+            case BBL::Type::Float:
+            case BBL::Type::Bool:
+            case BBL::Type::Null:
+                b->returnValue = result;
+                break;
+            case BBL::Type::String:
+                b->returnValue = BblValue::makeString(b->intern(result.stringVal()->data));
+                break;
+            default:
+                b->returnValue = BblValue::makeNull();
+                break;
+            }
+        } catch (...) {
+            b->returnValue = BblValue::makeNull();
+        }
+        b->hasReturn = true;
+        return 1;
+    });
+}
+
+void BBL::addStdLib(BblState& bbl) {
+    BBL::addPrint(bbl);
+    BBL::addMath(bbl);
+    BBL::addCore(bbl);
+    BBL::addFileIo(bbl);
+    BBL::addOs(bbl);
+    BBL::addNet(bbl);
+    BBL::addChildStates(bbl, false);
+    addSandbox(bbl);
 }
 
 // ---------- Child States ----------

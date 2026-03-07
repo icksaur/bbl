@@ -336,6 +336,38 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
         }
     }
 
+    // (defn name (args) body) → compile as (= name (fn (args) body))
+    if (op == "defn") {
+        if (node.children.size() < 4) throw BBL::Error{"'defn' requires name, params, and body"};
+        auto& target = node.children[1];
+        if (target.type != NodeType::Symbol) throw BBL::Error{"'defn' name must be a symbol"};
+        uint32_t symId = state.resolveSymbol(target.stringVal);
+
+        AstNode fnNode;
+        fnNode.type = NodeType::List;
+        fnNode.line = node.line;
+        AstNode fnSym; fnSym.type = NodeType::Symbol; fnSym.stringVal = "fn"; fnSym.line = node.line;
+        fnNode.children.push_back(std::move(fnSym));
+        for (size_t i = 2; i < node.children.size(); i++)
+            fnNode.children.push_back(node.children[i]);
+
+        int localReg = cs.resolveLocal(symId);
+        if (localReg == -1) {
+            if (cs.scopeDepth > 0 || cs.enclosing) {
+                uint8_t reg = cs.allocReg();
+                cs.localRegs[symId] = reg;
+                compileFn(state, cs, fnNode, target.stringVal, reg);
+                return reg;
+            }
+            compileFn(state, cs, fnNode, target.stringVal, dest);
+            uint16_t kidx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeInt(static_cast<int64_t>(symId))));
+            cs.chunk.emitABx(OP_SETGLOBAL, dest, kidx, node.line);
+            return dest;
+        }
+        compileFn(state, cs, fnNode, target.stringVal, static_cast<uint8_t>(localReg));
+        return static_cast<uint8_t>(localReg);
+    }
+
     // Control flow
     if (op == "if") {
         if (node.children.size() < 3) throw BBL::Error{"'if' requires condition and body"};
