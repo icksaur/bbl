@@ -2306,6 +2306,35 @@ void BBL::addOs(BblState& bbl) {
     bbl.defn("glob", bblOs_glob);
     bbl.defn("spawn", bblOs_spawn);
     bbl.defn("spawn-detached", bblOs_spawnDetached);
+
+    bbl.defn("exists", [](BblState* b) -> int {
+        b->pushBool(std::filesystem::exists(b->getStringArg(0)));
+        return 1;
+    });
+    bbl.defn("path-join", [](BblState* b) -> int {
+        namespace fs = std::filesystem;
+        fs::path result(b->getStringArg(0));
+        for (int i = 1; i < b->argCount(); i++)
+            result /= b->getStringArg(i);
+        b->pushString(result.string().c_str());
+        return 1;
+    });
+    bbl.defn("path-dir", [](BblState* b) -> int {
+        b->pushString(std::filesystem::path(b->getStringArg(0)).parent_path().string().c_str());
+        return 1;
+    });
+    bbl.defn("path-base", [](BblState* b) -> int {
+        b->pushString(std::filesystem::path(b->getStringArg(0)).filename().string().c_str());
+        return 1;
+    });
+    bbl.defn("path-ext", [](BblState* b) -> int {
+        b->pushString(std::filesystem::path(b->getStringArg(0)).extension().string().c_str());
+        return 1;
+    });
+    bbl.defn("path-abs", [](BblState* b) -> int {
+        b->pushString(std::filesystem::absolute(b->getStringArg(0)).string().c_str());
+        return 1;
+    });
 }
 
 std::vector<uint8_t> BBL::lz4Compress(const uint8_t* data, size_t size) {

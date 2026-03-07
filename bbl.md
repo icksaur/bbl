@@ -826,6 +826,17 @@ facilities for general-purpose shell scripting.
 | `(tmp-name)`                   | Create temp file, return its path (string)   |
 | `(stat path)`                 | File metadata table (`size`, `mtime`, `is-dir`, `is-file`), null if missing |
 | `(glob pattern)`              | Expand shell glob, returns table with 1-based int keys |
+| `(exists path)`               | True if file or directory exists             |
+
+#### Path Operations
+
+| Function                      | Description                                  |
+|-------------------------------|----------------------------------------------|
+| `(path-join parts...)`        | Join path segments: `(path-join "dir" "file.txt")` → `"dir/file.txt"` |
+| `(path-dir path)`             | Parent directory: `(path-dir "/foo/bar.txt")` → `"/foo"` |
+| `(path-base path)`            | Filename: `(path-base "/foo/bar.txt")` → `"bar.txt"` |
+| `(path-ext path)`             | Extension: `(path-ext "scene.bbl")` → `".bbl"` |
+| `(path-abs path)`             | Resolve to absolute path                     |
 
 #### Process
 

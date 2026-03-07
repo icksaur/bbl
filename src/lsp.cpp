@@ -180,6 +180,7 @@ static const char* BUILTIN_FUNCS[] = {
     "get-env", "set-env", "clock", "time", "sleep", "exit",
     "get-cwd", "chdir", "mkdir", "remove", "rename", "execute",
     "glob", "spawn", "compress", "decompress", "exec-binary",
+    "exists", "path-join", "path-dir", "path-base", "path-ext", "path-abs",
     nullptr
 };
 
@@ -443,6 +444,12 @@ static std::string handleHover(int id, yyjson_val* params) {
         {"bnot", "`(bnot a)` — bitwise NOT"},
         {"shl", "`(shl a n)` — shift left by n bits"},
         {"shr", "`(shr a n)` — shift right by n bits"},
+        {"exists", "`(exists path)` — true if file or directory exists"},
+        {"path-join", "`(path-join parts...)` — join path segments with separator"},
+        {"path-dir", "`(path-dir path)` — parent directory of path"},
+        {"path-base", "`(path-base path)` — filename component of path"},
+        {"path-ext", "`(path-ext path)` — file extension including dot"},
+        {"path-abs", "`(path-abs path)` — resolve to absolute path"},
     };
 
     yyjson_mut_val* result;
