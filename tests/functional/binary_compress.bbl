@@ -1,0 +1,5 @@
+// Round-trip: create binary, compress, decompress, verify
+(= raw (binary (vector int 42 99 -1)))
+(= compressed (compress raw))
+(= restored (decompress compressed))
+(print (restored:length) " " (restored:at 0))

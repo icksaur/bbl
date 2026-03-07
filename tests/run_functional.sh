@@ -134,6 +134,32 @@ check_worker() {
 check_worker worker_echo "hello"
 check_worker worker_roundtrip "150"
 
+# Phase 8: Binary data in execfile
+BINARY_DIR="/tmp/bbl_func_binary"
+mkdir -p "$BINARY_DIR"
+python3 -c "
+data = b'TESTDATA'
+with open('$BINARY_DIR/assets.bbl', 'wb') as f:
+    f.write(b'(table \"payload\" 0b%d:' % len(data))
+    f.write(data)
+    f.write(b' \"tag\" \"v1\")')
+"
+check_binary() {
+    local name="$1" expected="$2" actual
+    actual=$(timeout 5 "$BBL" "$DIR/${name}.bbl" 2>/dev/null)
+    if [ "$actual" = "$expected" ]; then
+        echo "  PASS  $name"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL  $name"
+        echo "    expected: '$expected'"
+        echo "    got:      '$actual'"
+        FAIL=$((FAIL + 1))
+    fi
+}
+check_binary binary_execfile "v1 8 84"
+check_binary binary_compress "24 42"
+
 echo ""
 echo "Passed: $PASS  Failed: $FAIL"
 [ "$FAIL" -eq 0 ]
