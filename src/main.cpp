@@ -157,21 +157,25 @@ int main(int argc, char* argv[]) {
         if (strcmp(argv[i], "--compress") == 0) {
             std::string source((std::istreambuf_iterator<char>(std::cin)),
                                std::istreambuf_iterator<char>());
-            BblLexer lexer(source.c_str(), source.size());
-            int prevEnd = 0;
-            Token tok = lexer.nextToken();
-            while (tok.type != TokenType::Eof) {
-                if (tok.type == TokenType::Binary && !tok.isCompressed && tok.binarySource) {
-                    fwrite(source.c_str() + prevEnd, 1, tok.sourceStart - prevEnd, stdout);
-                    auto comp = BBL::lz4Compress(
-                        reinterpret_cast<const uint8_t*>(tok.binarySource), tok.binarySize);
-                    fprintf(stdout, "0z%zu:", comp.size());
-                    fwrite(comp.data(), 1, comp.size(), stdout);
-                    prevEnd = tok.sourceEnd;
+            try {
+                BblLexer lexer(source.c_str(), source.size());
+                int prevEnd = 0;
+                Token tok = lexer.nextToken();
+                while (tok.type != TokenType::Eof) {
+                    if (tok.type == TokenType::Binary && !tok.isCompressed && tok.binarySource) {
+                        fwrite(source.c_str() + prevEnd, 1, tok.sourceStart - prevEnd, stdout);
+                        auto comp = BBL::lz4Compress(
+                            reinterpret_cast<const uint8_t*>(tok.binarySource), tok.binarySize);
+                        fprintf(stdout, "0z%zu:", comp.size());
+                        fwrite(comp.data(), 1, comp.size(), stdout);
+                        prevEnd = tok.sourceEnd;
+                    }
+                    tok = lexer.nextToken();
                 }
-                tok = lexer.nextToken();
+                fwrite(source.c_str() + prevEnd, 1, source.size() - prevEnd, stdout);
+            } catch (...) {
+                fwrite(source.c_str(), 1, source.size(), stdout);
             }
-            fwrite(source.c_str() + prevEnd, 1, source.size() - prevEnd, stdout);
             return 0;
         }
     }
