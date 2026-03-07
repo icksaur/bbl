@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <random>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -592,6 +593,7 @@ struct BblState {
     size_t stepCount = 0;
     BblFn* currentFn = nullptr;
     std::string currentFile;
+    std::mt19937_64 rng{std::random_device{}()};
     std::string scriptDir;
     bool allowOpenFilesystem = false;
     size_t execDepth = 0;

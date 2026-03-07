@@ -1,4 +1,5 @@
 #include "bbl.h"
+#include <yyjson.h>
 #include <sys/mman.h>
 #include <algorithm>
 #include <cerrno>
@@ -2404,6 +2405,165 @@ void BBL::addStdLib(BblState& bbl) {
         BblValue result = b->execExpr(source);
         b->returnValue = result;
         b->hasReturn = true;
+        return 1;
+    });
+
+    // --- Random ---
+    bbl.defn("random", [](BblState* b) -> int {
+        std::uniform_real_distribution<double> dist(0.0, 1.0);
+        b->pushFloat(dist(b->rng));
+        return 1;
+    });
+    bbl.defn("random-int", [](BblState* b) -> int {
+        if (b->argCount() == 1) {
+            int64_t max = b->getIntArg(0);
+            if (max <= 0) throw BBL::Error{"random-int: max must be positive"};
+            std::uniform_int_distribution<int64_t> dist(0, max - 1);
+            b->pushInt(dist(b->rng));
+        } else {
+            int64_t lo = b->getIntArg(0), hi = b->getIntArg(1);
+            if (lo > hi) throw BBL::Error{"random-int: min > max"};
+            std::uniform_int_distribution<int64_t> dist(lo, hi);
+            b->pushInt(dist(b->rng));
+        }
+        return 1;
+    });
+    bbl.defn("random-seed", [](BblState* b) -> int {
+        b->rng.seed(static_cast<uint64_t>(b->getIntArg(0)));
+        return 0;
+    });
+
+    // --- Sort ---
+    bbl.defn("sort", [](BblState* b) -> int {
+        BblValue arg = b->getArg(0);
+        bool hasComp = b->argCount() > 1 && b->getArg(1).type() == BBL::Type::Fn;
+        auto defaultLess = [](const BblValue& a, const BblValue& bv) -> bool {
+            if (a.type() == bv.type()) {
+                if (a.type() == BBL::Type::Int) return a.intVal() < bv.intVal();
+                if (a.type() == BBL::Type::Float) return a.floatVal() < bv.floatVal();
+                if (a.type() == BBL::Type::String) return a.stringVal()->data < bv.stringVal()->data;
+            }
+            return static_cast<int>(a.type()) < static_cast<int>(bv.type());
+        };
+        auto makeCompare = [&](BblClosure* cl) {
+            if (!cl->jitCache) cl->jitCache = new JitCode(jitCompile(*b, cl->chunk, cl));
+            auto fn = reinterpret_cast<BblValue(*)(BblValue*, BblState*, Chunk*)>(cl->jitCache->buf);
+            return [fn, cl, b](const BblValue& a, const BblValue& bv) -> bool {
+                BblValue regs[4] = { BblValue::makeClosure(cl), a, bv, BblValue::makeNull() };
+                BblValue r = fn(regs, b, &cl->chunk);
+                return r.type() == BBL::Type::Bool ? r.boolVal() :
+                       r.type() == BBL::Type::Int ? r.intVal() != 0 : false;
+            };
+        };
+        if (arg.type() == BBL::Type::Vector) {
+            BblVec* vec = arg.vectorVal();
+            size_t n = vec->length();
+            std::vector<BblValue> elems(n);
+            for (size_t i = 0; i < n; i++) elems[i] = b->readVecElem(vec, i);
+            if (hasComp) std::stable_sort(elems.begin(), elems.end(), makeCompare(b->getArg(1).closureVal()));
+            else std::stable_sort(elems.begin(), elems.end(), defaultLess);
+            for (size_t i = 0; i < n; i++) b->writeVecElem(vec, i, elems[i]);
+        } else if (arg.type() == BBL::Type::Table) {
+            BblTable* tbl = arg.tableVal();
+            int64_t n = tbl->nextIntKey;
+            if (static_cast<uint32_t>(n) != tbl->count) throw BBL::Error{"sort: table must have sequential integer keys"};
+            std::vector<BblValue> elems(n);
+            for (int64_t i = 0; i < n; i++) elems[i] = tbl->get(BblValue::makeInt(i)).value_or(BblValue::makeNull());
+            if (hasComp) std::stable_sort(elems.begin(), elems.end(), makeCompare(b->getArg(1).closureVal()));
+            else std::stable_sort(elems.begin(), elems.end(), defaultLess);
+            for (int64_t i = 0; i < n; i++) tbl->set(BblValue::makeInt(i), elems[i]);
+        } else throw BBL::Error{"sort: argument must be vector or table"};
+        return 0;
+    });
+
+    // --- JSON ---
+    bbl.defn("json-parse", [](BblState* b) -> int {
+        const char* str = b->getStringArg(0);
+        size_t len = strlen(str);
+        if (len > 64 * 1024 * 1024) throw BBL::Error{"json-parse: input exceeds 64MB"};
+        yyjson_doc* doc = yyjson_read(str, len, 0);
+        if (!doc) throw BBL::Error{"json-parse: invalid JSON"};
+        std::function<BblValue(yyjson_val*, int)> conv = [&](yyjson_val* v, int d) -> BblValue {
+            if (d > 128) throw BBL::Error{"json-parse: nesting too deep"};
+            if (yyjson_is_int(v)) return BblValue::makeInt(yyjson_get_sint(v));
+            if (yyjson_is_real(v)) return BblValue::makeFloat(yyjson_get_real(v));
+            if (yyjson_is_str(v)) return BblValue::makeString(b->intern(yyjson_get_str(v)));
+            if (yyjson_is_bool(v)) return BblValue::makeBool(yyjson_get_bool(v));
+            if (yyjson_is_null(v)) return BblValue::makeNull();
+            if (yyjson_is_arr(v)) {
+                BblTable* t = b->allocTable(); int64_t i = 0;
+                yyjson_arr_iter it; yyjson_arr_iter_init(v, &it); yyjson_val* e;
+                while ((e = yyjson_arr_iter_next(&it))) t->set(BblValue::makeInt(i++), conv(e, d+1));
+                return BblValue::makeTable(t);
+            }
+            if (yyjson_is_obj(v)) {
+                BblTable* t = b->allocTable();
+                yyjson_obj_iter it; yyjson_obj_iter_init(v, &it); yyjson_val* k;
+                while ((k = yyjson_obj_iter_next(&it)))
+                    t->set(BblValue::makeString(b->intern(yyjson_get_str(k))), conv(yyjson_obj_iter_get_val(k), d+1));
+                return BblValue::makeTable(t);
+            }
+            return BblValue::makeNull();
+        };
+        BblValue result = conv(yyjson_doc_get_root(doc), 0);
+        yyjson_doc_free(doc);
+        b->returnValue = result; b->hasReturn = true;
+        return 1;
+    });
+    bbl.defn("json-encode", [](BblState* b) -> int {
+        yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
+        std::function<yyjson_mut_val*(BblValue, int)> conv = [&](BblValue val, int d) -> yyjson_mut_val* {
+            if (d > 128) throw BBL::Error{"json-encode: nesting too deep"};
+            switch (val.type()) {
+            case BBL::Type::Int: return yyjson_mut_sint(doc, val.intVal());
+            case BBL::Type::Float: {
+                double f = val.floatVal();
+                if (f != f || f == 1.0/0.0 || f == -1.0/0.0) throw BBL::Error{"json-encode: NaN/Infinity"};
+                return yyjson_mut_real(doc, f);
+            }
+            case BBL::Type::String: return yyjson_mut_strcpy(doc, val.stringVal()->data.c_str());
+            case BBL::Type::Bool: return yyjson_mut_bool(doc, val.boolVal());
+            case BBL::Type::Null: return yyjson_mut_null(doc);
+            case BBL::Type::Table: {
+                BblTable* tbl = val.tableVal();
+                if (tbl->nextIntKey > 0 && static_cast<uint32_t>(tbl->nextIntKey) == tbl->count) {
+                    yyjson_mut_val* arr = yyjson_mut_arr(doc);
+                    for (int64_t i = 0; i < tbl->nextIntKey; i++)
+                        yyjson_mut_arr_add_val(arr, conv(tbl->get(BblValue::makeInt(i)).value_or(BblValue::makeNull()), d+1));
+                    return arr;
+                }
+                yyjson_mut_val* obj = yyjson_mut_obj(doc);
+                if (tbl->order) for (auto& k : *tbl->order) {
+                    auto v = tbl->get(k).value_or(BblValue::makeNull());
+                    std::string ks = k.type() == BBL::Type::String ? k.stringVal()->data : std::to_string(k.intVal());
+                    yyjson_mut_val* jk = yyjson_mut_strcpy(doc, ks.c_str());
+                    yyjson_mut_val* jv = conv(v, d+1);
+                    yyjson_mut_obj_add(obj, jk, jv);
+                }
+                return obj;
+            }
+            case BBL::Type::Struct: {
+                yyjson_mut_val* obj = yyjson_mut_obj(doc);
+                for (auto& fd : val.structVal()->desc->fields) {
+                    yyjson_mut_val* jk = yyjson_mut_strcpy(doc, fd.name.c_str());
+                    yyjson_mut_val* jv = conv(b->readField(val.structVal(), fd), d+1);
+                    yyjson_mut_obj_add(obj, jk, jv);
+                }
+                return obj;
+            }
+            case BBL::Type::Vector: {
+                yyjson_mut_val* arr = yyjson_mut_arr(doc);
+                BblVec* vec = val.vectorVal();
+                for (size_t i = 0; i < vec->length(); i++) yyjson_mut_arr_add_val(arr, conv(b->readVecElem(vec, i), d+1));
+                return arr;
+            }
+            default: throw BBL::Error{"json-encode: unsupported type"};
+            }
+        };
+        yyjson_mut_doc_set_root(doc, conv(b->getArg(0), 0));
+        size_t len = 0; char* json = yyjson_mut_write(doc, 0, &len);
+        if (!json) { yyjson_mut_doc_free(doc); throw BBL::Error{"json-encode: serialization failed"}; }
+        b->pushString(json); free(json); yyjson_mut_doc_free(doc);
         return 1;
     });
 }
