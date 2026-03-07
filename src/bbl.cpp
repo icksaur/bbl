@@ -1,6 +1,6 @@
 #include "bbl.h"
 #include <yyjson.h>
-#include <sys/mman.h>
+#include "compat.h"
 #include <algorithm>
 #include <cerrno>
 #include <fstream>
@@ -13,11 +13,7 @@
 #include <filesystem>
 #include <ctime>
 #include <cstdlib>
-#include <unistd.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
-#include <signal.h>
-#include <glob.h>
 #include "compiler.h"
 #include "vm.h"
 #include "jit.h"
@@ -602,7 +598,7 @@ BblState::~BblState() {
             }
             case GcType::Closure: {
                 auto* c = static_cast<BblClosure*>(obj);
-                if (c->chunk.traceCode) munmap(c->chunk.traceCode, c->chunk.traceCapacity);
+                if (c->chunk.traceCode) jitFree(c->chunk.traceCode, c->chunk.traceCapacity);
                 delete c;
                 break;
             }
@@ -825,7 +821,7 @@ void BblState::gc() {
                     break;
                 case GcType::Closure: {
                     auto* c = static_cast<BblClosure*>(dead);
-                    if (c->chunk.traceCode) munmap(c->chunk.traceCode, c->chunk.traceCapacity);
+                    if (c->chunk.traceCode) jitFree(c->chunk.traceCode, c->chunk.traceCapacity);
                     delete c;
                     break;
                 }
@@ -2188,16 +2184,31 @@ static int bblOs_stat(BblState* bbl) {
 }
 
 static int bblOs_glob(BblState* bbl) {
+    BblTable* tbl = bbl->allocTable();
+#ifdef _WIN32
+    namespace fs = std::filesystem;
+    std::string pattern = bbl->getStringArg(0);
+    fs::path dir = fs::path(pattern).parent_path();
+    std::string fname = fs::path(pattern).filename().string();
+    if (dir.empty()) dir = ".";
+    int64_t idx = 1;
+    try {
+        for (auto& entry : fs::directory_iterator(dir)) {
+            std::string name = entry.path().filename().string();
+            if (name.find('*') == std::string::npos && fname.find('*') != std::string::npos) {
+                tbl->set(BblValue::makeInt(idx++), BblValue::makeString(bbl->intern(entry.path().string())));
+            }
+        }
+    } catch (...) {}
+#else
     glob_t g;
     int ret = ::glob(bbl->getStringArg(0), GLOB_NOSORT, nullptr, &g);
-    BblTable* tbl = bbl->allocTable();
     if (ret == 0) {
-        for (size_t i = 0; i < g.gl_pathc; i++) {
-            tbl->set(BblValue::makeInt((int64_t)(i + 1)),
-                     BblValue::makeString(bbl->intern(g.gl_pathv[i])));
-        }
+        for (size_t i = 0; i < g.gl_pathc; i++)
+            tbl->set(BblValue::makeInt((int64_t)(i + 1)), BblValue::makeString(bbl->intern(g.gl_pathv[i])));
     }
     if (ret != GLOB_NOMATCH) globfree(&g);
+#endif
     bbl->pushTable(tbl);
     return 0;
 }
@@ -2254,25 +2265,33 @@ static int bblProcess_wait(BblState* bbl) {
 
 static int bblOs_spawnDetached(BblState* bbl) {
     const char* cmd = bbl->getStringArg(0);
+#ifdef _WIN32
+    STARTUPINFOA si = {}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+    char cmdBuf[4096];
+    snprintf(cmdBuf, sizeof(cmdBuf), "cmd.exe /c %s", cmd);
+    if (!CreateProcessA(nullptr, cmdBuf, nullptr, nullptr, FALSE,
+                        DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &si, &pi))
+        throw BBL::Error{"spawn-detached: CreateProcess failed"};
+    bbl->pushInt(static_cast<int64_t>(pi.dwProcessId));
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+#else
     pid_t pid = fork();
     if (pid < 0) throw BBL::Error{"spawn-detached: fork failed"};
     if (pid == 0) {
-        // Double-fork: first child forks again then exits.
-        // Grandchild is reparented to init, preventing zombies.
         pid_t pid2 = fork();
         if (pid2 < 0) _exit(127);
-        if (pid2 > 0) _exit(0); // first child exits immediately
-        // Grandchild: detach session and redirect streams
+        if (pid2 > 0) _exit(0);
         setsid();
-        if (!freopen("/dev/null", "r", stdin)) _exit(127);
-        if (!freopen("/dev/null", "w", stdout)) _exit(127);
-        if (!freopen("/dev/null", "w", stderr)) _exit(127);
+        if (!freopen(devNull(), "r", stdin)) _exit(127);
+        if (!freopen(devNull(), "w", stdout)) _exit(127);
+        if (!freopen(devNull(), "w", stderr)) _exit(127);
         execl("/bin/sh", "sh", "-c", cmd, nullptr);
         _exit(127);
     }
-    // Reap first child immediately (it exits right away)
     waitpid(pid, nullptr, 0);
-    bbl->pushInt((int64_t)pid);
+    bbl->pushInt(static_cast<int64_t>(pid));
+#endif
     return 0;
 }
 

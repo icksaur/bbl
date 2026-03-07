@@ -5,7 +5,7 @@
 #include <cstring>
 #include <set>
 #include <vector>
-#include <sys/mman.h>
+#include "compat.h"
 
 // BblValue layout: NaN-boxed uint64_t, sizeof=8
 // Register R[i] at byte offset i*8 from rbx
@@ -1195,8 +1195,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     JitCode jit;
     jit.capacity = chunk.code.size() * 96 + 1024;
     jit.buf = static_cast<uint8_t*>(
-        mmap(nullptr, jit.capacity, PROT_READ | PROT_WRITE,
-             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+        jitAlloc(jit.capacity));
     jit.size = 0;
 
     // Full prologue: save callee-saved regs, set up rbx/r12/r13/r14
@@ -1770,7 +1769,7 @@ done_compile:
         patchRel32(jit.buf, p, errorExit);
     }
 
-    mprotect(jit.buf, jit.capacity, PROT_READ | PROT_EXEC);
+    jitProtect(jit.buf, jit.capacity);
     return jit;
 }
 
@@ -1798,7 +1797,7 @@ BblValue jitExecute(BblState& state, Chunk& chunk) {
 
 void jitFree(JitCode& jit) {
     if (jit.buf) {
-        munmap(jit.buf, jit.capacity);
+        jitFree(jit.buf, jit.capacity);
         jit.buf = nullptr;
     }
 }
@@ -1906,8 +1905,7 @@ JitCode compileTrace(BblState& state, Trace& trace) {
     JitCode jit;
     jit.capacity = trace.entries.size() * 64 + 512;
     jit.buf = static_cast<uint8_t*>(
-        mmap(nullptr, jit.capacity, PROT_READ | PROT_WRITE,
-             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+        jitAlloc(jit.capacity));
     jit.size = 0;
 
     emitPrologue(jit.buf, jit.size);
@@ -2040,7 +2038,7 @@ JitCode compileTrace(BblState& state, Trace& trace) {
         patchRel32(jit.buf, p, exitLabel);
     }
 
-    mprotect(jit.buf, jit.capacity, PROT_READ | PROT_EXEC);
+    jitProtect(jit.buf, jit.capacity);
     return jit;
 }
 
