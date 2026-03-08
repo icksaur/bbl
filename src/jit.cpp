@@ -48,6 +48,8 @@ extern "C" {
     void jitEnvGet(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg);
     void jitEnvSet(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg);
     int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loopPc);
+    void jitTableGet(BblValue* regs, BblState* state, uint8_t base, uint8_t argc);
+    void jitTableSet(BblValue* regs, BblState* state, uint8_t base, uint8_t argc);
 }
 
 static thread_local bool g_jitError = false;
@@ -751,6 +753,25 @@ int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loo
         }
     }
     return 1;
+}
+
+void jitTableGet(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
+    if (regs[base].type() != BBL::Type::Table) {
+        jitMcall(regs, state, base, argc, state->m.get);
+        return;
+    }
+    BblTable* tbl = regs[base].tableVal();
+    regs[base] = tbl->get(regs[base + 1]).value_or(
+        argc > 1 ? regs[base + 2] : BblValue::makeNull());
+}
+
+void jitTableSet(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
+    if (regs[base].type() != BBL::Type::Table) {
+        jitMcall(regs, state, base, argc, state->m.set);
+        return;
+    }
+    regs[base].tableVal()->set(regs[base + 1], regs[base + 2]);
+    regs[base] = BblValue::makeNull();
 }
 
 static std::string jitValToStr(BblState& state, const BblValue& v) {
@@ -1836,25 +1857,22 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
 
         case OP_MCALL: {
-            // Pass: regs(rdi=rbx), state(rsi=r12), base(edx=A), argc(ecx=B), methodStr(r8=pointer)
             BblString* methodStr = chunk.constants[C].stringVal();
-            // mov rdi, rbx
-            uint8_t a1[] = { 0x48, 0x89, 0xdf }; emit(jit.buf, jit.size, a1, 3);
-            // mov rsi, r12
-            uint8_t a2[] = { 0x4c, 0x89, 0xe6 }; emit(jit.buf, jit.size, a2, 3);
-            // mov edx, A
-            uint8_t a3[] = { 0xba }; emit(jit.buf, jit.size, a3, 1); emit32(jit.buf, jit.size, A);
-            // mov ecx, B
-            uint8_t a4[] = { 0xb9 }; emit(jit.buf, jit.size, a4, 1); emit32(jit.buf, jit.size, B);
-            // movabs r8, methodStr
-            uint8_t movr8[] = { 0x49, 0xb8 }; emit(jit.buf, jit.size, movr8, 2);
-            emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>(methodStr));
-            // movabs rax, jitMcall
-            uint8_t movabs[] = { 0x48, 0xb8 }; emit(jit.buf, jit.size, movabs, 2);
-            emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>((void*)jitMcall));
-            // call rax
-            uint8_t call[] = { 0xff, 0xd0 }; emit(jit.buf, jit.size, call, 2);
-            emitErrorCheck(jit.buf, jit.size, errorExitPatches);
+            if (methodStr == state.m.get || methodStr == state.m.set) {
+                void* fn = (methodStr == state.m.get) ? (void*)jitTableGet : (void*)jitTableSet;
+                emitCallHelper2(jit.buf, jit.size, fn, A, B, &errorExitPatches);
+            } else {
+                uint8_t a1[] = { 0x48, 0x89, 0xdf }; emit(jit.buf, jit.size, a1, 3);
+                uint8_t a2[] = { 0x4c, 0x89, 0xe6 }; emit(jit.buf, jit.size, a2, 3);
+                uint8_t a3[] = { 0xba }; emit(jit.buf, jit.size, a3, 1); emit32(jit.buf, jit.size, A);
+                uint8_t a4[] = { 0xb9 }; emit(jit.buf, jit.size, a4, 1); emit32(jit.buf, jit.size, B);
+                uint8_t movr8[] = { 0x49, 0xb8 }; emit(jit.buf, jit.size, movr8, 2);
+                emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>(methodStr));
+                uint8_t movabs[] = { 0x48, 0xb8 }; emit(jit.buf, jit.size, movabs, 2);
+                emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>((void*)jitMcall));
+                uint8_t call[] = { 0xff, 0xd0 }; emit(jit.buf, jit.size, call, 2);
+                emitErrorCheck(jit.buf, jit.size, errorExitPatches);
+            }
             break;
         }
 
