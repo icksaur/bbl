@@ -1,0 +1,11 @@
+// Allocation sinking: table escapes via function call.
+// The called function observes the table — it must be materialized.
+(= box (table "val" null))
+(= grab (fn (t) (= box.val t)))
+(= i 0)
+(loop (< i 50)
+  (= t (table "v" i))
+  (if (== i 25) (grab t))
+  (= i (+ i 1)))
+(= captured box.val)
+(print captured.v)

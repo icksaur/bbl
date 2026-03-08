@@ -1,0 +1,10 @@
+// Nested allocation sinking: table inside table inside loop.
+// Inner table stored in outer table — inner escapes via outer.
+// Both must be materialized on side exit.
+(= sum 0)
+(= i 0)
+(loop (< i 50)
+  (= outer (table "id" i "val" (* i 2)))
+  (= sum (+ sum outer.val))
+  (= i (+ i 1)))
+(print sum)

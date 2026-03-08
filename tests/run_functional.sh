@@ -161,6 +161,15 @@ check_binary binary_exec-file "v1 8 84"
 check_binary binary_compress "24 42"
 check_binary binary_typed "100 2.5 3 4 -999"
 
+check trace_sink_no_escape "1000000"
+check trace_sink_escape_global "99"
+check trace_sink_escape_call "26"
+check trace_side_exit_type "6812.5"
+check trace_side_exit_redefine "55"
+check trace_sink_side_exit "4970"
+check trace_sink_nested "2450"
+check trace_side_exit_branch "1770 3180"
+
 echo ""
 echo "Passed: $PASS  Failed: $FAIL"
 [ "$FAIL" -eq 0 ]

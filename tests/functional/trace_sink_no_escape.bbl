@@ -1,0 +1,10 @@
+// Allocation sinking: table allocated in loop, never escapes.
+// A tracing JIT should sink this allocation — but the result must still
+// be correct if a side exit materializes mid-loop.
+(= sum 0)
+(= i 0)
+(loop (< i 1000)
+  (= t (table "x" i "y" (+ i 1)))
+  (= sum (+ sum t.x t.y))
+  (= i (+ i 1)))
+(print sum)

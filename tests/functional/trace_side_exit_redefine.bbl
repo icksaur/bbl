@@ -1,0 +1,11 @@
+// Side exit: global redefinition during loop.
+// The function f is redefined after 5 calls. A tracing JIT that inlines
+// f must guard on f's identity and side-exit when it changes.
+(= f (fn (x) (+ x 1)))
+(= sum 0)
+(= i 0)
+(loop (< i 10)
+  (= sum (+ sum (f i)))
+  (if (== i 5) (= f (fn (x) (+ x 100))))
+  (= i (+ i 1)))
+(print sum)

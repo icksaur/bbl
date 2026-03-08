@@ -1,0 +1,9 @@
+// Allocation sinking: table escapes to a global mid-loop.
+// Cannot be sunk — the global must hold a valid table at all times
+// because a side exit could observe it.
+(= last null)
+(= i 0)
+(loop (< i 100)
+  (= last (table "idx" i))
+  (= i (+ i 1)))
+(print last.idx)
