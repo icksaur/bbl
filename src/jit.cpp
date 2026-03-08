@@ -77,13 +77,17 @@ static std::string jitValToStr(BblState& state, const BblValue& v);
 
 
 void jitGetGlobal(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg) {
+    if (symId < state->vm->globalsFlat.size()) {
+        BblValue& v = state->vm->globalsFlat[symId];
+        if (v.bits != 0) { regs[destReg] = v; return; }
+    }
     auto it = state->vm->globals.find(symId);
     if (it != state->vm->globals.end()) { regs[destReg] = it->second; return; }
     JIT_ERROR(state, "undefined variable");
 }
 
 void jitSetGlobal(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg) {
-    state->vm->globals[symId] = regs[srcReg];
+    state->vm->setGlobal(symId, regs[srcReg]);
 }
 
 void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
@@ -683,8 +687,8 @@ void jitEnvGet(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg)
             if (v) { regs[destReg] = *v; return; }
         }
     }
-    auto it = state->vm->globals.find(symId);
-    if (it != state->vm->globals.end()) { regs[destReg] = it->second; return; }
+    BblValue* gv = state->vm->getGlobal(symId);
+    if (gv) { regs[destReg] = *gv; return; }
     JIT_ERROR(state, "undefined variable");
 }
 
@@ -705,7 +709,7 @@ void jitEnvSet(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg) 
             return;
         }
     }
-    state->vm->globals[symId] = regs[srcReg];
+    state->vm->setGlobal(symId, regs[srcReg]);
 }
 
 int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loopPc) {
@@ -1570,9 +1574,43 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         case OP_LOOP: {
             if (emitStepChecks)
                 emitStepCheck(jit.buf, jit.size, stepCountOff, maxStepsOff, errorExitPatches);
-            size_t p = emitJmp(jit.buf, jit.size);
+
             int target = static_cast<int>(i) + 1 - sBx;
-            patchRel32(jit.buf, p, nativeOffsets[target]);
+            bool loopHasTable = false;
+            if (!emitStepChecks) {
+                for (int bi = target; bi < static_cast<int>(i); bi++) {
+                    if (decodeOP(chunk.code[bi]) == OP_TABLE) { loopHasTable = true; break; }
+                }
+            }
+
+            if (loopHasTable) {
+                uint8_t a1[] = { 0x48, 0x89, 0xdf };
+                emit(jit.buf, jit.size, a1, 3);
+                uint8_t a2[] = { 0x4c, 0x89, 0xe6 };
+                emit(jit.buf, jit.size, a2, 3);
+                uint8_t a3[] = { 0x4c, 0x89, 0xea };
+                emit(jit.buf, jit.size, a3, 3);
+                uint8_t a4[] = { 0xb9 };
+                emit(jit.buf, jit.size, a4, 1);
+                emit32(jit.buf, jit.size, static_cast<uint32_t>(i));
+                uint8_t movabs[] = { 0x48, 0xb8 };
+                emit(jit.buf, jit.size, movabs, 2);
+                emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>((void*)jitLoopTrace));
+                uint8_t call[] = { 0xff, 0xd0 };
+                emit(jit.buf, jit.size, call, 2);
+                uint8_t test[] = { 0x48, 0x85, 0xc0 };
+                emit(jit.buf, jit.size, test, 3);
+                uint8_t jnz[] = { 0x0f, 0x85 };
+                emit(jit.buf, jit.size, jnz, 2);
+                size_t skipPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                size_t p = emitJmp(jit.buf, jit.size);
+                patchRel32(jit.buf, p, nativeOffsets[target]);
+                patchRel32(jit.buf, skipPatch, jit.size);
+            } else {
+                size_t p = emitJmp(jit.buf, jit.size);
+                patchRel32(jit.buf, p, nativeOffsets[target]);
+            }
             break;
         }
 
@@ -1583,11 +1621,9 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         case OP_GETGLOBAL: {
             uint32_t symId = static_cast<uint32_t>(chunk.constants[Bx].intVal());
             if (self && state.vm) {
-                auto it = state.vm->globals.find(symId);
-                if (it != state.vm->globals.end() &&
-                    it->second.type() == BBL::Type::Fn &&
-                    it->second.isClosure() &&
-                    it->second.closureVal() == self) {
+                BblValue* gv = state.vm->getGlobal(symId);
+                if (gv && gv->type() == BBL::Type::Fn &&
+                    gv->isClosure() && gv->closureVal() == self) {
                     selfRefRegs.insert(A);
                     hasSelfCalls = true;
                     break;
@@ -1805,9 +1841,25 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         case OP_EXEC:
             emitCallHelper2(jit.buf, jit.size, (void*)jitExec, A, B, &errorExitPatches);
             break;
-        case OP_GETCAPTURE:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitGetCapture, A, B, &errorExitPatches);
+        case OP_GETCAPTURE: {
+            uint8_t load0[] = { 0x48, 0x8b, 0x03 };
+            emit(jit.buf, jit.size, load0, 3);
+            uint8_t movabs_mask[] = { 0x48, 0xb9 };
+            emit(jit.buf, jit.size, movabs_mask, 2);
+            emit64(jit.buf, jit.size, 0x0000FFFFFFFFFFFFULL);
+            uint8_t and_op[] = { 0x48, 0x21, 0xc8 };
+            emit(jit.buf, jit.size, and_op, 3);
+            uint8_t load_cap[] = { 0x48, 0x8b, 0x80 };
+            emit(jit.buf, jit.size, load_cap, 3);
+            emit32(jit.buf, jit.size, 168);
+            uint8_t load_elem[] = { 0x48, 0x8b, 0x80 };
+            emit(jit.buf, jit.size, load_elem, 3);
+            emit32(jit.buf, jit.size, B * VAL_SIZE);
+            uint8_t store[] = { 0x48, 0x89, 0x83 };
+            emit(jit.buf, jit.size, store, 3);
+            emit32(jit.buf, jit.size, A * VAL_SIZE);
             break;
+        }
         case OP_SETCAPTURE:
             emitCallHelper2(jit.buf, jit.size, (void*)jitSetCapture, A, B, &errorExitPatches);
             break;

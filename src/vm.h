@@ -37,6 +37,19 @@ struct VmState {
     std::vector<BblValue> stack;
     BblValue* stackTop = nullptr;
     std::unordered_map<uint32_t, BblValue> globals;
+    std::vector<BblValue> globalsFlat;
+
+    void setGlobal(uint32_t symId, BblValue val) {
+        globals[symId] = val;
+        if (symId >= globalsFlat.size()) globalsFlat.resize(symId + 1);
+        globalsFlat[symId] = val;
+    }
+    BblValue* getGlobal(uint32_t symId) {
+        if (symId < globalsFlat.size() && globalsFlat[symId].bits != 0)
+            return &globalsFlat[symId];
+        auto it = globals.find(symId);
+        return it != globals.end() ? &it->second : nullptr;
+    }
 
     struct ExHandler {
         int frameIdx;

@@ -224,7 +224,7 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
         }
         case OP_SETGLOBAL: {
             uint32_t symId = static_cast<uint32_t>(K(Bx).intVal());
-            state.vm->globals[symId] = R(A);
+            state.vm->setGlobal(symId, R(A));
             break;
         }
         case OP_ENVGET: {
@@ -255,7 +255,7 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                     break;
                 }
             }
-            state.vm->globals[symId] = R(A);
+            state.vm->setGlobal(symId, R(A));
             break;
         }
         case OP_GETCAPTURE:

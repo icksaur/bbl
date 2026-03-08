@@ -1129,24 +1129,24 @@ std::expected<BblBinary*, BBL::GetError> BblState::getBinary(const std::string& 
 // ---------- Setters ----------
 
 void BblState::setInt(const std::string& name, int64_t val) {
-    vm->globals[resolveSymbol(name)] = BblValue::makeInt(val);
+    vm->setGlobal(resolveSymbol(name), BblValue::makeInt(val));
 }
 
 void BblState::setFloat(const std::string& name, double val) {
-    vm->globals[resolveSymbol(name)] = BblValue::makeFloat(val);
+    vm->setGlobal(resolveSymbol(name), BblValue::makeFloat(val));
 }
 
 void BblState::setString(const std::string& name, const char* str) {
-    vm->globals[resolveSymbol(name)] = BblValue::makeString(intern(str));
+    vm->setGlobal(resolveSymbol(name), BblValue::makeString(intern(str)));
 }
 
 void BblState::set(const std::string& name, BblValue val) {
-    vm->globals[resolveSymbol(name)] = val;
+    vm->setGlobal(resolveSymbol(name), val);
 }
 
 void BblState::setBinary(const std::string& name, const uint8_t* ptr, size_t size) {
     std::vector<uint8_t> data(ptr, ptr + size);
-    vm->globals[resolveSymbol(name)] = BblValue::makeBinary(allocBinary(std::move(data)));
+    vm->setGlobal(resolveSymbol(name), BblValue::makeBinary(allocBinary(std::move(data))));
 }
 
 void BblState::pushUserData(const std::string& typeName, void* ptr) {
@@ -1157,7 +1157,7 @@ void BblState::pushUserData(const std::string& typeName, void* ptr) {
 // ---------- C function registration ----------
 
 void BblState::defn(const std::string& name, BblCFunction fn) {
-    vm->globals[resolveSymbol(name)] = BblValue::makeCFn(fn);
+    vm->setGlobal(resolveSymbol(name), BblValue::makeCFn(fn));
 }
 
 // ---------- C function args ----------
