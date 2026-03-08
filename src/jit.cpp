@@ -725,9 +725,6 @@ int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loo
         if (!trace.valid) { chunk->traceBlacklisted = true; return -1; }
 
         optimizeTrace(*state, trace);
-        for (size_t ti = 0; ti < trace.entries.size(); ti++) {
-            auto& e = trace.entries[ti];
-        }
         JitCode jit = compileTrace(*state, trace);
         if (!jit.buf) { chunk->traceBlacklisted = true; return -1; }
 
@@ -745,7 +742,7 @@ int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loo
 
     TraceResult result = executeTrace(traceJit, regs, state);
 
-    if (chunk->traceSunkAllocs) {
+    if (!result.completed && chunk->traceSunkAllocs) {
         for (auto& sunk : *chunk->traceSunkAllocs) {
             BblTable* tbl = state->allocTable();
             for (auto& f : sunk.fields)
