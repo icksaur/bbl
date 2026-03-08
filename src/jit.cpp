@@ -713,20 +713,20 @@ void jitEnvSet(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg) 
 }
 
 int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loopPc) {
-    if (chunk->traceBlacklisted) return 0;
-    if (state->maxSteps > 0) return 0;
+    if (chunk->traceBlacklisted) return -1;
+    if (state->maxSteps > 0) return -1;
 
     if (!chunk->traceCompiled) {
         chunk->hotCount++;
-        if (chunk->hotCount < 64) return 0;
+        if (chunk->hotCount < 64) return -1;
         chunk->hotCount = 0;
 
         Trace trace = recordTrace(*state, *chunk, loopPc, regs);
-        if (!trace.valid) { chunk->traceBlacklisted = true; return 0; }
+        if (!trace.valid) { chunk->traceBlacklisted = true; return -1; }
 
         optimizeTrace(*state, trace);
         JitCode jit = compileTrace(*state, trace);
-        if (!jit.buf) { chunk->traceBlacklisted = true; return 0; }
+        if (!jit.buf) { chunk->traceBlacklisted = true; return -1; }
 
         chunk->traceCode = jit.buf;
         chunk->traceCapacity = jit.capacity;
@@ -741,8 +741,6 @@ int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loo
     traceJit.capacity = chunk->traceCapacity;
     TraceResult result = executeTrace(traceJit, regs, state);
 
-    if (result.completed) return 1;
-
     if (chunk->traceSunkAllocs) {
         for (auto& sunk : *chunk->traceSunkAllocs) {
             BblTable* tbl = state->allocTable();
@@ -751,7 +749,7 @@ int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loo
             regs[sunk.destReg] = BblValue::makeTable(tbl);
         }
     }
-    return 0;
+    return 1;
 }
 
 static std::string jitValToStr(BblState& state, const BblValue& v) {
@@ -1583,7 +1581,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 }
             }
 
-            if (loopHasTable) {
+            if (false && loopHasTable) {
                 uint8_t a1[] = { 0x48, 0x89, 0xdf };
                 emit(jit.buf, jit.size, a1, 3);
                 uint8_t a2[] = { 0x4c, 0x89, 0xe6 };
@@ -1598,10 +1596,12 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>((void*)jitLoopTrace));
                 uint8_t call[] = { 0xff, 0xd0 };
                 emit(jit.buf, jit.size, call, 2);
-                uint8_t test[] = { 0x48, 0x85, 0xc0 };
-                emit(jit.buf, jit.size, test, 3);
-                uint8_t jnz[] = { 0x0f, 0x85 };
-                emit(jit.buf, jit.size, jnz, 2);
+                // Return: -1 = warmup (continue per-fn JIT loop),
+                // 1 = trace ran the loop (skip backward jump)
+                uint8_t cmp0[] = { 0x48, 0x83, 0xf8, 0x00 };  // cmp rax, 0
+                emit(jit.buf, jit.size, cmp0, 4);
+                uint8_t jg[] = { 0x0f, 0x8f };  // jg rel32 (rax > 0 → skip loop)
+                emit(jit.buf, jit.size, jg, 2);
                 size_t skipPatch = jit.size;
                 emit32(jit.buf, jit.size, 0);
                 size_t p = emitJmp(jit.buf, jit.size);
@@ -2075,12 +2075,16 @@ Trace recordTrace(BblState& state, Chunk& chunk, size_t loopPc, BblValue* regs) 
         // Handle jumps within trace
         if (op == OP_JMP) {
             int off = decodesBx(inst);
-            pc = pc - 1 + 1 + off; // pc was already incremented
+            size_t target = pc - 1 + 1 + off;
+            if (target > loopPc) {
+                // Jump past loop end — this is the loop exit (not-taken path of the condition).
+                // Don't follow; the hot path stays in the loop. Remove the JMP entry.
+                trace.entries.pop_back();
+            } else {
+                pc = target;
+            }
         }
         if (op == OP_LTJMP || op == OP_LEJMP || op == OP_GTJMP || op == OP_GEJMP) {
-            // Record the branch. The next instruction should be JMP (the else path).
-            // If condition was true (skip JMP), we skip pc++ again
-            // We just record — the compiler will emit a guard
         }
         if (op == OP_JMPFALSE || op == OP_JMPTRUE) {
             int off = decodesBx(inst);
@@ -2203,10 +2207,36 @@ static void sinkAllocations(BblState& state, Trace& trace) {
 
         if (op == OP_TABLE) {
             uint8_t pairCount = decodeB(e.inst);
-            if (pairCount == 0) {
-                allocs[A] = {i, A, false, {}, {}};
+            AllocInfo info = {i, A, false, {}, {}};
+            if (pairCount > 0) {
+                bool canSink = true;
+                for (int p = 0; p < pairCount && canSink; p++) {
+                    uint8_t keyReg = A + 1 + p * 2;
+                    uint8_t valReg = A + 2 + p * 2;
+                    // Find the LOADK that loaded the key to get the field name
+                    std::string fieldName;
+                    for (int j = static_cast<int>(i) - 1; j >= 0; j--) {
+                        auto& prev = trace.entries[j];
+                        if (prev.eliminated) continue;
+                        uint8_t prevOp = decodeOP(prev.inst);
+                        uint8_t prevA = decodeA(prev.inst) + prev.regBase;
+                        if (prevA == keyReg && prevOp == OP_LOADK) {
+                            uint16_t kidx = decodeBx(prev.inst);
+                            if (prev.chunk->constants[kidx].type() == BBL::Type::String)
+                                fieldName = prev.chunk->constants[kidx].stringVal()->data;
+                            break;
+                        }
+                        if (prevA == keyReg) break;
+                    }
+                    if (fieldName.empty()) { canSink = false; break; }
+                    info.setFieldIndices.push_back({i, fieldName});
+                    info.fieldToReg[fieldName] = valReg;
+                }
+                if (canSink) {
+                    allocs[A] = std::move(info);
+                }
             } else {
-                allocs.erase(A);
+                allocs[A] = std::move(info);
             }
         } else if (op == OP_SETFIELD) {
             uint8_t objReg = decodeB(e.inst) + e.regBase;
@@ -2257,8 +2287,28 @@ static void sinkAllocations(BblState& state, Trace& trace) {
         if (info.setFieldIndices.empty()) continue;
 
         trace.entries[info.tableIdx].eliminated = true;
-        for (auto& [idx, name] : info.setFieldIndices)
-            trace.entries[idx].eliminated = true;
+        // For TABLE-with-pairs, setFieldIndices all point to the TABLE entry.
+        // Also eliminate LOADK entries that loaded the key strings.
+        uint8_t pairCount = decodeB(trace.entries[info.tableIdx].inst);
+        if (pairCount > 0) {
+            uint8_t baseReg = info.reg;
+            for (int p = 0; p < pairCount; p++) {
+                uint8_t keyReg = baseReg + 1 + p * 2;
+                for (int j = static_cast<int>(info.tableIdx) - 1; j >= 0; j--) {
+                    auto& prev = trace.entries[j];
+                    if (prev.eliminated) continue;
+                    uint8_t prevA = decodeA(prev.inst) + prev.regBase;
+                    if (prevA == keyReg && decodeOP(prev.inst) == OP_LOADK) {
+                        prev.eliminated = true;
+                        break;
+                    }
+                    if (prevA == keyReg) break;
+                }
+            }
+        } else {
+            for (auto& [idx, name] : info.setFieldIndices)
+                trace.entries[idx].eliminated = true;
+        }
 
         SunkAllocation sunk;
         sunk.destReg = info.reg;
