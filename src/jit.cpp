@@ -1341,6 +1341,93 @@ struct JumpPatch {
     size_t targetInst;
 };
 
+struct HwReg { uint8_t code; bool extended; };
+static constexpr HwReg hwRegs[] = {
+    {0, true},  {1, true},  {2, true},  {3, true},  // r8-r11
+    {2, false}, {6, false}, {7, false},              // rdx, rsi, rdi
+};
+static constexpr int MAX_HW_REGS = 7;
+
+static uint8_t rexRR(int regField, int rmField) {
+    uint8_t rex = 0x48;
+    if (hwRegs[regField].extended) rex |= 0x04;
+    if (hwRegs[rmField].extended) rex |= 0x01;
+    return rex;
+}
+static uint8_t modrmRR(int reg, int rm) {
+    return 0xC0 | (hwRegs[reg].code << 3) | hwRegs[rm].code;
+}
+static void emitMovRR(uint8_t* buf, size_t& pos, int dst, int src) {
+    if (dst == src) return;
+    emit8(buf, pos, rexRR(src, dst)); emit8(buf, pos, 0x89); emit8(buf, pos, modrmRR(src, dst));
+}
+static void emitAddRR(uint8_t* buf, size_t& pos, int dst, int src) {
+    emit8(buf, pos, rexRR(src, dst)); emit8(buf, pos, 0x01); emit8(buf, pos, modrmRR(src, dst));
+}
+static void emitSubRR(uint8_t* buf, size_t& pos, int dst, int src) {
+    emit8(buf, pos, rexRR(src, dst)); emit8(buf, pos, 0x29); emit8(buf, pos, modrmRR(src, dst));
+}
+static void emitCmpRR(uint8_t* buf, size_t& pos, int a, int b) {
+    emit8(buf, pos, rexRR(b, a)); emit8(buf, pos, 0x39); emit8(buf, pos, modrmRR(b, a));
+}
+static void emitImulRR(uint8_t* buf, size_t& pos, int dst, int src) {
+    emit8(buf, pos, rexRR(dst, src)); emit8(buf, pos, 0x0F); emit8(buf, pos, 0xAF); emit8(buf, pos, modrmRR(dst, src));
+}
+static void emitAddImmR(uint8_t* buf, size_t& pos, int dst, int32_t imm) {
+    uint8_t rex = 0x48; if (hwRegs[dst].extended) rex |= 0x01;
+    emit8(buf, pos, rex); emit8(buf, pos, 0x81);
+    emit8(buf, pos, 0xC0 | hwRegs[dst].code); emit32(buf, pos, static_cast<uint32_t>(imm));
+}
+static void emitSubImmR(uint8_t* buf, size_t& pos, int dst, int32_t imm) {
+    uint8_t rex = 0x48; if (hwRegs[dst].extended) rex |= 0x01;
+    emit8(buf, pos, rex); emit8(buf, pos, 0x81);
+    emit8(buf, pos, 0xE8 | hwRegs[dst].code); emit32(buf, pos, static_cast<uint32_t>(imm));
+}
+static void emitMovImmR(uint8_t* buf, size_t& pos, int dst, int64_t imm) {
+    uint8_t rex = 0x48; if (hwRegs[dst].extended) rex |= 0x01;
+    emit8(buf, pos, rex); emit8(buf, pos, 0xB8 | hwRegs[dst].code);
+    emit64(buf, pos, static_cast<uint64_t>(imm));
+}
+static void emitLoadFromMemR(uint8_t* buf, size_t& pos, int hwSlot, uint32_t memOff) {
+    uint8_t rex = 0x48; if (hwRegs[hwSlot].extended) rex |= 0x04;
+    emit8(buf, pos, rex); emit8(buf, pos, 0x8B);
+    emit8(buf, pos, 0x83 | (hwRegs[hwSlot].code << 3)); emit32(buf, pos, memOff);
+}
+static void emitStoreToMemR(uint8_t* buf, size_t& pos, int hwSlot, uint32_t memOff) {
+    uint8_t rex = 0x48; if (hwRegs[hwSlot].extended) rex |= 0x04;
+    emit8(buf, pos, rex); emit8(buf, pos, 0x89);
+    emit8(buf, pos, 0x83 | (hwRegs[hwSlot].code << 3)); emit32(buf, pos, memOff);
+}
+static void emitUnboxR(uint8_t* buf, size_t& pos, int hwSlot) {
+    uint8_t rex = 0x48; if (hwRegs[hwSlot].extended) rex |= 0x01;
+    uint8_t rm = hwRegs[hwSlot].code;
+    emit8(buf, pos, rex); emit8(buf, pos, 0xC1); emit8(buf, pos, 0xE0 | rm); emit8(buf, pos, 0x10);
+    emit8(buf, pos, rex); emit8(buf, pos, 0xC1); emit8(buf, pos, 0xF8 | rm); emit8(buf, pos, 0x10);
+}
+static void emitReboxStoreR(uint8_t* buf, size_t& pos, int hwSlot, uint32_t memOff) {
+    // mov rax, hw_reg
+    uint8_t rex = 0x48; if (hwRegs[hwSlot].extended) rex |= 0x04;
+    emit8(buf, pos, rex); emit8(buf, pos, 0x89);
+    emit8(buf, pos, 0xC0 | (hwRegs[hwSlot].code << 3));
+    // and rax, PAYLOAD_MASK
+    uint8_t movabs[] = { 0x48, 0xb9 }; emit(buf, pos, movabs, 2);
+    emit64(buf, pos, 0x0000FFFFFFFFFFFFULL);
+    uint8_t andrr[] = { 0x48, 0x21, 0xc8 }; emit(buf, pos, andrr, 3);
+    // or rax, TAG_INT
+    emit(buf, pos, movabs, 2); emit64(buf, pos, NB_TAG_INT);
+    uint8_t orrr[] = { 0x48, 0x09, 0xc8 }; emit(buf, pos, orrr, 3);
+    // mov [rbx + memOff], rax
+    uint8_t store[] = { 0x48, 0x89, 0x83 }; emit(buf, pos, store, 3);
+    emit32(buf, pos, memOff);
+}
+
+struct LoopAlloc {
+    size_t startIdx, endIdx, exitIdx;
+    size_t nativeBodyStart;
+    int8_t regMap[256];
+    bool active;
+};
+
 JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     JitCode jit;
     jit.capacity = chunk.code.size() * 96 + 1024;
@@ -1445,6 +1532,48 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         }
     }
 
+    // Pre-scan: identify eligible arithmetic loops for register allocation
+    std::unordered_map<size_t, LoopAlloc> loopAllocMap;
+    for (size_t li = 0; li < chunk.code.size(); li++) {
+        if (decodeOP(chunk.code[li]) != OP_LOOP) continue;
+        int loopsBx = decodesBx(chunk.code[li]);
+        int loopStart = static_cast<int>(li) + 1 - loopsBx;
+        if (loopStart < 0 || loopStart >= static_cast<int>(li)) continue;
+
+        LoopAlloc la;
+        la.startIdx = loopStart;
+        la.endIdx = li;
+        la.exitIdx = loopStart + 1;
+        la.active = true;
+        memset(la.regMap, -1, sizeof(la.regMap));
+
+        std::set<uint8_t> usedRegs;
+        for (size_t bi = loopStart; bi <= li; bi++) {
+            uint8_t bop = decodeOP(chunk.code[bi]);
+            if (bop != OP_LOADINT && bop != OP_ADD && bop != OP_SUB && bop != OP_MUL &&
+                bop != OP_ADDI && bop != OP_SUBI && bop != OP_ADDK && bop != OP_MOVE &&
+                bop != OP_LTJMP && bop != OP_LEJMP && bop != OP_GTJMP && bop != OP_GEJMP &&
+                bop != OP_JMP && bop != OP_LOOP &&
+                bop != OP_EQ && bop != OP_NEQ && bop != OP_LT && bop != OP_GT &&
+                bop != OP_LTE && bop != OP_GTE) {
+                la.active = false; break;
+            }
+            uint8_t bA = decodeA(chunk.code[bi]), bB = decodeB(chunk.code[bi]), bC = decodeC(chunk.code[bi]);
+            if (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL) { usedRegs.insert(bA); usedRegs.insert(bB); usedRegs.insert(bC); }
+            else if (bop == OP_ADDI || bop == OP_SUBI || bop == OP_LOADINT) { usedRegs.insert(bA); }
+            else if (bop == OP_ADDK) { usedRegs.insert(bA); usedRegs.insert(bB); }
+            else if (bop == OP_MOVE) { usedRegs.insert(bA); usedRegs.insert(bB); }
+            else if (bop == OP_LTJMP || bop == OP_LEJMP || bop == OP_GTJMP || bop == OP_GEJMP) { usedRegs.insert(bA); usedRegs.insert(bB); }
+            else if (bop == OP_EQ || bop == OP_NEQ || bop == OP_LT || bop == OP_GT || bop == OP_LTE || bop == OP_GTE) { usedRegs.insert(bA); usedRegs.insert(bB); usedRegs.insert(bC); }
+        }
+        if (la.active && usedRegs.size() <= MAX_HW_REGS) {
+            int slot = 0;
+            for (uint8_t reg : usedRegs) la.regMap[reg] = slot++;
+            loopAllocMap[loopStart] = la;
+        }
+    }
+    const LoopAlloc* currentLoop = nullptr;
+
     for (size_t i = 0; i < chunk.code.size(); i++) {
         nativeOffsets[i] = jit.size;
         uint32_t inst = chunk.code[i];
@@ -1454,7 +1583,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         int sBx = decodesBx(inst);
         int lineNum = (i < chunk.lines.size()) ? chunk.lines[i] : 0;
         static thread_local int lastEmittedLine = -1;
-        if (lineNum != lastEmittedLine) {
+        if (lineNum != lastEmittedLine && !currentLoop) {
             emitLineStore(jit.buf, jit.size, runtimeLineOff, lineNum);
             lastEmittedLine = lineNum;
         }
@@ -1465,18 +1594,50 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         }
         if (op != OP_LOADINT && op != OP_ADD && op != OP_SUB && op != OP_MUL &&
             op != OP_ADDI && op != OP_SUBI && op != OP_ADDK && op != OP_MOVE &&
-            op != OP_TABLE) {
+            op != OP_TABLE &&
+            op != OP_LTJMP && op != OP_LEJMP && op != OP_GTJMP && op != OP_GEJMP &&
+            op != OP_JMP && op != OP_JMPFALSE && op != OP_JMPTRUE && op != OP_LOOP &&
+            op != OP_RETURN) {
             knownTypes[A] = KnownType::Unknown;
         }
 
-        emitLineStore(jit.buf, jit.size, runtimeLineOff, lineNum);
+        // Register allocator: emit prologue at loop start
+        auto loopIt = loopAllocMap.find(i);
+        if (loopIt != loopAllocMap.end() && loopIt->second.active) {
+            bool allInt = true;
+            for (int r = 0; r < 256 && allInt; r++)
+                if (loopIt->second.regMap[r] >= 0 && knownTypes[r] != KnownType::Int) allInt = false;
+            if (allInt) {
+                currentLoop = &loopIt->second;
+                for (int r = 0; r < 256; r++) {
+                    if (currentLoop->regMap[r] < 0) continue;
+                    int hw = currentLoop->regMap[r];
+                    emitLoadFromMemR(jit.buf, jit.size, hw, r * VAL_SIZE);
+                    emitUnboxR(jit.buf, jit.size, hw);
+                }
+                loopIt->second.nativeBodyStart = jit.size;
+            }
+        }
+
+        // Register allocator: emit epilogue at loop exit
+        if (currentLoop && i == currentLoop->exitIdx) {
+            for (int r = 0; r < 256; r++) {
+                if (currentLoop->regMap[r] < 0) continue;
+                emitReboxStoreR(jit.buf, jit.size, currentLoop->regMap[r], r * VAL_SIZE);
+            }
+            currentLoop = nullptr;
+        }
 
         switch (op) {
         case OP_LOADK:
             emitLoadK(jit.buf, jit.size, A, &chunk.constants[Bx]);
             break;
         case OP_LOADINT:
-            emitLoadInt(jit.buf, jit.size, A, sBx);
+            if (currentLoop && currentLoop->regMap[A] >= 0) {
+                emitMovImmR(jit.buf, jit.size, currentLoop->regMap[A], sBx);
+            } else {
+                emitLoadInt(jit.buf, jit.size, A, sBx);
+            }
             knownTypes[A] = KnownType::Int;
             break;
         case OP_LOADNULL:
@@ -1493,12 +1654,24 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
         case OP_MOVE:
-            emitMove(jit.buf, jit.size, A, B);
+            if (currentLoop && currentLoop->regMap[A] >= 0 && currentLoop->regMap[B] >= 0) {
+                emitMovRR(jit.buf, jit.size, currentLoop->regMap[A], currentLoop->regMap[B]);
+            } else {
+                emitMove(jit.buf, jit.size, A, B);
+            }
             if (knownTypes[B] == KnownType::Int) knownTypes[A] = KnownType::Int;
             else if (knownTypes[B] == KnownType::Table) knownTypes[A] = KnownType::Table;
             else knownTypes[A] = KnownType::Unknown;
             break;
         case OP_ADD: {
+            if (currentLoop && currentLoop->regMap[A] >= 0 && currentLoop->regMap[B] >= 0 && currentLoop->regMap[C] >= 0) {
+                int dA = currentLoop->regMap[A], dB = currentLoop->regMap[B], dC = currentLoop->regMap[C];
+                if (dA == dB) { emitAddRR(jit.buf, jit.size, dA, dC); }
+                else if (dA == dC) { emitAddRR(jit.buf, jit.size, dA, dB); }
+                else { emitMovRR(jit.buf, jit.size, dA, dB); emitAddRR(jit.buf, jit.size, dA, dC); }
+                knownTypes[A] = KnownType::Int;
+                break;
+            }
             if (hasSelfCalls || (knownTypes[B] == KnownType::Int && knownTypes[C] == KnownType::Int)) {
                 emitAdd(jit.buf, jit.size, A, B, C);
                 knownTypes[A] = KnownType::Int;
@@ -1544,6 +1717,10 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
         case OP_ADDI: {
+            if (currentLoop && currentLoop->regMap[A] >= 0) {
+                emitAddImmR(jit.buf, jit.size, currentLoop->regMap[A], sBx);
+                break;
+            }
             if (knownTypes[A] == KnownType::Int) {
                 emitAddi(jit.buf, jit.size, A, sBx);
                 break;
@@ -1595,6 +1772,13 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
         case OP_SUB: {
+            if (currentLoop && currentLoop->regMap[A] >= 0 && currentLoop->regMap[B] >= 0 && currentLoop->regMap[C] >= 0) {
+                int dA = currentLoop->regMap[A], dB = currentLoop->regMap[B], dC = currentLoop->regMap[C];
+                if (dA == dB) { emitSubRR(jit.buf, jit.size, dA, dC); }
+                else { emitMovRR(jit.buf, jit.size, dA, dB); emitSubRR(jit.buf, jit.size, dA, dC); }
+                knownTypes[A] = KnownType::Int;
+                break;
+            }
             if (hasSelfCalls || (knownTypes[B] == KnownType::Int && knownTypes[C] == KnownType::Int)) {
                 emitSub(jit.buf, jit.size, A, B, C);
                 knownTypes[A] = KnownType::Int;
@@ -1637,38 +1821,74 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
         case OP_SUBI:
-            emitSubi(jit.buf, jit.size, A, sBx);
+            if (currentLoop && currentLoop->regMap[A] >= 0) {
+                emitSubImmR(jit.buf, jit.size, currentLoop->regMap[A], sBx);
+            } else {
+                emitSubi(jit.buf, jit.size, A, sBx);
+            }
             break;
         case OP_MUL:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((2 << 16) | (B << 8) | C), &errorExitPatches);
+            if (currentLoop && currentLoop->regMap[A] >= 0 && currentLoop->regMap[B] >= 0 && currentLoop->regMap[C] >= 0) {
+                int dA = currentLoop->regMap[A], dB = currentLoop->regMap[B], dC = currentLoop->regMap[C];
+                if (dA == dB) { emitImulRR(jit.buf, jit.size, dA, dC); }
+                else if (dA == dC) { emitImulRR(jit.buf, jit.size, dA, dB); }
+                else { emitMovRR(jit.buf, jit.size, dA, dB); emitImulRR(jit.buf, jit.size, dA, dC); }
+                knownTypes[A] = KnownType::Int;
+            } else {
+                emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((2 << 16) | (B << 8) | C), &errorExitPatches);
+            }
             break;
 
         case OP_LTJMP: {
-            bool direct = knownTypes[A] == KnownType::Int && knownTypes[B] == KnownType::Int;
-            size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8c)
-                              : emitLtjmp(jit.buf, jit.size, A, B);
-            patches.push_back({p, i + 2});
+            if (currentLoop && currentLoop->regMap[A] >= 0 && currentLoop->regMap[B] >= 0) {
+                emitCmpRR(jit.buf, jit.size, currentLoop->regMap[A], currentLoop->regMap[B]);
+                uint8_t jcc[] = { 0x0f, 0x8c }; emit(jit.buf, jit.size, jcc, 2);
+                patches.push_back({jit.size, i + 2}); emit32(jit.buf, jit.size, 0);
+            } else {
+                bool direct = knownTypes[A] == KnownType::Int && knownTypes[B] == KnownType::Int;
+                size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8c)
+                                  : emitLtjmp(jit.buf, jit.size, A, B);
+                patches.push_back({p, i + 2});
+            }
             break;
         }
         case OP_LEJMP: {
-            bool direct = knownTypes[A] == KnownType::Int && knownTypes[B] == KnownType::Int;
-            size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8e)
-                              : emitLejmp(jit.buf, jit.size, A, B);
-            patches.push_back({p, i + 2});
+            if (currentLoop && currentLoop->regMap[A] >= 0 && currentLoop->regMap[B] >= 0) {
+                emitCmpRR(jit.buf, jit.size, currentLoop->regMap[A], currentLoop->regMap[B]);
+                uint8_t jcc[] = { 0x0f, 0x8e }; emit(jit.buf, jit.size, jcc, 2);
+                patches.push_back({jit.size, i + 2}); emit32(jit.buf, jit.size, 0);
+            } else {
+                bool direct = knownTypes[A] == KnownType::Int && knownTypes[B] == KnownType::Int;
+                size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8e)
+                                  : emitLejmp(jit.buf, jit.size, A, B);
+                patches.push_back({p, i + 2});
+            }
             break;
         }
         case OP_GTJMP: {
-            bool direct = knownTypes[A] == KnownType::Int && knownTypes[B] == KnownType::Int;
-            size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8f)
-                              : emitGtjmp(jit.buf, jit.size, A, B);
-            patches.push_back({p, i + 2});
+            if (currentLoop && currentLoop->regMap[A] >= 0 && currentLoop->regMap[B] >= 0) {
+                emitCmpRR(jit.buf, jit.size, currentLoop->regMap[A], currentLoop->regMap[B]);
+                uint8_t jcc[] = { 0x0f, 0x8f }; emit(jit.buf, jit.size, jcc, 2);
+                patches.push_back({jit.size, i + 2}); emit32(jit.buf, jit.size, 0);
+            } else {
+                bool direct = knownTypes[A] == KnownType::Int && knownTypes[B] == KnownType::Int;
+                size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8f)
+                                  : emitGtjmp(jit.buf, jit.size, A, B);
+                patches.push_back({p, i + 2});
+            }
             break;
         }
         case OP_GEJMP: {
-            bool direct = knownTypes[A] == KnownType::Int && knownTypes[B] == KnownType::Int;
-            size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8d)
-                              : emitGejmp(jit.buf, jit.size, A, B);
-            patches.push_back({p, i + 2});
+            if (currentLoop && currentLoop->regMap[A] >= 0 && currentLoop->regMap[B] >= 0) {
+                emitCmpRR(jit.buf, jit.size, currentLoop->regMap[A], currentLoop->regMap[B]);
+                uint8_t jcc[] = { 0x0f, 0x8d }; emit(jit.buf, jit.size, jcc, 2);
+                patches.push_back({jit.size, i + 2}); emit32(jit.buf, jit.size, 0);
+            } else {
+                bool direct = knownTypes[A] == KnownType::Int && knownTypes[B] == KnownType::Int;
+                size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8d)
+                                  : emitGejmp(jit.buf, jit.size, A, B);
+                patches.push_back({p, i + 2});
+            }
             break;
         }
 
@@ -1683,6 +1903,15 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 emitStepCheck(jit.buf, jit.size, stepCountOff, maxStepsOff, errorExitPatches);
 
             int target = static_cast<int>(i) + 1 - sBx;
+
+            // If in a register-allocated loop, jump back past prologue
+            auto laIt = loopAllocMap.find(static_cast<size_t>(target));
+            if (laIt != loopAllocMap.end() && laIt->second.active && laIt->second.nativeBodyStart > 0) {
+                size_t p = emitJmp(jit.buf, jit.size);
+                patchRel32(jit.buf, p, laIt->second.nativeBodyStart);
+                break;
+            }
+
             bool loopHasTable = false;
             bool loopHasFloat = false;
             if (!emitStepChecks) {
