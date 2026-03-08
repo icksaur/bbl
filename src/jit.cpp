@@ -1619,13 +1619,12 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             }
         }
 
-        // Register allocator: emit epilogue at loop exit
+        // Register allocator: emit epilogue at loop exit (before exit JMP)
         if (currentLoop && i == currentLoop->exitIdx) {
             for (int r = 0; r < 256; r++) {
                 if (currentLoop->regMap[r] < 0) continue;
                 emitReboxStoreR(jit.buf, jit.size, currentLoop->regMap[r], r * VAL_SIZE);
             }
-            currentLoop = nullptr;
         }
 
         switch (op) {
@@ -1909,6 +1908,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             if (laIt != loopAllocMap.end() && laIt->second.active && laIt->second.nativeBodyStart > 0) {
                 size_t p = emitJmp(jit.buf, jit.size);
                 patchRel32(jit.buf, p, laIt->second.nativeBodyStart);
+                currentLoop = nullptr;
                 break;
             }
 
