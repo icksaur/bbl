@@ -21,10 +21,18 @@ struct TraceEntry {
     uint32_t inst;
     Chunk* chunk;
     uint8_t regBase;
+    bool branchTaken = false;
+};
+
+struct Snapshot {
+    Chunk* chunk;
+    size_t pc;
+    uint8_t regBase;
 };
 
 struct Trace {
     std::vector<TraceEntry> entries;
+    std::vector<Snapshot> snapshots;
     Chunk* startChunk = nullptr;
     size_t startPc = 0;
     int maxRegs = 0;

@@ -274,8 +274,7 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
             size_t loopPc = static_cast<size_t>(frame->ip - frame->chunk->code.data() - 1);
             frame->ip -= sBx;
 
-            // Tracing JIT: record and compile hot loops
-            if (!frame->chunk->traceCompiled) {
+            if (!frame->chunk->traceCompiled && !frame->chunk->traceBlacklisted) {
                 frame->chunk->hotCount++;
                 if (frame->chunk->hotCount >= 64) {
                     Trace trace = recordTrace(state, *frame->chunk, loopPc, frame->regs);
@@ -285,19 +284,27 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                             frame->chunk->traceCode = jit.buf;
                             frame->chunk->traceCapacity = jit.capacity;
                             frame->chunk->traceCompiled = true;
-                            // Don't free — cached on chunk
+                            frame->chunk->traceSnapshots = new std::vector<Snapshot>(std::move(trace.snapshots));
+                        } else {
+                            frame->chunk->traceBlacklisted = true;
                         }
+                    } else {
+                        frame->chunk->traceBlacklisted = true;
                     }
-                    frame->chunk->hotCount = 0; // reset to avoid retrying
+                    frame->chunk->hotCount = 0;
                 }
             }
             if (frame->chunk->traceCompiled && frame->chunk->traceCode) {
-                typedef int64_t (*TraceFn)(BblValue*, BblState*, void*);
-                TraceFn fn = reinterpret_cast<TraceFn>(frame->chunk->traceCode);
-                fn(frame->regs, &state, nullptr);
-                // Trace ran the loop to completion — skip past the LOOP
-                frame->ip = &frame->chunk->code[loopPc + 1];
-                break;
+                JitCode traceJit;
+                traceJit.buf = static_cast<uint8_t*>(frame->chunk->traceCode);
+                traceJit.capacity = frame->chunk->traceCapacity;
+                TraceResult result = executeTrace(traceJit, frame->regs, &state);
+                if (result.completed) {
+                    frame->ip = &frame->chunk->code[loopPc + 1];
+                    break;
+                }
+                // Side exit — continue interpreting from the loop body
+                // (the trace's registers are already updated)
             }
 
             if (state.allocCount >= state.gcThreshold) state.gc();

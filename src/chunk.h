@@ -5,6 +5,7 @@
 #include <string>
 
 struct BblValue;
+struct Snapshot;
 
 struct CaptureInfo {
     uint8_t srcType; // 0 = LOCAL, 1 = CAPTURE
@@ -124,8 +125,10 @@ struct Chunk {
     uint8_t numRegs = 2;
     uint16_t hotCount = 0;
     bool traceCompiled = false;
+    bool traceBlacklisted = false;
     void* traceCode = nullptr;
     size_t traceCapacity = 0;
+    std::vector<Snapshot>* traceSnapshots = nullptr;
 
     void emitABC(uint8_t op, uint8_t A, uint8_t B, uint8_t C, int line) {
         code.push_back(encodeABC(op, A, B, C));
