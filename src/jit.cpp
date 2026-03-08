@@ -1378,13 +1378,23 @@ static void emitImulRR(uint8_t* buf, size_t& pos, int dst, int src) {
 }
 static void emitAddImmR(uint8_t* buf, size_t& pos, int dst, int32_t imm) {
     uint8_t rex = 0x48; if (hwRegs[dst].extended) rex |= 0x01;
-    emit8(buf, pos, rex); emit8(buf, pos, 0x81);
-    emit8(buf, pos, 0xC0 | hwRegs[dst].code); emit32(buf, pos, static_cast<uint32_t>(imm));
+    if (imm >= -128 && imm <= 127) {
+        emit8(buf, pos, rex); emit8(buf, pos, 0x83);
+        emit8(buf, pos, 0xC0 | hwRegs[dst].code); emit8(buf, pos, static_cast<uint8_t>(imm));
+    } else {
+        emit8(buf, pos, rex); emit8(buf, pos, 0x81);
+        emit8(buf, pos, 0xC0 | hwRegs[dst].code); emit32(buf, pos, static_cast<uint32_t>(imm));
+    }
 }
 static void emitSubImmR(uint8_t* buf, size_t& pos, int dst, int32_t imm) {
     uint8_t rex = 0x48; if (hwRegs[dst].extended) rex |= 0x01;
-    emit8(buf, pos, rex); emit8(buf, pos, 0x81);
-    emit8(buf, pos, 0xE8 | hwRegs[dst].code); emit32(buf, pos, static_cast<uint32_t>(imm));
+    if (imm >= -128 && imm <= 127) {
+        emit8(buf, pos, rex); emit8(buf, pos, 0x83);
+        emit8(buf, pos, 0xE8 | hwRegs[dst].code); emit8(buf, pos, static_cast<uint8_t>(imm));
+    } else {
+        emit8(buf, pos, rex); emit8(buf, pos, 0x81);
+        emit8(buf, pos, 0xE8 | hwRegs[dst].code); emit32(buf, pos, static_cast<uint32_t>(imm));
+    }
 }
 static void emitMovImmR(uint8_t* buf, size_t& pos, int dst, int64_t imm) {
     uint8_t rex = 0x48; if (hwRegs[dst].extended) rex |= 0x01;
@@ -1624,9 +1634,29 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
 
         // Register allocator: emit epilogue at loop exit (before exit JMP)
         if (currentLoop && i == currentLoop->exitIdx) {
+            // Load TAG_INT once into rcx
+            uint8_t movabs_rcx[] = { 0x48, 0xb9 };
+            emit(jit.buf, jit.size, movabs_rcx, 2);
+            emit64(jit.buf, jit.size, NB_TAG_INT);
             for (int r = 0; r < 256; r++) {
                 if (currentLoop->regMap[r] < 0) continue;
-                emitReboxStoreR(jit.buf, jit.size, currentLoop->regMap[r], r * VAL_SIZE);
+                int hw = currentLoop->regMap[r];
+                // mov rax, hw_reg
+                uint8_t rex = 0x48; if (hwRegs[hw].extended) rex |= 0x04;
+                emit8(jit.buf, jit.size, rex); emit8(jit.buf, jit.size, 0x89);
+                emit8(jit.buf, jit.size, 0xC0 | (hwRegs[hw].code << 3));
+                // shl rax, 16; shr rax, 16 (clear upper 16 bits = mask payload)
+                uint8_t shl16[] = { 0x48, 0xC1, 0xE0, 0x10 };
+                emit(jit.buf, jit.size, shl16, 4);
+                uint8_t shr16[] = { 0x48, 0xC1, 0xE8, 0x10 };
+                emit(jit.buf, jit.size, shr16, 4);
+                // or rax, rcx (TAG_INT)
+                uint8_t orrr[] = { 0x48, 0x09, 0xc8 };
+                emit(jit.buf, jit.size, orrr, 3);
+                // mov [rbx + off], rax
+                uint8_t store[] = { 0x48, 0x89, 0x83 };
+                emit(jit.buf, jit.size, store, 3);
+                emit32(jit.buf, jit.size, r * VAL_SIZE);
             }
         }
 
