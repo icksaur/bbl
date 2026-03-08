@@ -943,53 +943,36 @@ static void emitReturn(uint8_t* buf, size_t& pos, int A) {
 
 // ADD R[A] = R[B] + R[C] (integer, NaN-boxed — direct arithmetic, no unbox)
 static void emitAdd(uint8_t* buf, size_t& pos, int A, int B, int C) {
-    // mov rax, [rbx + B*8]
     uint8_t load[] = { 0x48, 0x8b, 0x83 };
     emit(buf, pos, load, 3);
     emit32(buf, pos, B * VAL_SIZE);
-    // add rax, [rbx + C*8]
     uint8_t add[] = { 0x48, 0x03, 0x83 };
     emit(buf, pos, add, 3);
     emit32(buf, pos, C * VAL_SIZE);
-    // movabs rcx, NB_PAYLOAD; and rax, rcx
+    // a+b has 2×TAG. Subtract one TAG to get TAG|(va+vb).
     uint8_t movabs[] = { 0x48, 0xB9 };
     emit(buf, pos, movabs, 2);
-    emit64(buf, pos, NB_PAYLOAD);
-    uint8_t andOp[] = { 0x48, 0x21, 0xC8 };
-    emit(buf, pos, andOp, 3);
-    // movabs rcx, NB_TAG_INT; or rax, rcx
-    emit(buf, pos, movabs, 2);
     emit64(buf, pos, NB_TAG_INT);
-    uint8_t orOp[] = { 0x48, 0x09, 0xC8 };
-    emit(buf, pos, orOp, 3);
-    // mov [rbx + A*8], rax
+    uint8_t sub[] = { 0x48, 0x29, 0xC8 };
+    emit(buf, pos, sub, 3);
     uint8_t store[] = { 0x48, 0x89, 0x83 };
     emit(buf, pos, store, 3);
     emit32(buf, pos, A * VAL_SIZE);
 }
 
-// SUB R[A] = R[B] - R[C] (integer, NaN-boxed — direct arithmetic, no unbox)
 static void emitSub(uint8_t* buf, size_t& pos, int A, int B, int C) {
-    // mov rax, [rbx + B*8]
     uint8_t load[] = { 0x48, 0x8b, 0x83 };
     emit(buf, pos, load, 3);
     emit32(buf, pos, B * VAL_SIZE);
-    // sub rax, [rbx + C*8]
-    uint8_t sub[] = { 0x48, 0x2b, 0x83 };
-    emit(buf, pos, sub, 3);
+    uint8_t sub_op[] = { 0x48, 0x2b, 0x83 };
+    emit(buf, pos, sub_op, 3);
     emit32(buf, pos, C * VAL_SIZE);
-    // movabs rcx, NB_PAYLOAD; and rax, rcx
+    // a-b cancels TAG. Add it back.
     uint8_t movabs[] = { 0x48, 0xB9 };
     emit(buf, pos, movabs, 2);
-    emit64(buf, pos, NB_PAYLOAD);
-    uint8_t andOp[] = { 0x48, 0x21, 0xC8 };
-    emit(buf, pos, andOp, 3);
-    // movabs rcx, NB_TAG_INT; or rax, rcx
-    emit(buf, pos, movabs, 2);
     emit64(buf, pos, NB_TAG_INT);
-    uint8_t orOp[] = { 0x48, 0x09, 0xC8 };
-    emit(buf, pos, orOp, 3);
-    // mov [rbx + A*8], rax
+    uint8_t add[] = { 0x48, 0x01, 0xC8 };
+    emit(buf, pos, add, 3);
     uint8_t store[] = { 0x48, 0x89, 0x83 };
     emit(buf, pos, store, 3);
     emit32(buf, pos, A * VAL_SIZE);
@@ -1032,15 +1015,11 @@ static void emitAddi(uint8_t* buf, size_t& pos, int A, int imm) {
 
 // SUBI R[A] -= imm (NaN-boxed)
 static void emitSubi(uint8_t* buf, size_t& pos, int A, int imm) {
-    uint8_t load[] = { 0x48, 0x8b, 0x83 };
-    emit(buf, pos, load, 3);
+    // sub qword [rbx + A*8], imm32 (works on NaN-boxed: decrements lower bits)
+    uint8_t subMem[] = { 0x48, 0x81, 0xab };
+    emit(buf, pos, subMem, 3);
     emit32(buf, pos, A * VAL_SIZE);
-    emitUnboxIntRax(buf, pos);
-    // sub rax, imm32
-    uint8_t sub[] = { 0x48, 0x2d };
-    emit(buf, pos, sub, 2);
     emit32(buf, pos, static_cast<uint32_t>(imm));
-    emitReboxIntStore(buf, pos, A * VAL_SIZE);
 }
 
 // LOADINT R[A] = NaN-boxed int
