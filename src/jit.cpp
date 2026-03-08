@@ -869,6 +869,10 @@ static void emit(uint8_t* buf, size_t& pos, const void* data, size_t len) {
 
 static void emit8(uint8_t* buf, size_t& pos, uint8_t v) { buf[pos++] = v; }
 
+static void emit16(uint8_t* buf, size_t& pos, uint16_t v) {
+    memcpy(buf + pos, &v, 2); pos += 2;
+}
+
 static void emit32(uint8_t* buf, size_t& pos, uint32_t v) {
     std::memcpy(buf + pos, &v, 4);
     pos += 4;
@@ -1381,7 +1385,9 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     std::unordered_map<uint8_t, BblClosure*> closureRegs;
     std::set<uint8_t> selfRefRegs;
     bool hasSelfCalls = false;
-    std::set<uint8_t> knownIntRegs;
+    enum class KnownType : uint8_t { Unknown = 0, Int, Table };
+    KnownType knownTypes[256];
+    memset(knownTypes, 0, sizeof(knownTypes));
     std::vector<size_t> selfCallPatches;
     std::vector<size_t> errorExitPatches;
 
@@ -1400,6 +1406,44 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     BblClosure closureDummy;
     size_t capturesOff = reinterpret_cast<char*>(&closureDummy.captures) - reinterpret_cast<char*>(&closureDummy);
     bool emitStepChecks = (state.maxSteps > 0);
+
+    static_assert(sizeof(BblTable::Entry) == 16, "Entry must be 16 bytes for inline cache");
+    BblTable tblDummy;
+    size_t tblBucketsOff = reinterpret_cast<char*>(&tblDummy.buckets) - reinterpret_cast<char*>(&tblDummy);
+    size_t tblCapacityOff = reinterpret_cast<char*>(&tblDummy.capacity) - reinterpret_cast<char*>(&tblDummy);
+    size_t gcTypeOff = reinterpret_cast<char*>(&tblDummy.gcType) - reinterpret_cast<char*>(&tblDummy);
+    uint8_t tableGcType = static_cast<uint8_t>(GcType::Table);
+
+    BblVec vecDummy;
+    vecDummy.elemSize = 8;
+    vecDummy.data.resize(8);
+    size_t vecElemSizeOff = reinterpret_cast<char*>(&vecDummy.elemSize) - reinterpret_cast<char*>(&vecDummy);
+    size_t vecDataOff = reinterpret_cast<char*>(&vecDummy.data) - reinterpret_cast<char*>(&vecDummy);
+    uint8_t* vecDataPtr = vecDummy.data.data();
+    size_t vecDataPtrOff = 0;
+    for (size_t off = 0; off < sizeof(std::vector<uint8_t>); off += 8) {
+        if (*reinterpret_cast<uint8_t**>(reinterpret_cast<char*>(&vecDummy.data) + off) == vecDataPtr) {
+            vecDataPtrOff = off; break;
+        }
+    }
+    size_t vecDataSizeOff = 0;
+    for (size_t off = 0; off < sizeof(std::vector<uint8_t>); off += 8) {
+        if (off != vecDataPtrOff && *reinterpret_cast<size_t*>(reinterpret_cast<char*>(&vecDummy.data) + off) == 8) {
+            vecDataSizeOff = off; break;
+        }
+    }
+    vecDataPtrOff += vecDataOff;
+    vecDataSizeOff += vecDataOff;
+    uint8_t vecGcType = static_cast<uint8_t>(GcType::Vec);
+
+    BblString strDummy("test");
+    size_t strDataOff = reinterpret_cast<char*>(&strDummy.data) - reinterpret_cast<char*>(&strDummy);
+    size_t strSizeOff = 0;
+    for (size_t off = 0; off < sizeof(std::string); off += 8) {
+        if (*reinterpret_cast<size_t*>(reinterpret_cast<char*>(&strDummy.data) + off) == 4) {
+            strSizeOff = strDataOff + off; break;
+        }
+    }
 
     for (size_t i = 0; i < chunk.code.size(); i++) {
         nativeOffsets[i] = jit.size;
@@ -1420,8 +1464,9 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             closureRegs.erase(A);
         }
         if (op != OP_LOADINT && op != OP_ADD && op != OP_SUB && op != OP_MUL &&
-            op != OP_ADDI && op != OP_SUBI && op != OP_ADDK && op != OP_MOVE) {
-            knownIntRegs.erase(A);
+            op != OP_ADDI && op != OP_SUBI && op != OP_ADDK && op != OP_MOVE &&
+            op != OP_TABLE) {
+            knownTypes[A] = KnownType::Unknown;
         }
 
         emitLineStore(jit.buf, jit.size, runtimeLineOff, lineNum);
@@ -1432,11 +1477,10 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         case OP_LOADINT:
             emitLoadInt(jit.buf, jit.size, A, sBx);
-            knownIntRegs.insert(A);
+            knownTypes[A] = KnownType::Int;
             break;
         case OP_LOADNULL:
             emitLoadNull(jit.buf, jit.size, A);
-            knownIntRegs.erase(A);
             break;
         case OP_LOADBOOL: {
             uint64_t val = NB_TAG_BOOL | (B ? 1ULL : 0ULL);
@@ -1450,13 +1494,14 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         }
         case OP_MOVE:
             emitMove(jit.buf, jit.size, A, B);
-            if (knownIntRegs.count(B)) knownIntRegs.insert(A);
-            else knownIntRegs.erase(A);
+            if (knownTypes[B] == KnownType::Int) knownTypes[A] = KnownType::Int;
+            else if (knownTypes[B] == KnownType::Table) knownTypes[A] = KnownType::Table;
+            else knownTypes[A] = KnownType::Unknown;
             break;
         case OP_ADD: {
-            if (hasSelfCalls || (knownIntRegs.count(B) && knownIntRegs.count(C))) {
+            if (hasSelfCalls || (knownTypes[B] == KnownType::Int && knownTypes[C] == KnownType::Int)) {
                 emitAdd(jit.buf, jit.size, A, B, C);
-                knownIntRegs.insert(A);
+                knownTypes[A] = KnownType::Int;
                 break;
             }
             // Type guard: if R[B] and R[C] are both int, fast path
@@ -1499,7 +1544,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
         case OP_ADDI: {
-            if (knownIntRegs.count(A)) {
+            if (knownTypes[A] == KnownType::Int) {
                 emitAddi(jit.buf, jit.size, A, sBx);
                 break;
             }
@@ -1550,9 +1595,9 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
         case OP_SUB: {
-            if (hasSelfCalls || (knownIntRegs.count(B) && knownIntRegs.count(C))) {
+            if (hasSelfCalls || (knownTypes[B] == KnownType::Int && knownTypes[C] == KnownType::Int)) {
                 emitSub(jit.buf, jit.size, A, B, C);
-                knownIntRegs.insert(A);
+                knownTypes[A] = KnownType::Int;
                 break;
             }
             uint8_t ld[] = { 0x48, 0x8b, 0x83 };
@@ -1599,28 +1644,28 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
 
         case OP_LTJMP: {
-            bool direct = knownIntRegs.count(A) && knownIntRegs.count(B);
+            bool direct = knownTypes[A] == KnownType::Int && knownTypes[B] == KnownType::Int;
             size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8c)
                               : emitLtjmp(jit.buf, jit.size, A, B);
             patches.push_back({p, i + 2});
             break;
         }
         case OP_LEJMP: {
-            bool direct = knownIntRegs.count(A) && knownIntRegs.count(B);
+            bool direct = knownTypes[A] == KnownType::Int && knownTypes[B] == KnownType::Int;
             size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8e)
                               : emitLejmp(jit.buf, jit.size, A, B);
             patches.push_back({p, i + 2});
             break;
         }
         case OP_GTJMP: {
-            bool direct = knownIntRegs.count(A) && knownIntRegs.count(B);
+            bool direct = knownTypes[A] == KnownType::Int && knownTypes[B] == KnownType::Int;
             size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8f)
                               : emitGtjmp(jit.buf, jit.size, A, B);
             patches.push_back({p, i + 2});
             break;
         }
         case OP_GEJMP: {
-            bool direct = knownIntRegs.count(A) && knownIntRegs.count(B);
+            bool direct = knownTypes[A] == KnownType::Int && knownTypes[B] == KnownType::Int;
             size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8d)
                               : emitGejmp(jit.buf, jit.size, A, B);
             patches.push_back({p, i + 2});
@@ -1882,12 +1927,12 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
 
-        case OP_EQ:  { bool d = knownIntRegs.count(B) && knownIntRegs.count(C); (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x94); break; }
-        case OP_NEQ: { bool d = knownIntRegs.count(B) && knownIntRegs.count(C); (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x95); break; }
-        case OP_LT:  { bool d = knownIntRegs.count(B) && knownIntRegs.count(C); (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x9c); break; }
-        case OP_GT:  { bool d = knownIntRegs.count(B) && knownIntRegs.count(C); (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x9f); break; }
-        case OP_LTE: { bool d = knownIntRegs.count(B) && knownIntRegs.count(C); (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x9e); break; }
-        case OP_GTE: { bool d = knownIntRegs.count(B) && knownIntRegs.count(C); (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x9d); break; }
+        case OP_EQ:  { bool d = knownTypes[B] == KnownType::Int && knownTypes[C] == KnownType::Int; (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x94); break; }
+        case OP_NEQ: { bool d = knownTypes[B] == KnownType::Int && knownTypes[C] == KnownType::Int; (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x95); break; }
+        case OP_LT:  { bool d = knownTypes[B] == KnownType::Int && knownTypes[C] == KnownType::Int; (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x9c); break; }
+        case OP_GT:  { bool d = knownTypes[B] == KnownType::Int && knownTypes[C] == KnownType::Int; (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x9f); break; }
+        case OP_LTE: { bool d = knownTypes[B] == KnownType::Int && knownTypes[C] == KnownType::Int; (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x9e); break; }
+        case OP_GTE: { bool d = knownTypes[B] == KnownType::Int && knownTypes[C] == KnownType::Int; (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x9d); break; }
 
         case OP_DIV:
             emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((3 << 16) | (B << 8) | C), &errorExitPatches);
@@ -1898,13 +1943,273 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
 
         case OP_TABLE:
             emitCallHelper2(jit.buf, jit.size, (void*)jitTable, A, B, &errorExitPatches);
+            knownTypes[A] = KnownType::Table;
             break;
 
         case OP_MCALL: {
             BblString* methodStr = chunk.constants[C].stringVal();
-            if (methodStr == state.m.get || methodStr == state.m.set) {
-                void* fn = (methodStr == state.m.get) ? (void*)jitTableGet : (void*)jitTableSet;
-                emitCallHelper2(jit.buf, jit.size, fn, A, B, &errorExitPatches);
+            bool knownTable = (knownTypes[A] == KnownType::Table);
+
+            if (methodStr == state.m.get) {
+                // Inline table get: type guard → hash probe → load value
+                size_t slowPatch = 0, gcPatch = 0;
+
+                if (!knownTable) {
+                    // Type guard: check TAG_OBJECT
+                    uint8_t ld[] = { 0x48, 0x8b, 0x83 };
+                    emit(jit.buf, jit.size, ld, 3);
+                    emit32(jit.buf, jit.size, A * VAL_SIZE); // mov rax, [rbx+A*8]
+                    uint8_t movcx[] = { 0x48, 0x89, 0xc1 };
+                    emit(jit.buf, jit.size, movcx, 3); // mov rcx, rax
+                    uint8_t shrcx[] = { 0x48, 0xc1, 0xe9, 0x30 };
+                    emit(jit.buf, jit.size, shrcx, 4); // shr rcx, 48
+                    uint8_t cmpw[] = { 0x66, 0x81, 0xf9 };
+                    emit(jit.buf, jit.size, cmpw, 3);
+                    emit16(jit.buf, jit.size, 0xFFFF); // cmp cx, 0xFFFF (TAG_OBJECT)
+                    uint8_t jne[] = { 0x0f, 0x85 };
+                    emit(jit.buf, jit.size, jne, 2);
+                    slowPatch = jit.size;
+                    emit32(jit.buf, jit.size, 0);
+                    // Extract pointer: shl rax, 16; shr rax, 16
+                    uint8_t shl16[] = { 0x48, 0xc1, 0xe0, 0x10 };
+                    emit(jit.buf, jit.size, shl16, 4);
+                    uint8_t shr16[] = { 0x48, 0xc1, 0xe8, 0x10 };
+                    emit(jit.buf, jit.size, shr16, 4); // rax = table ptr
+                    // Check gcType == Table
+                    uint8_t cmpb[] = { 0x80, 0x38 };
+                    emit(jit.buf, jit.size, cmpb, 2);
+                    emit8(jit.buf, jit.size, tableGcType); // cmp byte [rax], tableGcType
+                    emit(jit.buf, jit.size, jne, 2);
+                    gcPatch = jit.size;
+                    emit32(jit.buf, jit.size, 0);
+                    uint8_t movrdi[] = { 0x48, 0x89, 0xc7 };
+                    emit(jit.buf, jit.size, movrdi, 3); // mov rdi, rax
+                } else {
+                    // Known table: extract pointer directly
+                    uint8_t ld[] = { 0x48, 0x8b, 0xbb };
+                    emit(jit.buf, jit.size, ld, 3);
+                    emit32(jit.buf, jit.size, A * VAL_SIZE); // mov rdi, [rbx+A*8]
+                    uint8_t shl16[] = { 0x48, 0xc1, 0xe7, 0x10 };
+                    emit(jit.buf, jit.size, shl16, 4);
+                    uint8_t shr16[] = { 0x48, 0xc1, 0xef, 0x10 };
+                    emit(jit.buf, jit.size, shr16, 4); // rdi = table ptr
+                }
+
+                // Load capacity: mov ecx, [rdi + tblCapacityOff]
+                uint8_t ldcap[] = { 0x8b, 0x8f };
+                emit(jit.buf, jit.size, ldcap, 2);
+                emit32(jit.buf, jit.size, tblCapacityOff);
+                // test ecx, ecx; jz slow_path
+                uint8_t testecx[] = { 0x85, 0xc9 };
+                emit(jit.buf, jit.size, testecx, 2);
+                uint8_t jz[] = { 0x0f, 0x84 };
+                emit(jit.buf, jit.size, jz, 2);
+                size_t capPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+
+                // Load buckets: mov rdx, [rdi + tblBucketsOff]
+                uint8_t ldbkt[] = { 0x48, 0x8b, 0x97 };
+                emit(jit.buf, jit.size, ldbkt, 3);
+                emit32(jit.buf, jit.size, tblBucketsOff);
+                // Load key: mov rsi, [rbx + (A+1)*8]
+                uint8_t ldkey[] = { 0x48, 0x8b, 0xb3 };
+                emit(jit.buf, jit.size, ldkey, 3);
+                emit32(jit.buf, jit.size, (A + 1) * VAL_SIZE);
+
+                // Hash: mov rax, rsi; movabs r8, GOLDEN; imul rax, r8
+                uint8_t movrax_rsi[] = { 0x48, 0x89, 0xf0 };
+                emit(jit.buf, jit.size, movrax_rsi, 3);
+                uint8_t movabs_r8[] = { 0x49, 0xb8 };
+                emit(jit.buf, jit.size, movabs_r8, 2);
+                emit64(jit.buf, jit.size, 11400714819323198485ULL);
+                uint8_t imul[] = { 0x49, 0x0f, 0xaf, 0xc0 };
+                emit(jit.buf, jit.size, imul, 4); // imul rax, r8
+
+                // Index: sub ecx, 1; and eax, ecx
+                uint8_t subecx[] = { 0x83, 0xe9, 0x01 };
+                emit(jit.buf, jit.size, subecx, 3);
+                uint8_t andeax[] = { 0x21, 0xc8 };
+                emit(jit.buf, jit.size, andeax, 2);
+
+                // Probe: shl rax, 4; add rdx, rax
+                uint8_t shlrax4[] = { 0x48, 0xc1, 0xe0, 0x04 };
+                emit(jit.buf, jit.size, shlrax4, 4);
+                uint8_t addrdx[] = { 0x48, 0x01, 0xc2 };
+                emit(jit.buf, jit.size, addrdx, 3); // rdx = &entry
+
+                // Compare: cmp [rdx], rsi (entry.key vs search key)
+                uint8_t cmprdxrsi[] = { 0x48, 0x39, 0x32 };
+                emit(jit.buf, jit.size, cmprdxrsi, 3);
+                // je found
+                uint8_t je[] = { 0x74 };
+                emit(jit.buf, jit.size, je, 1);
+                size_t foundPatch = jit.size;
+                emit8(jit.buf, jit.size, 0); // rel8
+
+                // Check empty: cmp qword [rdx], 0
+                uint8_t cmpq0[] = { 0x48, 0x83, 0x3a, 0x00 };
+                emit(jit.buf, jit.size, cmpq0, 4);
+                // je not_found
+                emit(jit.buf, jit.size, je, 1);
+                size_t notFoundPatch = jit.size;
+                emit8(jit.buf, jit.size, 0); // rel8
+
+                // Collision → slow path
+                uint8_t jmprel32[] = { 0xe9 };
+                emit(jit.buf, jit.size, jmprel32, 1);
+                size_t collisionPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+
+                // found: load value
+                jit.buf[foundPatch] = static_cast<uint8_t>(jit.size - foundPatch - 1);
+                uint8_t ldval[] = { 0x48, 0x8b, 0x42, 0x08 };
+                emit(jit.buf, jit.size, ldval, 4); // mov rax, [rdx+8]
+                uint8_t stval[] = { 0x48, 0x89, 0x83 };
+                emit(jit.buf, jit.size, stval, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE); // mov [rbx+A*8], rax
+                emit(jit.buf, jit.size, jmprel32, 1);
+                size_t donePatch1 = jit.size;
+                emit32(jit.buf, jit.size, 0);
+
+                // not_found: store null
+                jit.buf[notFoundPatch] = static_cast<uint8_t>(jit.size - notFoundPatch - 1);
+                uint8_t movabs_null[] = { 0x48, 0xb8 };
+                emit(jit.buf, jit.size, movabs_null, 2);
+                emit64(jit.buf, jit.size, NB_TAG_NULL);
+                emit(jit.buf, jit.size, stval, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE); // mov [rbx+A*8], rax
+                emit(jit.buf, jit.size, jmprel32, 1);
+                size_t donePatch2 = jit.size;
+                emit32(jit.buf, jit.size, 0);
+
+                // slow_path: call C helper
+                if (!knownTable) {
+                    patchRel32(jit.buf, slowPatch, jit.size);
+                    patchRel32(jit.buf, gcPatch, jit.size);
+                }
+                patchRel32(jit.buf, capPatch, jit.size);
+                patchRel32(jit.buf, collisionPatch, jit.size);
+                emitCallHelper2(jit.buf, jit.size, (void*)jitTableGet, A, B, &errorExitPatches);
+
+                // done:
+                patchRel32(jit.buf, donePatch1, jit.size);
+                patchRel32(jit.buf, donePatch2, jit.size);
+
+            } else if (methodStr == state.m.set) {
+                // Inline table set: type guard → hash probe → update value (existing keys only)
+                size_t slowPatch = 0, gcPatch = 0;
+
+                if (!knownTable) {
+                    uint8_t ld[] = { 0x48, 0x8b, 0x83 };
+                    emit(jit.buf, jit.size, ld, 3);
+                    emit32(jit.buf, jit.size, A * VAL_SIZE);
+                    uint8_t movcx[] = { 0x48, 0x89, 0xc1 };
+                    emit(jit.buf, jit.size, movcx, 3);
+                    uint8_t shrcx[] = { 0x48, 0xc1, 0xe9, 0x30 };
+                    emit(jit.buf, jit.size, shrcx, 4);
+                    uint8_t cmpw[] = { 0x66, 0x81, 0xf9 };
+                    emit(jit.buf, jit.size, cmpw, 3);
+                    emit16(jit.buf, jit.size, 0xFFFF);
+                    uint8_t jne[] = { 0x0f, 0x85 };
+                    emit(jit.buf, jit.size, jne, 2);
+                    slowPatch = jit.size;
+                    emit32(jit.buf, jit.size, 0);
+                    uint8_t shl16[] = { 0x48, 0xc1, 0xe0, 0x10 };
+                    emit(jit.buf, jit.size, shl16, 4);
+                    uint8_t shr16[] = { 0x48, 0xc1, 0xe8, 0x10 };
+                    emit(jit.buf, jit.size, shr16, 4);
+                    uint8_t cmpb[] = { 0x80, 0x38 };
+                    emit(jit.buf, jit.size, cmpb, 2);
+                    emit8(jit.buf, jit.size, tableGcType);
+                    emit(jit.buf, jit.size, jne, 2);
+                    gcPatch = jit.size;
+                    emit32(jit.buf, jit.size, 0);
+                    uint8_t movrdi[] = { 0x48, 0x89, 0xc7 };
+                    emit(jit.buf, jit.size, movrdi, 3);
+                } else {
+                    uint8_t ld[] = { 0x48, 0x8b, 0xbb };
+                    emit(jit.buf, jit.size, ld, 3);
+                    emit32(jit.buf, jit.size, A * VAL_SIZE);
+                    uint8_t shl16[] = { 0x48, 0xc1, 0xe7, 0x10 };
+                    emit(jit.buf, jit.size, shl16, 4);
+                    uint8_t shr16[] = { 0x48, 0xc1, 0xef, 0x10 };
+                    emit(jit.buf, jit.size, shr16, 4);
+                }
+
+                // Hash probe (same as get)
+                uint8_t ldcap[] = { 0x8b, 0x8f };
+                emit(jit.buf, jit.size, ldcap, 2);
+                emit32(jit.buf, jit.size, tblCapacityOff);
+                uint8_t testecx[] = { 0x85, 0xc9 };
+                emit(jit.buf, jit.size, testecx, 2);
+                uint8_t jz[] = { 0x0f, 0x84 };
+                emit(jit.buf, jit.size, jz, 2);
+                size_t capPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+
+                uint8_t ldbkt[] = { 0x48, 0x8b, 0x97 };
+                emit(jit.buf, jit.size, ldbkt, 3);
+                emit32(jit.buf, jit.size, tblBucketsOff);
+                uint8_t ldkey[] = { 0x48, 0x8b, 0xb3 };
+                emit(jit.buf, jit.size, ldkey, 3);
+                emit32(jit.buf, jit.size, (A + 1) * VAL_SIZE);
+
+                uint8_t movrax_rsi[] = { 0x48, 0x89, 0xf0 };
+                emit(jit.buf, jit.size, movrax_rsi, 3);
+                uint8_t movabs_r8[] = { 0x49, 0xb8 };
+                emit(jit.buf, jit.size, movabs_r8, 2);
+                emit64(jit.buf, jit.size, 11400714819323198485ULL);
+                uint8_t imulr8[] = { 0x49, 0x0f, 0xaf, 0xc0 };
+                emit(jit.buf, jit.size, imulr8, 4);
+
+                uint8_t subecx[] = { 0x83, 0xe9, 0x01 };
+                emit(jit.buf, jit.size, subecx, 3);
+                uint8_t andeax[] = { 0x21, 0xc8 };
+                emit(jit.buf, jit.size, andeax, 2);
+                uint8_t shlrax4[] = { 0x48, 0xc1, 0xe0, 0x04 };
+                emit(jit.buf, jit.size, shlrax4, 4);
+                uint8_t addrdx[] = { 0x48, 0x01, 0xc2 };
+                emit(jit.buf, jit.size, addrdx, 3);
+
+                // Compare key
+                uint8_t cmprdxrsi[] = { 0x48, 0x39, 0x32 };
+                emit(jit.buf, jit.size, cmprdxrsi, 3);
+                uint8_t jne_rel32[] = { 0x0f, 0x85 };
+                emit(jit.buf, jit.size, jne_rel32, 2);
+                size_t missSetPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+
+                // Hit: store new value at entry.val
+                uint8_t ldnewval[] = { 0x48, 0x8b, 0x83 };
+                emit(jit.buf, jit.size, ldnewval, 3);
+                emit32(jit.buf, jit.size, (A + 2) * VAL_SIZE); // mov rax, [rbx+(A+2)*8]
+                uint8_t stentry[] = { 0x48, 0x89, 0x42, 0x08 };
+                emit(jit.buf, jit.size, stentry, 4); // mov [rdx+8], rax
+                // Store null result
+                uint8_t movabs_null[] = { 0x48, 0xb8 };
+                emit(jit.buf, jit.size, movabs_null, 2);
+                emit64(jit.buf, jit.size, NB_TAG_NULL);
+                uint8_t stval[] = { 0x48, 0x89, 0x83 };
+                emit(jit.buf, jit.size, stval, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE);
+                uint8_t jmprel32[] = { 0xe9 };
+                emit(jit.buf, jit.size, jmprel32, 1);
+                size_t donePatchSet = jit.size;
+                emit32(jit.buf, jit.size, 0);
+
+                // slow_path
+                if (!knownTable) {
+                    patchRel32(jit.buf, slowPatch, jit.size);
+                    patchRel32(jit.buf, gcPatch, jit.size);
+                }
+                patchRel32(jit.buf, capPatch, jit.size);
+                patchRel32(jit.buf, missSetPatch, jit.size);
+                emitCallHelper2(jit.buf, jit.size, (void*)jitTableSet, A, B, &errorExitPatches);
+
+                patchRel32(jit.buf, donePatchSet, jit.size);
+
+            } else if (methodStr == state.m.length) {
+                emitCallHelper2(jit.buf, jit.size, (void*)jitLength, A, A, &errorExitPatches);
             } else {
                 uint8_t a1[] = { 0x48, 0x89, 0xdf }; emit(jit.buf, jit.size, a1, 3);
                 uint8_t a2[] = { 0x4c, 0x89, 0xe6 }; emit(jit.buf, jit.size, a2, 3);

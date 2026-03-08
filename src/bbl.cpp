@@ -32,7 +32,7 @@ static bool bblValueKeyEqual(const BblValue& a, const BblValue& b) {
 // ---------- BblTable ----------
 
 static size_t hashValue(const BblValue& v) {
-    return std::hash<uint64_t>{}(v.bits);
+    return v.bits * 11400714819323198485ULL;
 }
 
 static BblTable::Entry* tableFindEntry(BblTable::Entry* buckets, size_t cap, const BblValue& key) {
