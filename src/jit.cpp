@@ -47,6 +47,7 @@ extern "C" {
     void jitStepLimitExceeded(BblValue* regs, BblState* state, uint32_t unused1, uint32_t unused2);
     void jitEnvGet(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg);
     void jitEnvSet(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg);
+    int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loopPc);
 }
 
 static thread_local bool g_jitError = false;
@@ -705,6 +706,48 @@ void jitEnvSet(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg) 
         }
     }
     state->vm->globals[symId] = regs[srcReg];
+}
+
+int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loopPc) {
+    if (chunk->traceBlacklisted) return 0;
+    if (state->maxSteps > 0) return 0;
+
+    if (!chunk->traceCompiled) {
+        chunk->hotCount++;
+        if (chunk->hotCount < 64) return 0;
+        chunk->hotCount = 0;
+
+        Trace trace = recordTrace(*state, *chunk, loopPc, regs);
+        if (!trace.valid) { chunk->traceBlacklisted = true; return 0; }
+
+        optimizeTrace(*state, trace);
+        JitCode jit = compileTrace(*state, trace);
+        if (!jit.buf) { chunk->traceBlacklisted = true; return 0; }
+
+        chunk->traceCode = jit.buf;
+        chunk->traceCapacity = jit.capacity;
+        chunk->traceCompiled = true;
+        chunk->traceSnapshots = new std::vector<Snapshot>(std::move(trace.snapshots));
+        if (!trace.sunkAllocs.empty())
+            chunk->traceSunkAllocs = new std::vector<SunkAllocation>(std::move(trace.sunkAllocs));
+    }
+
+    JitCode traceJit;
+    traceJit.buf = static_cast<uint8_t*>(chunk->traceCode);
+    traceJit.capacity = chunk->traceCapacity;
+    TraceResult result = executeTrace(traceJit, regs, state);
+
+    if (result.completed) return 1;
+
+    if (chunk->traceSunkAllocs) {
+        for (auto& sunk : *chunk->traceSunkAllocs) {
+            BblTable* tbl = state->allocTable();
+            for (auto& f : sunk.fields)
+                tbl->set(BblValue::makeString(state->intern(f.name)), regs[f.srcReg]);
+            regs[sunk.destReg] = BblValue::makeTable(tbl);
+        }
+    }
+    return 0;
 }
 
 static std::string jitValToStr(BblState& state, const BblValue& v) {
