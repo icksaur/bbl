@@ -1357,6 +1357,11 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     size_t runtimeLineOff = reinterpret_cast<char*>(&dummy.runtimeLine) - reinterpret_cast<char*>(&dummy);
     size_t stepCountOff = reinterpret_cast<char*>(&dummy.stepCount) - reinterpret_cast<char*>(&dummy);
     size_t maxStepsOff = reinterpret_cast<char*>(&dummy.maxSteps) - reinterpret_cast<char*>(&dummy);
+    size_t vmOff = reinterpret_cast<char*>(&dummy.vm) - reinterpret_cast<char*>(&dummy);
+    VmState vmDummy;
+    size_t globalsFlatOff = reinterpret_cast<char*>(&vmDummy.globalsFlat) - reinterpret_cast<char*>(&vmDummy);
+    BblClosure closureDummy;
+    size_t capturesOff = reinterpret_cast<char*>(&closureDummy.captures) - reinterpret_cast<char*>(&closureDummy);
     bool emitStepChecks = (state.maxSteps > 0);
 
     for (size_t i = 0; i < chunk.code.size(); i++) {
@@ -1378,7 +1383,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             closureRegs.erase(A);
         }
         if (op != OP_LOADINT && op != OP_ADD && op != OP_SUB && op != OP_MUL &&
-            op != OP_ADDI && op != OP_SUBI && op != OP_ADDK) {
+            op != OP_ADDI && op != OP_SUBI && op != OP_ADDK && op != OP_MOVE) {
             knownIntRegs.erase(A);
         }
 
@@ -1648,10 +1653,10 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 // load value from [data + symId*8], check non-zero, store to regs[A]
                 uint8_t load_vm[] = { 0x49, 0x8b, 0x84, 0x24 }; // mov rax, [r12+112]
                 emit(jit.buf, jit.size, load_vm, 4);
-                emit32(jit.buf, jit.size, 112);
+                emit32(jit.buf, jit.size, static_cast<uint32_t>(vmOff));
                 uint8_t load_flat[] = { 0x48, 0x8b, 0x80 }; // mov rax, [rax+8288]
                 emit(jit.buf, jit.size, load_flat, 3);
-                emit32(jit.buf, jit.size, 8288);
+                emit32(jit.buf, jit.size, static_cast<uint32_t>(globalsFlatOff));
                 uint8_t load_val[] = { 0x48, 0x8b, 0x80 }; // mov rax, [rax+symId*8]
                 emit(jit.buf, jit.size, load_val, 3);
                 emit32(jit.buf, jit.size, symId * VAL_SIZE);
@@ -1769,35 +1774,6 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                     }
                 }
                 inline_done:;
-            } else if (cit != closureRegs.end()) {
-                BblClosure* callee = cit->second;
-                if (!callee->jitCache) {
-                    BblClosure* proto = callee->jitProto ? callee->jitProto : callee;
-                    if (!proto->jitCache)
-                        proto->jitCache = new JitCode(jitCompile(state, callee->chunk, callee));
-                    callee->jitCache = proto->jitCache;
-                }
-                // Direct call: lea rdi, [rbx + A*8]; mov rsi, r12; mov rdx, r13
-                uint8_t lea[] = { 0x48, 0x8d, 0xbb };
-                emit(jit.buf, jit.size, lea, 3);
-                emit32(jit.buf, jit.size, A * VAL_SIZE);
-                uint8_t movsi[] = { 0x4c, 0x89, 0xe6 };
-                emit(jit.buf, jit.size, movsi, 3);
-                // Load callee's chunk pointer
-                uint8_t movrdx[] = { 0x48, 0xba };
-                emit(jit.buf, jit.size, movrdx, 2);
-                emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>(&callee->chunk));
-                // call callee's JIT code
-                uint8_t movabs[] = { 0x48, 0xb8 };
-                emit(jit.buf, jit.size, movabs, 2);
-                emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>(callee->jitCache->buf));
-                uint8_t call[] = { 0xff, 0xd0 };
-                emit(jit.buf, jit.size, call, 2);
-                emitErrorCheck(jit.buf, jit.size, errorExitPatches);
-                // Result in rax → R[A]
-                uint8_t st1[] = { 0x48, 0x89, 0x83 };
-                emit(jit.buf, jit.size, st1, 3);
-                emit32(jit.buf, jit.size, A * VAL_SIZE);
             } else {
                 emitCallHelper2(jit.buf, jit.size, (void*)jitCall, A, B, &errorExitPatches);
             }
@@ -1928,7 +1904,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             emit(jit.buf, jit.size, and_op, 3);
             uint8_t load_cap[] = { 0x48, 0x8b, 0x80 };
             emit(jit.buf, jit.size, load_cap, 3);
-            emit32(jit.buf, jit.size, 168);
+            emit32(jit.buf, jit.size, static_cast<uint32_t>(capturesOff));
             uint8_t load_elem[] = { 0x48, 0x8b, 0x80 };
             emit(jit.buf, jit.size, load_elem, 3);
             emit32(jit.buf, jit.size, B * VAL_SIZE);
