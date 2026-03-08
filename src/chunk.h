@@ -6,6 +6,7 @@
 
 struct BblValue;
 struct Snapshot;
+struct SunkAllocation;
 
 struct CaptureInfo {
     uint8_t srcType; // 0 = LOCAL, 1 = CAPTURE
@@ -129,6 +130,7 @@ struct Chunk {
     void* traceCode = nullptr;
     size_t traceCapacity = 0;
     std::vector<Snapshot>* traceSnapshots = nullptr;
+    std::vector<SunkAllocation>* traceSunkAllocs = nullptr;
 
     void emitABC(uint8_t op, uint8_t A, uint8_t B, uint8_t C, int line) {
         code.push_back(encodeABC(op, A, B, C));

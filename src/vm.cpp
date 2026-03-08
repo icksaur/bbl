@@ -279,12 +279,15 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                 if (frame->chunk->hotCount >= 64) {
                     Trace trace = recordTrace(state, *frame->chunk, loopPc, frame->regs);
                     if (trace.valid) {
+                        optimizeTrace(state, trace);
                         JitCode jit = compileTrace(state, trace);
                         if (jit.buf) {
                             frame->chunk->traceCode = jit.buf;
                             frame->chunk->traceCapacity = jit.capacity;
                             frame->chunk->traceCompiled = true;
                             frame->chunk->traceSnapshots = new std::vector<Snapshot>(std::move(trace.snapshots));
+                            if (!trace.sunkAllocs.empty())
+                                frame->chunk->traceSunkAllocs = new std::vector<SunkAllocation>(std::move(trace.sunkAllocs));
                         } else {
                             frame->chunk->traceBlacklisted = true;
                         }
@@ -303,8 +306,14 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                     frame->ip = &frame->chunk->code[loopPc + 1];
                     break;
                 }
-                // Side exit — continue interpreting from the loop body
-                // (the trace's registers are already updated)
+                if (frame->chunk->traceSunkAllocs) {
+                    for (auto& sunk : *frame->chunk->traceSunkAllocs) {
+                        BblTable* tbl = state.allocTable();
+                        for (auto& f : sunk.fields)
+                            tbl->set(BblValue::makeString(state.intern(f.name)), frame->regs[f.srcReg]);
+                        frame->regs[sunk.destReg] = BblValue::makeTable(tbl);
+                    }
+                }
             }
 
             if (state.allocCount >= state.gcThreshold) state.gc();

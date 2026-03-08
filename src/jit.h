@@ -22,6 +22,7 @@ struct TraceEntry {
     Chunk* chunk;
     uint8_t regBase;
     bool branchTaken = false;
+    bool eliminated = false;
 };
 
 struct Snapshot {
@@ -30,9 +31,20 @@ struct Snapshot {
     uint8_t regBase;
 };
 
+struct SunkField {
+    std::string name;
+    uint8_t srcReg;
+};
+
+struct SunkAllocation {
+    uint8_t destReg;
+    std::vector<SunkField> fields;
+};
+
 struct Trace {
     std::vector<TraceEntry> entries;
     std::vector<Snapshot> snapshots;
+    std::vector<SunkAllocation> sunkAllocs;
     Chunk* startChunk = nullptr;
     size_t startPc = 0;
     int maxRegs = 0;
@@ -45,5 +57,6 @@ struct TraceResult {
 };
 
 Trace recordTrace(BblState& state, Chunk& chunk, size_t loopPc, BblValue* regs);
+void optimizeTrace(BblState& state, Trace& trace);
 JitCode compileTrace(BblState& state, Trace& trace);
 TraceResult executeTrace(JitCode& jit, BblValue* regs, BblState* state);

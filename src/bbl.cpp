@@ -599,7 +599,7 @@ BblState::~BblState() {
             case GcType::Closure: {
                 auto* c = static_cast<BblClosure*>(obj);
                 if (c->chunk.traceCode) jitFree(c->chunk.traceCode, c->chunk.traceCapacity);
-                delete c->chunk.traceSnapshots;
+                delete c->chunk.traceSnapshots; delete c->chunk.traceSunkAllocs;
                 delete c;
                 break;
             }
@@ -838,7 +838,7 @@ void BblState::gc() {
                 case GcType::Closure: {
                     auto* c = static_cast<BblClosure*>(dead);
                     if (c->chunk.traceCode) jitFree(c->chunk.traceCode, c->chunk.traceCapacity);
-                    delete c->chunk.traceSnapshots;
+                    delete c->chunk.traceSnapshots; delete c->chunk.traceSunkAllocs;
                     delete c;
                     break;
                 }

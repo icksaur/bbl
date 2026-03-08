@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <set>
+#include <unordered_set>
 #include <vector>
 #include "compat.h"
 
@@ -2006,6 +2007,177 @@ Trace recordTrace(BblState& state, Chunk& chunk, size_t loopPc, BblValue* regs) 
     return trace;
 }
 
+static bool traceOpWritesA(uint8_t op) {
+    switch (op) {
+    case OP_LOADK: case OP_LOADNULL: case OP_LOADBOOL: case OP_LOADINT:
+    case OP_ADD: case OP_ADDK: case OP_ADDI: case OP_SUB: case OP_SUBI:
+    case OP_MUL: case OP_DIV: case OP_MOD:
+    case OP_EQ: case OP_NEQ: case OP_LT: case OP_GT: case OP_LTE: case OP_GTE:
+    case OP_NOT: case OP_MOVE:
+    case OP_GETGLOBAL: case OP_ENVGET: case OP_GETCAPTURE:
+    case OP_GETFIELD: case OP_GETINDEX: case OP_LENGTH:
+    case OP_TABLE: case OP_CLOSURE:
+    case OP_BAND: case OP_BOR: case OP_BXOR: case OP_BNOT: case OP_SHL: case OP_SHR:
+        return true;
+    default: return false;
+    }
+}
+
+static bool traceOpReadsReg(uint8_t op, uint8_t A, uint8_t B, uint8_t C, uint8_t reg) {
+    switch (op) {
+    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
+    case OP_EQ: case OP_NEQ: case OP_LT: case OP_GT: case OP_LTE: case OP_GTE:
+    case OP_BAND: case OP_BOR: case OP_BXOR: case OP_SHL: case OP_SHR:
+        return reg == B || reg == C;
+    case OP_ADDI: case OP_SUBI: case OP_NOT: case OP_BNOT: case OP_MOVE:
+    case OP_LENGTH: case OP_SETGLOBAL: case OP_ENVSET: case OP_SETCAPTURE:
+        return reg == A;
+    case OP_ADDK: return reg == B;
+    case OP_GETFIELD: return reg == B;
+    case OP_SETFIELD: return reg == A || reg == B;
+    case OP_GETINDEX: return reg == B || reg == C;
+    case OP_SETINDEX: return reg == A || reg == B || reg == C;
+    case OP_JMPFALSE: case OP_JMPTRUE: return reg == A;
+    case OP_LTJMP: case OP_LEJMP: case OP_GTJMP: case OP_GEJMP: return reg == A || reg == B;
+    case OP_CALL: {
+        uint8_t argc = B;
+        if (reg >= A && reg <= A + argc) return true;
+        return false;
+    }
+    case OP_TABLE: {
+        uint8_t pairs = B;
+        for (int p = 0; p < pairs; p++)
+            if (reg == A + 1 + p * 2 || reg == A + 2 + p * 2) return true;
+        return false;
+    }
+    case OP_RETURN: return reg == A;
+    default: return false;
+    }
+}
+
+static void eliminateDeadStores(Trace& trace) {
+    std::unordered_map<uint8_t, size_t> lastWrite;
+    std::unordered_set<uint8_t> readRegs;
+
+    for (size_t i = 0; i < trace.entries.size(); i++) {
+        auto& e = trace.entries[i];
+        if (e.eliminated) continue;
+        uint8_t op = decodeOP(e.inst);
+        uint8_t A = decodeA(e.inst) + e.regBase;
+        uint8_t B = decodeB(e.inst) + e.regBase;
+        uint8_t C = decodeC(e.inst) + e.regBase;
+
+        for (uint8_t r = 0; r < 255; r++) {
+            if (traceOpReadsReg(op, A, B, C, r)) readRegs.insert(r);
+        }
+
+        if (traceOpWritesA(op)) {
+            auto it = lastWrite.find(A);
+            if (it != lastWrite.end() && readRegs.find(A) == readRegs.end()) {
+                auto& prevEntry = trace.entries[it->second];
+                uint8_t prevOp = decodeOP(prevEntry.inst);
+                if (prevOp == OP_LOADINT || prevOp == OP_LOADK ||
+                    prevOp == OP_LOADNULL || prevOp == OP_LOADBOOL ||
+                    prevOp == OP_MOVE) {
+                    prevEntry.eliminated = true;
+                }
+            }
+            lastWrite[A] = i;
+            readRegs.erase(A);
+        }
+    }
+}
+
+static void sinkAllocations(BblState& state, Trace& trace) {
+    struct AllocInfo {
+        size_t tableIdx;
+        uint8_t reg;
+        bool escaped = false;
+        std::vector<std::pair<size_t, std::string>> setFieldIndices;
+        std::unordered_map<std::string, uint8_t> fieldToReg;
+    };
+
+    std::unordered_map<uint8_t, AllocInfo> allocs;
+
+    for (size_t i = 0; i < trace.entries.size(); i++) {
+        auto& e = trace.entries[i];
+        if (e.eliminated) continue;
+        uint8_t op = decodeOP(e.inst);
+        uint8_t A = decodeA(e.inst) + e.regBase;
+        uint8_t B = decodeB(e.inst) + e.regBase;
+
+        if (op == OP_TABLE) {
+            uint8_t pairCount = decodeB(e.inst);
+            if (pairCount == 0) {
+                allocs[A] = {i, A, false, {}, {}};
+            } else {
+                allocs.erase(A);
+            }
+        } else if (op == OP_SETFIELD) {
+            uint8_t objReg = decodeB(e.inst) + e.regBase;
+            uint8_t nameIdx = decodeC(e.inst);
+            auto it = allocs.find(objReg);
+            if (it != allocs.end() && !it->second.escaped) {
+                std::string fieldName = e.chunk->constants[nameIdx].stringVal()->data;
+                it->second.setFieldIndices.push_back({i, fieldName});
+                it->second.fieldToReg[fieldName] = A;
+            }
+        } else if (op == OP_GETFIELD) {
+            uint8_t objReg = decodeB(e.inst) + e.regBase;
+            uint8_t nameIdx = decodeC(e.inst);
+            auto it = allocs.find(objReg);
+            if (it != allocs.end() && !it->second.escaped) {
+                std::string fieldName = e.chunk->constants[nameIdx].stringVal()->data;
+                auto fit = it->second.fieldToReg.find(fieldName);
+                if (fit != it->second.fieldToReg.end()) {
+                    e.eliminated = true;
+                    e.inst = encodeABC(OP_MOVE, A - e.regBase, fit->second - e.regBase, 0);
+                    e.eliminated = false;
+                }
+            }
+        } else {
+            for (auto& [reg, info] : allocs) {
+                if (info.escaped) continue;
+                if (op == OP_SETGLOBAL || op == OP_ENVSET) {
+                    if (A == reg) info.escaped = true;
+                } else if (op == OP_CALL) {
+                    uint8_t argc = decodeB(e.inst);
+                    for (uint8_t a = A; a <= A + argc; a++)
+                        if (a == reg) info.escaped = true;
+                } else if (op == OP_SETINDEX) {
+                    if (A == reg || B == reg) info.escaped = true;
+                } else if (op == OP_RETURN) {
+                    if (A == reg) info.escaped = true;
+                }
+            }
+        }
+
+        if (traceOpWritesA(op) && op != OP_TABLE) {
+            allocs.erase(A);
+        }
+    }
+
+    for (auto& [reg, info] : allocs) {
+        if (info.escaped) continue;
+        if (info.setFieldIndices.empty()) continue;
+
+        trace.entries[info.tableIdx].eliminated = true;
+        for (auto& [idx, name] : info.setFieldIndices)
+            trace.entries[idx].eliminated = true;
+
+        SunkAllocation sunk;
+        sunk.destReg = info.reg;
+        for (auto& [name, srcReg] : info.fieldToReg)
+            sunk.fields.push_back({name, srcReg});
+        trace.sunkAllocs.push_back(std::move(sunk));
+    }
+}
+
+void optimizeTrace(BblState& state, Trace& trace) {
+    eliminateDeadStores(trace);
+    sinkAllocations(state, trace);
+}
+
 JitCode compileTrace(BblState& state, Trace& trace) {
     JitCode jit;
     jit.capacity = trace.entries.size() * 96 + 1024;
@@ -2019,6 +2191,7 @@ JitCode compileTrace(BblState& state, Trace& trace) {
 
     for (size_t i = 0; i < trace.entries.size(); i++) {
         auto& entry = trace.entries[i];
+        if (entry.eliminated) continue;
         uint32_t inst = entry.inst;
         uint8_t op = decodeOP(inst);
         uint8_t A = decodeA(inst) + entry.regBase;
