@@ -97,7 +97,7 @@ static uint8_t compileExpr(BblState& state, CompilerState& cs, const AstNode& no
                 return dest;
             }
             uint16_t kidx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeInt(static_cast<int64_t>(symId))));
-            cs.chunk.emitABx(OP_GETGLOBAL, dest, kidx, node.line);
+            cs.chunk.emitABx(state.currentEnv ? OP_ENVGET : OP_GETGLOBAL, dest, kidx, node.line);
             return dest;
         }
         case NodeType::List:
@@ -308,7 +308,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
                 if (isFnDef) compileFn(state, cs, node.children[2], target.stringVal, dest);
                 else compileExpr(state, cs, node.children[2], dest);
                 uint16_t kidx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeInt(static_cast<int64_t>(symId))));
-                cs.chunk.emitABx(OP_SETGLOBAL, dest, kidx, node.line);
+                cs.chunk.emitABx(state.currentEnv ? OP_ENVSET : OP_SETGLOBAL, dest, kidx, node.line);
                 return dest;
             }
             // Existing local
@@ -361,8 +361,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
             }
             compileFn(state, cs, fnNode, target.stringVal, dest);
             uint16_t kidx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeInt(static_cast<int64_t>(symId))));
-            cs.chunk.emitABx(OP_SETGLOBAL, dest, kidx, node.line);
-            return dest;
+            cs.chunk.emitABx(state.currentEnv ? OP_ENVSET : OP_SETGLOBAL, dest, kidx, node.line);            return dest;
         }
         compileFn(state, cs, fnNode, target.stringVal, static_cast<uint8_t>(localReg));
         return static_cast<uint8_t>(localReg);
@@ -884,6 +883,7 @@ static void compileFn(BblState& state, CompilerState& cs, const AstNode& node, c
     proto->chunk = std::move(fnCs.chunk);
     proto->arity = fnCs.arity;
     proto->name = assignName;
+    proto->env = state.currentEnv;
     proto->gcNext = state.gcHead; state.gcHead = proto;
 
     uint16_t protoIdx = static_cast<uint16_t>(cs.chunk.addConstant(BblValue::makeClosure(proto)));

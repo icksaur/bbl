@@ -599,6 +599,8 @@ struct BblState {
     bool allowOpenFilesystem = false;
     size_t execDepth = 0;
     static constexpr size_t MAX_EXEC_DEPTH = 64;
+    BblTable* currentEnv = nullptr;
+    std::unordered_map<std::string, BblTable*> moduleCache;
 
     // Pre-interned method name cache for O(1) dispatch
     struct MethodNames {
@@ -649,6 +651,7 @@ struct BblState {
 
     // Symbol ID table
     mutable std::unordered_map<std::string, uint32_t> symbolIds;
+    mutable std::unordered_map<uint32_t, BblString*> symbolNames;
     mutable uint32_t nextSymbolId = 1;
     uint32_t resolveSymbol(const std::string& name) const;
 

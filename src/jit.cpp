@@ -44,6 +44,8 @@ extern "C" {
     void jitWithCleanup(BblValue* regs, BblState* state, uint8_t varReg, uint8_t unused);
     void jitInt(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
     void jitStepLimitExceeded(BblValue* regs, BblState* state, uint32_t unused1, uint32_t unused2);
+    void jitEnvGet(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg);
+    void jitEnvSet(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg);
 }
 
 static thread_local bool g_jitError = false;
@@ -147,6 +149,7 @@ void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, 
     closure->captureDescs = proto->captureDescs;
     closure->captures.resize(proto->captureDescs.size());
     closure->jitProto = proto;
+    closure->env = proto->env;
     closure->gcNext = state->gcHead; state->gcHead = closure;
 
     for (size_t i = 0; i < proto->captureDescs.size(); i++) {
@@ -672,6 +675,48 @@ void jitInt(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
 
 void jitStepLimitExceeded(BblValue*, BblState* state, uint32_t, uint32_t) {
     JIT_ERROR(state, "step limit exceeded: " + std::to_string(state->maxSteps) + " steps");
+}
+
+void jitEnvGet(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg) {
+    BblTable* env = nullptr;
+    if (regs[0].type() == BBL::Type::Fn && regs[0].isClosure())
+        env = regs[0].closureVal()->env;
+    if (!env) env = state->currentEnv;
+    if (env) {
+        auto nit = state->symbolNames.find(symId);
+        if (nit == state->symbolNames.end()) {
+            for (auto& [name, id] : state->symbolIds) {
+                if (id == symId) { nit = state->symbolNames.emplace(symId, state->intern(name)).first; break; }
+            }
+        }
+        if (nit != state->symbolNames.end()) {
+            auto v = env->get(BblValue::makeString(nit->second));
+            if (v) { regs[destReg] = *v; return; }
+        }
+    }
+    auto it = state->vm->globals.find(symId);
+    if (it != state->vm->globals.end()) { regs[destReg] = it->second; return; }
+    JIT_ERROR(state, "undefined variable");
+}
+
+void jitEnvSet(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg) {
+    BblTable* env = nullptr;
+    if (regs[0].type() == BBL::Type::Fn && regs[0].isClosure())
+        env = regs[0].closureVal()->env;
+    if (!env) env = state->currentEnv;
+    if (env) {
+        auto nit = state->symbolNames.find(symId);
+        if (nit == state->symbolNames.end()) {
+            for (auto& [name, id] : state->symbolIds) {
+                if (id == symId) { nit = state->symbolNames.emplace(symId, state->intern(name)).first; break; }
+            }
+        }
+        if (nit != state->symbolNames.end()) {
+            env->set(BblValue::makeString(nit->second), regs[srcReg]);
+            return;
+        }
+    }
+    state->vm->globals[symId] = regs[srcReg];
 }
 
 static std::string jitValToStr(BblState& state, const BblValue& v) {
@@ -1525,6 +1570,27 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             emitCallHelper2(jit.buf, jit.size, (void*)jitSetGlobal, symId, A, &errorExitPatches);
             break;
         }
+        case OP_ENVGET: {
+            uint32_t symId = static_cast<uint32_t>(chunk.constants[Bx].intVal());
+            if (self && self->env) {
+                auto nit = state.symbolNames.find(symId);
+                if (nit != state.symbolNames.end()) {
+                    auto v = self->env->get(BblValue::makeString(nit->second));
+                    if (v && v->type() == BBL::Type::Fn && v->isClosure() && v->closureVal() == self) {
+                        selfRefRegs.insert(A);
+                        hasSelfCalls = true;
+                        break;
+                    }
+                }
+            }
+            emitCallHelper2(jit.buf, jit.size, (void*)jitEnvGet, symId, A, &errorExitPatches);
+            break;
+        }
+        case OP_ENVSET: {
+            uint32_t symId = static_cast<uint32_t>(chunk.constants[Bx].intVal());
+            emitCallHelper2(jit.buf, jit.size, (void*)jitEnvSet, symId, A, &errorExitPatches);
+            break;
+        }
         case OP_CALL: {
             if (emitStepChecks)
                 emitStepCheck(jit.buf, jit.size, stepCountOff, maxStepsOff, errorExitPatches);
@@ -2056,6 +2122,7 @@ JitCode compileTrace(BblState& state, Trace& trace) {
         case OP_EQ: case OP_NEQ: case OP_NOT:
         case OP_LOADBOOL:
         case OP_GETGLOBAL: case OP_SETGLOBAL:
+        case OP_ENVGET: case OP_ENVSET:
         case OP_GETCAPTURE: case OP_SETCAPTURE:
             // Fall back to C helper for complex ops in trace
             // For now, abort the trace compilation

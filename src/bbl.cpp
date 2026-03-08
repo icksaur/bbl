@@ -736,6 +736,10 @@ static void gcMark(BblValue& val) {
                 for (auto& cap : val.closureVal()->captures) {
                     gcMark(cap);
                 }
+                if (val.closureVal()->env && !val.closureVal()->env->marked) {
+                    BblValue envVal = BblValue::makeTable(val.closureVal()->env);
+                    gcMark(envVal);
+                }
             } else if (!val.isCFn() && !val.isClosure() && val.fnVal() && !val.fnVal()->marked) {
                 val.fnVal()->marked = true;
                 for (auto& [name, cap] : val.fnVal()->captures) {
@@ -802,6 +806,17 @@ void BblState::gc() {
         }
         for (auto& [id, val] : vm->globals)
             gcMark(val);
+    }
+
+    if (currentEnv && !currentEnv->marked) {
+        BblValue envVal = BblValue::makeTable(currentEnv);
+        gcMark(envVal);
+    }
+    for (auto& [path, env] : moduleCache) {
+        if (env && !env->marked) {
+            BblValue envVal = BblValue::makeTable(env);
+            gcMark(envVal);
+        }
     }
 
     // Sweep: walk linked list, free unmarked, clear marks on survivors
@@ -2920,6 +2935,56 @@ void BBL::addStdLib(BblState& bbl) {
     BBL::addNet(bbl);
     BBL::addChildStates(bbl, false);
     addSandbox(bbl);
+
+    bbl.defn("import", [](BblState* b) -> int {
+        namespace fs = std::filesystem;
+        const char* pathArg = b->getStringArg(0);
+        fs::path base = b->scriptDir.empty() ? fs::current_path() : fs::path(b->scriptDir);
+        fs::path resolved = fs::weakly_canonical(base / pathArg);
+        std::string key = resolved.string();
+
+        auto cached = b->moduleCache.find(key);
+        if (cached != b->moduleCache.end()) {
+            b->returnValue = BblValue::makeTable(cached->second);
+            b->hasReturn = true;
+            return 1;
+        }
+
+        if (!fs::exists(resolved))
+            throw BBL::Error{"import: file not found: " + key};
+        std::ifstream file(resolved, std::ios::binary);
+        if (!file.is_open())
+            throw BBL::Error{"import: cannot open: " + key};
+        std::ostringstream ss;
+        ss << file.rdbuf();
+
+        BblTable* env = b->allocTable();
+
+        auto savedEnv = b->currentEnv;
+        auto savedFile = b->currentFile;
+        auto savedDir = b->scriptDir;
+        b->currentEnv = env;
+        b->currentFile = resolved.string();
+        b->scriptDir = resolved.parent_path().string();
+
+        try {
+            b->execExpr(ss.str());
+        } catch (...) {
+            b->currentEnv = savedEnv;
+            b->currentFile = savedFile;
+            b->scriptDir = savedDir;
+            throw;
+        }
+        b->currentEnv = savedEnv;
+        b->currentFile = savedFile;
+        b->scriptDir = savedDir;
+
+        b->moduleCache[key] = env;
+
+        b->returnValue = BblValue::makeTable(env);
+        b->hasReturn = true;
+        return 1;
+    });
 }
 
 // ---------- Child States ----------

@@ -4947,6 +4947,68 @@ TEST(test_defn_recursive_bbl) {
     ASSERT_EQ(bbl.execExpr("(defn fib (n) (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2))))) (fib 10)").intVal(), (int64_t)55);
 }
 
+TEST(test_import_basic) {
+    std::ofstream f("/tmp/bbl_test_mod.bbl");
+    f << "(= add1 (fn (x) (+ x 1)))\n(= val 42)\n";
+    f.close();
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"_((= m (import "/tmp/bbl_test_mod.bbl")) (= f m.add1) (f 5))_");
+    ASSERT_EQ(result.intVal(), (int64_t)6);
+}
+
+TEST(test_import_isolation) {
+    std::ofstream f("/tmp/bbl_test_iso.bbl");
+    f << "(= secret 99)\n";
+    f.close();
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"_((= m (import "/tmp/bbl_test_iso.bbl")))_");
+    ASSERT_EQ(bbl.execExpr("m.secret").intVal(), (int64_t)99);
+    bool caught = false;
+    try { bbl.execExpr("secret"); } catch (...) { caught = true; }
+    ASSERT_TRUE(caught);
+}
+
+TEST(test_import_cache) {
+    std::ofstream f("/tmp/bbl_test_cache.bbl");
+    f << "(= x 1)\n";
+    f.close();
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"_((= a (import "/tmp/bbl_test_cache.bbl")) (= b (import "/tmp/bbl_test_cache.bbl")) (= a.tag 777))_");
+    ASSERT_EQ(bbl.execExpr("b.tag").intVal(), (int64_t)777);
+}
+
+TEST(test_import_stdlib_access) {
+    std::ofstream f("/tmp/bbl_test_stdlib.bbl");
+    f << "(= doit (fn () (print 42) 1))\n";
+    f.close();
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"_((= m (import "/tmp/bbl_test_stdlib.bbl")) (= f m.doit) (f))_");
+    ASSERT_EQ(result.intVal(), (int64_t)1);
+}
+
+TEST(test_import_inter_module_calls) {
+    std::ofstream f("/tmp/bbl_test_inter.bbl");
+    f << "(= helper (fn (x) (+ x 10)))\n(= go (fn (x) (helper x)))\n";
+    f.close();
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"_((= m (import "/tmp/bbl_test_inter.bbl")) (= f m.go) (f 5))_");
+    ASSERT_EQ(result.intVal(), (int64_t)15);
+}
+
+TEST(test_import_recursive_fn) {
+    std::ofstream f("/tmp/bbl_test_rec.bbl");
+    f << "(= fib (fn (n) (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2))))))\n";
+    f.close();
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"_((= m (import "/tmp/bbl_test_rec.bbl")) (= f m.fib) (f 10))_");
+    ASSERT_EQ(result.intVal(), (int64_t)55);
+}
+
+TEST(test_execfile_unchanged) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_EQ(bbl.execExpr("(= x 10) (+ x 1)").intVal(), (int64_t)11);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -5651,6 +5713,15 @@ int main() {
     RUN(test_sandbox_no_nested_sandbox);
     RUN(test_defn_basic_bbl);
     RUN(test_defn_recursive_bbl);
+
+    std::cout << "--- Module Import ---" << std::endl;
+    RUN(test_import_basic);
+    RUN(test_import_isolation);
+    RUN(test_import_cache);
+    RUN(test_import_stdlib_access);
+    RUN(test_import_inter_module_calls);
+    RUN(test_import_recursive_fn);
+    RUN(test_execfile_unchanged);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

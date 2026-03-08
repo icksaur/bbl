@@ -227,6 +227,37 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
             state.vm->globals[symId] = R(A);
             break;
         }
+        case OP_ENVGET: {
+            uint32_t symId = static_cast<uint32_t>(K(Bx).intVal());
+            BblTable* env = nullptr;
+            if (R(0).type() == BBL::Type::Fn && R(0).isClosure()) env = R(0).closureVal()->env;
+            if (!env) env = state.currentEnv;
+            if (env) {
+                auto nit = state.symbolNames.find(symId);
+                if (nit != state.symbolNames.end()) {
+                    auto v = env->get(BblValue::makeString(nit->second));
+                    if (v) { R(A) = *v; break; }
+                }
+            }
+            auto it = state.vm->globals.find(symId);
+            if (it != state.vm->globals.end()) { R(A) = it->second; break; }
+            throw BBL::Error{"undefined variable"};
+        }
+        case OP_ENVSET: {
+            uint32_t symId = static_cast<uint32_t>(K(Bx).intVal());
+            BblTable* env = nullptr;
+            if (R(0).type() == BBL::Type::Fn && R(0).isClosure()) env = R(0).closureVal()->env;
+            if (!env) env = state.currentEnv;
+            if (env) {
+                auto nit = state.symbolNames.find(symId);
+                if (nit != state.symbolNames.end()) {
+                    env->set(BblValue::makeString(nit->second), R(A));
+                    break;
+                }
+            }
+            state.vm->globals[symId] = R(A);
+            break;
+        }
         case OP_GETCAPTURE:
             if (!R(0).isClosure()) throw BBL::Error{"no closure"};
             R(A) = R(0).closureVal()->captures[B];

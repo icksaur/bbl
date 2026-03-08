@@ -17,6 +17,7 @@ struct BblClosure : GcObj {
     std::vector<CaptureInfo> captureDescs;
     JitCode* jitCache = nullptr;
     BblClosure* jitProto = nullptr;
+    BblTable* env = nullptr;
     BblClosure() { gcType = GcType::Closure; }
 };
 

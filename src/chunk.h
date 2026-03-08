@@ -49,6 +49,8 @@ enum OpCode : uint8_t {
     OP_MOVE,
     OP_GETGLOBAL,
     OP_SETGLOBAL,
+    OP_ENVGET,
+    OP_ENVSET,
     OP_GETCAPTURE,
     OP_SETCAPTURE,
 
