@@ -1511,6 +1511,8 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     BblTable tblDummy;
     size_t tblBucketsOff = reinterpret_cast<char*>(&tblDummy.buckets) - reinterpret_cast<char*>(&tblDummy);
     size_t tblCapacityOff = reinterpret_cast<char*>(&tblDummy.capacity) - reinterpret_cast<char*>(&tblDummy);
+    size_t tblArrayOff = reinterpret_cast<char*>(&tblDummy.array) - reinterpret_cast<char*>(&tblDummy);
+    size_t tblAsizeOff = reinterpret_cast<char*>(&tblDummy.asize) - reinterpret_cast<char*>(&tblDummy);
     size_t gcTypeOff = reinterpret_cast<char*>(&tblDummy.gcType) - reinterpret_cast<char*>(&tblDummy);
     uint8_t tableGcType = static_cast<uint8_t>(GcType::Table);
 
@@ -2333,15 +2335,10 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 size_t donePatch1 = jit.size;
                 emit32(jit.buf, jit.size, 0);
 
-                // not_found: store null
+                // not_found → also fall to slow path (key might be in array part)
                 jit.buf[notFoundPatch] = static_cast<uint8_t>(jit.size - notFoundPatch - 1);
-                uint8_t movabs_null[] = { 0x48, 0xb8 };
-                emit(jit.buf, jit.size, movabs_null, 2);
-                emit64(jit.buf, jit.size, NB_TAG_NULL);
-                emit(jit.buf, jit.size, stval, 3);
-                emit32(jit.buf, jit.size, A * VAL_SIZE); // mov [rbx+A*8], rax
                 emit(jit.buf, jit.size, jmprel32, 1);
-                size_t donePatch2 = jit.size;
+                size_t notFoundSlowPatch = jit.size;
                 emit32(jit.buf, jit.size, 0);
 
                 // slow_path: call C helper
@@ -2351,11 +2348,11 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 }
                 patchRel32(jit.buf, capPatch, jit.size);
                 patchRel32(jit.buf, collisionPatch, jit.size);
+                patchRel32(jit.buf, notFoundSlowPatch, jit.size);
                 emitCallHelper2(jit.buf, jit.size, (void*)jitTableGet, A, B, &errorExitPatches);
 
                 // done:
                 patchRel32(jit.buf, donePatch1, jit.size);
-                patchRel32(jit.buf, donePatch2, jit.size);
 
             } else if (methodStr == state.m.set) {
                 // Inline table set: type guard → hash probe → update value (existing keys only)

@@ -70,13 +70,41 @@ static void tableGrow(BblTable* tbl) {
 }
 
 std::expected<BblValue, BBL::GetError> BblTable::get(const BblValue& key) const {
+    if (key.type() == BBL::Type::Int) {
+        int64_t k = key.intVal();
+        if (k >= 0 && static_cast<uint64_t>(k) < asize) {
+            BblValue v = array[k];
+            if (v.bits != 0) return v;
+            return std::unexpected(BBL::GetError::NotFound);
+        }
+    }
     if (count == 0 || capacity == 0) return std::unexpected(BBL::GetError::NotFound);
     auto* e = tableFindEntry(buckets, capacity, key);
     if (!e || !e->isOccupied()) return std::unexpected(BBL::GetError::NotFound);
     return e->val;
 }
 
+void BblTable::arrayGrow(uint32_t minSize) {
+    uint32_t newSize = asize ? asize : 4;
+    while (newSize < minSize) newSize *= 2;
+    auto* newArr = static_cast<BblValue*>(calloc(newSize, sizeof(BblValue)));
+    if (array) { memcpy(newArr, array, asize * sizeof(BblValue)); free(array); }
+    array = newArr;
+    asize = newSize;
+}
+
 void BblTable::set(const BblValue& key, const BblValue& val) {
+    if (key.type() == BBL::Type::Int) {
+        int64_t k = key.intVal();
+        if (k >= 0 && k < 1000000) {
+            if (static_cast<uint64_t>(k) >= asize) arrayGrow(static_cast<uint32_t>(k) + 1);
+            bool isNew = (array[k].bits == 0);
+            array[k] = val;
+            if (isNew) { count++; delete order; order = nullptr; }
+            if (k >= nextIntKey) nextIntKey = k + 1;
+            return;
+        }
+    }
     if (capacity == 0 || count + 1 > capacity * 3 / 4) tableGrow(this);
     auto* e = tableFindEntry(buckets, capacity, key);
     bool isNew = !e->isOccupied();
@@ -92,12 +120,25 @@ void BblTable::set(const BblValue& key, const BblValue& val) {
 }
 
 bool BblTable::has(const BblValue& key) const {
+    if (key.type() == BBL::Type::Int) {
+        int64_t k = key.intVal();
+        if (k >= 0 && static_cast<uint64_t>(k) < asize) return array[k].bits != 0;
+    }
     if (count == 0 || capacity == 0) return false;
     auto* e = tableFindEntry(buckets, capacity, key);
     return e && e->isOccupied();
 }
 
 bool BblTable::del(const BblValue& key) {
+    if (key.type() == BBL::Type::Int) {
+        int64_t k = key.intVal();
+        if (k >= 0 && static_cast<uint64_t>(k) < asize && array[k].bits != 0) {
+            array[k].bits = 0;
+            count--;
+            delete order; order = nullptr;
+            return true;
+        }
+    }
     if (count == 0 || capacity == 0) return false;
     auto* e = tableFindEntry(buckets, capacity, key);
     if (!e || !e->isOccupied()) return false;
@@ -112,6 +153,9 @@ void BblTable::ensureOrder() {
     if (order) return;
     order = new std::vector<BblValue>();
     order->reserve(count);
+    for (uint32_t i = 0; i < asize; i++) {
+        if (array[i].bits != 0) order->push_back(BblValue::makeInt(i));
+    }
     for (uint32_t i = 0; i < capacity; i++) {
         if (buckets[i].isOccupied()) order->push_back(buckets[i].key);
     }
@@ -765,6 +809,12 @@ static void gcMark(BblValue& val) {
         case BBL::Type::Table:
             if (val.tableVal() && !val.tableVal()->marked) {
                 val.tableVal()->marked = true;
+                for (uint32_t i = 0; i < val.tableVal()->asize; i++) {
+                    if (val.tableVal()->array[i].bits != 0) {
+                        BblValue av = val.tableVal()->array[i];
+                        gcMark(av);
+                    }
+                }
                 for (uint32_t i = 0; i < val.tableVal()->capacity; i++) {
                     auto& e = val.tableVal()->buckets[i];
                     if (e.isOccupied()) {

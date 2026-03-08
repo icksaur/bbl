@@ -326,9 +326,11 @@ struct BblTable : GcObj {
     uint32_t count = 0;
     int64_t nextIntKey = 0;
     std::vector<BblValue>* order = nullptr;
+    BblValue* array = nullptr;
+    uint32_t asize = 0;
     Entry inlineBuckets[4];
 
-    ~BblTable() { if (buckets != inlineBuckets) free(buckets); delete order; }
+    ~BblTable() { if (buckets != inlineBuckets) free(buckets); delete order; free(array); }
     BblTable() {
         gcType = GcType::Table;
         buckets = inlineBuckets;
@@ -344,6 +346,7 @@ struct BblTable : GcObj {
     bool has(const BblValue& key) const;
     bool del(const BblValue& key);
     void ensureOrder();
+    void arrayGrow(uint32_t minSize);
 };
 
 struct BblFn : GcObj {
