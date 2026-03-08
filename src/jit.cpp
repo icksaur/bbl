@@ -1106,6 +1106,21 @@ static size_t emitCompareJmp(uint8_t* buf, size_t& pos, int A, int B, uint8_t jc
     return p;
 }
 
+static size_t emitCompareJmpDirect(uint8_t* buf, size_t& pos, int A, int B, uint8_t jccByte) {
+    // Both operands known to be TAG_INT — compare NaN-boxed values directly
+    uint8_t mov1[] = { 0x48, 0x8b, 0x83 };
+    emit(buf, pos, mov1, 3);
+    emit32(buf, pos, A * VAL_SIZE);
+    uint8_t cmp[] = { 0x48, 0x3b, 0x83 }; // cmp rax, [rbx + B*8]
+    emit(buf, pos, cmp, 3);
+    emit32(buf, pos, B * VAL_SIZE);
+    uint8_t jcc[] = { 0x0f, jccByte };
+    emit(buf, pos, jcc, 2);
+    size_t p = pos;
+    emit32(buf, pos, 0);
+    return p;
+}
+
 static size_t emitLtjmp(uint8_t* buf, size_t& pos, int A, int B) {
     return emitCompareJmp(buf, pos, A, B, 0x8c);
 }
@@ -1296,9 +1311,30 @@ static void emitCmp(uint8_t* buf, size_t& pos, int A, int B, int C, uint8_t jccO
     emit32(buf, pos, A * VAL_SIZE);
 }
 
+static void emitCmpDirect(uint8_t* buf, size_t& pos, int A, int B, int C, uint8_t jccOpcode) {
+    uint8_t mov1[] = { 0x48, 0x8b, 0x83 };
+    emit(buf, pos, mov1, 3);
+    emit32(buf, pos, B * VAL_SIZE);
+    uint8_t cmp[] = { 0x48, 0x3b, 0x83 }; // cmp rax, [rbx + C*8]
+    emit(buf, pos, cmp, 3);
+    emit32(buf, pos, C * VAL_SIZE);
+    uint8_t setcc[] = { 0x0f, jccOpcode, 0xc0 };
+    emit(buf, pos, setcc, 3);
+    uint8_t movzx[] = { 0x0f, 0xb6, 0xc0 };
+    emit(buf, pos, movzx, 3);
+    uint8_t movabs[] = { 0x48, 0xb9 };
+    emit(buf, pos, movabs, 2);
+    emit64(buf, pos, NB_TAG_BOOL);
+    uint8_t orOp[] = { 0x48, 0x09, 0xc8 };
+    emit(buf, pos, orOp, 3);
+    uint8_t store[] = { 0x48, 0x89, 0x83 };
+    emit(buf, pos, store, 3);
+    emit32(buf, pos, A * VAL_SIZE);
+}
+
 struct JumpPatch {
-    size_t patchOffset;  // native byte offset of rel32 to patch
-    size_t targetInst;   // bytecode instruction index to jump to
+    size_t patchOffset;
+    size_t targetInst;
 };
 
 JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
@@ -1563,22 +1599,30 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
 
         case OP_LTJMP: {
-            size_t p = emitLtjmp(jit.buf, jit.size, A, B);
-            patches.push_back({p, i + 2}); // skip next instruction (the JMP)
+            bool direct = knownIntRegs.count(A) && knownIntRegs.count(B);
+            size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8c)
+                              : emitLtjmp(jit.buf, jit.size, A, B);
+            patches.push_back({p, i + 2});
             break;
         }
         case OP_LEJMP: {
-            size_t p = emitLejmp(jit.buf, jit.size, A, B);
+            bool direct = knownIntRegs.count(A) && knownIntRegs.count(B);
+            size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8e)
+                              : emitLejmp(jit.buf, jit.size, A, B);
             patches.push_back({p, i + 2});
             break;
         }
         case OP_GTJMP: {
-            size_t p = emitGtjmp(jit.buf, jit.size, A, B);
+            bool direct = knownIntRegs.count(A) && knownIntRegs.count(B);
+            size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8f)
+                              : emitGtjmp(jit.buf, jit.size, A, B);
             patches.push_back({p, i + 2});
             break;
         }
         case OP_GEJMP: {
-            size_t p = emitGejmp(jit.buf, jit.size, A, B);
+            bool direct = knownIntRegs.count(A) && knownIntRegs.count(B);
+            size_t p = direct ? emitCompareJmpDirect(jit.buf, jit.size, A, B, 0x8d)
+                              : emitGejmp(jit.buf, jit.size, A, B);
             patches.push_back({p, i + 2});
             break;
         }
@@ -1838,12 +1882,12 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
 
-        case OP_EQ: emitCmp(jit.buf, jit.size, A, B, C, 0x94); break;  // sete
-        case OP_NEQ: emitCmp(jit.buf, jit.size, A, B, C, 0x95); break; // setne
-        case OP_LT: emitCmp(jit.buf, jit.size, A, B, C, 0x9c); break;  // setl
-        case OP_GT: emitCmp(jit.buf, jit.size, A, B, C, 0x9f); break;  // setg
-        case OP_LTE: emitCmp(jit.buf, jit.size, A, B, C, 0x9e); break; // setle
-        case OP_GTE: emitCmp(jit.buf, jit.size, A, B, C, 0x9d); break; // setge
+        case OP_EQ:  { bool d = knownIntRegs.count(B) && knownIntRegs.count(C); (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x94); break; }
+        case OP_NEQ: { bool d = knownIntRegs.count(B) && knownIntRegs.count(C); (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x95); break; }
+        case OP_LT:  { bool d = knownIntRegs.count(B) && knownIntRegs.count(C); (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x9c); break; }
+        case OP_GT:  { bool d = knownIntRegs.count(B) && knownIntRegs.count(C); (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x9f); break; }
+        case OP_LTE: { bool d = knownIntRegs.count(B) && knownIntRegs.count(C); (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x9e); break; }
+        case OP_GTE: { bool d = knownIntRegs.count(B) && knownIntRegs.count(C); (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x9d); break; }
 
         case OP_DIV:
             emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((3 << 16) | (B << 8) | C), &errorExitPatches);
