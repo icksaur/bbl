@@ -1629,7 +1629,41 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                     break;
                 }
             }
-            emitCallHelper2(jit.buf, jit.size, (void*)jitGetGlobal, symId, A, &errorExitPatches);
+            if (symId < state.vm->globalsFlat.size()) {
+                // Inline: load vm ptr from [r12+112], load globalsFlat.data() from [vm+8288],
+                // load value from [data + symId*8], check non-zero, store to regs[A]
+                uint8_t load_vm[] = { 0x49, 0x8b, 0x84, 0x24 }; // mov rax, [r12+112]
+                emit(jit.buf, jit.size, load_vm, 4);
+                emit32(jit.buf, jit.size, 112);
+                uint8_t load_flat[] = { 0x48, 0x8b, 0x80 }; // mov rax, [rax+8288]
+                emit(jit.buf, jit.size, load_flat, 3);
+                emit32(jit.buf, jit.size, 8288);
+                uint8_t load_val[] = { 0x48, 0x8b, 0x80 }; // mov rax, [rax+symId*8]
+                emit(jit.buf, jit.size, load_val, 3);
+                emit32(jit.buf, jit.size, symId * VAL_SIZE);
+                // test rax, rax; jz fallback
+                uint8_t test[] = { 0x48, 0x85, 0xc0 };
+                emit(jit.buf, jit.size, test, 3);
+                uint8_t jz[] = { 0x74 };
+                emit(jit.buf, jit.size, jz, 1);
+                size_t fallbackPatch = jit.size;
+                emit8(jit.buf, jit.size, 0);
+                // Store to regs[A]
+                uint8_t store[] = { 0x48, 0x89, 0x83 };
+                emit(jit.buf, jit.size, store, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE);
+                // jmp done
+                uint8_t jmpDone[] = { 0xeb };
+                emit(jit.buf, jit.size, jmpDone, 1);
+                size_t donePatch = jit.size;
+                emit8(jit.buf, jit.size, 0);
+                // fallback: call C helper
+                jit.buf[fallbackPatch] = static_cast<uint8_t>(jit.size - fallbackPatch - 1);
+                emitCallHelper2(jit.buf, jit.size, (void*)jitGetGlobal, symId, A, &errorExitPatches);
+                jit.buf[donePatch] = static_cast<uint8_t>(jit.size - donePatch - 1);
+            } else {
+                emitCallHelper2(jit.buf, jit.size, (void*)jitGetGlobal, symId, A, &errorExitPatches);
+            }
             break;
         }
         case OP_SETGLOBAL: {
