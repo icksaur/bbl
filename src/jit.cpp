@@ -211,6 +211,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         else if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(tbl->length()));
         else if (methodStr == state->m.keys) {
             BblTable* keys = state->allocTable(); int64_t i = 0;
+            tbl->ensureOrder();
             if (tbl->order) for (auto& k : *tbl->order) keys->set(BblValue::makeInt(i++), k);
             regs[base] = BblValue::makeTable(keys);
         } else if (methodStr == state->m.push) {
@@ -218,6 +219,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             regs[base] = BblValue::makeNull();
         } else if (methodStr == state->m.pop) {
             bool found = false;
+            tbl->ensureOrder();
             if (tbl->order) {
                 for (auto it = tbl->order->rbegin(); it != tbl->order->rend(); ++it) {
                     if (it->type() == BBL::Type::Int) {
@@ -231,6 +233,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             if (!found) JIT_ERROR(state, "pop: no integer keys");
         } else if (methodStr == state->m.at) {
             size_t idx = static_cast<size_t>(args[0].intVal());
+            tbl->ensureOrder();
             if (!tbl->order || idx >= tbl->order->size()) JIT_ERROR(state, "table index out of range");
             BblValue key = (*tbl->order)[idx];
             regs[base] = tbl->get(key).value_or(BblValue::makeNull());

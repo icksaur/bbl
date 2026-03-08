@@ -343,6 +343,7 @@ struct BblTable : GcObj {
     void set(const BblValue& key, const BblValue& val);
     bool has(const BblValue& key) const;
     bool del(const BblValue& key);
+    void ensureOrder();
 };
 
 struct BblFn : GcObj {

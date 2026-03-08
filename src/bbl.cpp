@@ -85,8 +85,7 @@ void BblTable::set(const BblValue& key, const BblValue& val) {
     
     if (isNew) {
         count++;
-        if (!order) order = new std::vector<BblValue>();
-        order->push_back(key);
+        delete order; order = nullptr;
     }
     if (key.type() == BBL::Type::Int && key.intVal() >= nextIntKey)
         nextIntKey = key.intVal() + 1;
@@ -105,12 +104,17 @@ bool BblTable::del(const BblValue& key) {
     e->key.bits = BblTable::TOMBSTONE_KEY;
     e->val = BblValue::makeNull();
     count--;
-    if (order) {
-        for (auto it = order->begin(); it != order->end(); ++it) {
-            if (bblValueKeyEqual(*it, key)) { order->erase(it); break; }
-        }
-    }
+    delete order; order = nullptr;
     return true;
+}
+
+void BblTable::ensureOrder() {
+    if (order) return;
+    order = new std::vector<BblValue>();
+    order->reserve(count);
+    for (uint32_t i = 0; i < capacity; i++) {
+        if (buckets[i].isOccupied()) order->push_back(buckets[i].key);
+    }
 }
 
 // ---------- BblValue eq ----------
@@ -2832,6 +2836,7 @@ void BBL::addCore(BblState& bbl) {
                     return arr;
                 }
                 yyjson_mut_val* obj = yyjson_mut_obj(doc);
+                tbl->ensureOrder();
                 if (tbl->order) for (auto& k : *tbl->order) {
                     auto v = tbl->get(k).value_or(BblValue::makeNull());
                     std::string ks = k.type() == BBL::Type::String ? k.stringVal()->data : std::to_string(k.intVal());
@@ -3031,6 +3036,7 @@ static int bblChildRecvVec(BblState* bbl);
 
 static BblMessage serializeMessage(BblState* bbl, BblTable* table, BblValue* vecArg) {
     BblMessage msg;
+    if (!table->order) table->ensureOrder();
     if (!table->order) return msg;
     for (auto& k : *table->order) {
         if (k.type() != BBL::Type::String)
