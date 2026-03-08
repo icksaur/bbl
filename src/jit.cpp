@@ -1344,6 +1344,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     std::unordered_map<uint8_t, BblClosure*> closureRegs;
     std::set<uint8_t> selfRefRegs;
     bool hasSelfCalls = false;
+    std::set<uint8_t> knownIntRegs;
     std::vector<size_t> selfCallPatches;
     std::vector<size_t> errorExitPatches;
 
@@ -1376,6 +1377,10 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             selfRefRegs.erase(A);
             closureRegs.erase(A);
         }
+        if (op != OP_LOADINT && op != OP_ADD && op != OP_SUB && op != OP_MUL &&
+            op != OP_ADDI && op != OP_SUBI && op != OP_ADDK) {
+            knownIntRegs.erase(A);
+        }
 
         emitLineStore(jit.buf, jit.size, runtimeLineOff, lineNum);
 
@@ -1385,9 +1390,11 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         case OP_LOADINT:
             emitLoadInt(jit.buf, jit.size, A, sBx);
+            knownIntRegs.insert(A);
             break;
         case OP_LOADNULL:
             emitLoadNull(jit.buf, jit.size, A);
+            knownIntRegs.erase(A);
             break;
         case OP_LOADBOOL: {
             uint64_t val = NB_TAG_BOOL | (B ? 1ULL : 0ULL);
@@ -1401,10 +1408,13 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         }
         case OP_MOVE:
             emitMove(jit.buf, jit.size, A, B);
+            if (knownIntRegs.count(B)) knownIntRegs.insert(A);
+            else knownIntRegs.erase(A);
             break;
         case OP_ADD: {
-            if (hasSelfCalls) {
+            if (hasSelfCalls || (knownIntRegs.count(B) && knownIntRegs.count(C))) {
                 emitAdd(jit.buf, jit.size, A, B, C);
+                knownIntRegs.insert(A);
                 break;
             }
             // Type guard: if R[B] and R[C] are both int, fast path
@@ -1447,7 +1457,10 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
         case OP_ADDI: {
-            // Type guard: if R[A] is int, fast path
+            if (knownIntRegs.count(A)) {
+                emitAddi(jit.buf, jit.size, A, sBx);
+                break;
+            }
             uint8_t ld[] = { 0x48, 0x8b, 0x83 };
             emit(jit.buf, jit.size, ld, 3);
             emit32(jit.buf, jit.size, A * VAL_SIZE);
@@ -1495,8 +1508,9 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             break;
         }
         case OP_SUB: {
-            if (hasSelfCalls) {
+            if (hasSelfCalls || (knownIntRegs.count(B) && knownIntRegs.count(C))) {
                 emitSub(jit.buf, jit.size, A, B, C);
+                knownIntRegs.insert(A);
                 break;
             }
             uint8_t ld[] = { 0x48, 0x8b, 0x83 };
@@ -1755,6 +1769,35 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                     }
                 }
                 inline_done:;
+            } else if (cit != closureRegs.end()) {
+                BblClosure* callee = cit->second;
+                if (!callee->jitCache) {
+                    BblClosure* proto = callee->jitProto ? callee->jitProto : callee;
+                    if (!proto->jitCache)
+                        proto->jitCache = new JitCode(jitCompile(state, callee->chunk, callee));
+                    callee->jitCache = proto->jitCache;
+                }
+                // Direct call: lea rdi, [rbx + A*8]; mov rsi, r12; mov rdx, r13
+                uint8_t lea[] = { 0x48, 0x8d, 0xbb };
+                emit(jit.buf, jit.size, lea, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE);
+                uint8_t movsi[] = { 0x4c, 0x89, 0xe6 };
+                emit(jit.buf, jit.size, movsi, 3);
+                // Load callee's chunk pointer
+                uint8_t movrdx[] = { 0x48, 0xba };
+                emit(jit.buf, jit.size, movrdx, 2);
+                emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>(&callee->chunk));
+                // call callee's JIT code
+                uint8_t movabs[] = { 0x48, 0xb8 };
+                emit(jit.buf, jit.size, movabs, 2);
+                emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>(callee->jitCache->buf));
+                uint8_t call[] = { 0xff, 0xd0 };
+                emit(jit.buf, jit.size, call, 2);
+                emitErrorCheck(jit.buf, jit.size, errorExitPatches);
+                // Result in rax → R[A]
+                uint8_t st1[] = { 0x48, 0x89, 0x83 };
+                emit(jit.buf, jit.size, st1, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE);
             } else {
                 emitCallHelper2(jit.buf, jit.size, (void*)jitCall, A, B, &errorExitPatches);
             }
