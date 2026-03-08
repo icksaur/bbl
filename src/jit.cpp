@@ -725,6 +725,9 @@ int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loo
         if (!trace.valid) { chunk->traceBlacklisted = true; return -1; }
 
         optimizeTrace(*state, trace);
+        for (size_t ti = 0; ti < trace.entries.size(); ti++) {
+            auto& e = trace.entries[ti];
+        }
         JitCode jit = compileTrace(*state, trace);
         if (!jit.buf) { chunk->traceBlacklisted = true; return -1; }
 
@@ -739,6 +742,7 @@ int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loo
     JitCode traceJit;
     traceJit.buf = static_cast<uint8_t*>(chunk->traceCode);
     traceJit.capacity = chunk->traceCapacity;
+
     TraceResult result = executeTrace(traceJit, regs, state);
 
     if (chunk->traceSunkAllocs) {
@@ -1594,13 +1598,21 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
 
             int target = static_cast<int>(i) + 1 - sBx;
             bool loopHasTable = false;
+            bool loopHasFloat = false;
             if (!emitStepChecks) {
                 for (int bi = target; bi < static_cast<int>(i); bi++) {
-                    if (decodeOP(chunk.code[bi]) == OP_TABLE) { loopHasTable = true; break; }
+                    uint8_t bop = decodeOP(chunk.code[bi]);
+                    if (bop == OP_TABLE) loopHasTable = true;
+                    if (bop == OP_DIV) loopHasFloat = true;
+                    if (bop == OP_LOADK) {
+                        uint16_t kidx = decodeBx(chunk.code[bi]);
+                        if (kidx < chunk.constants.size() && chunk.constants[kidx].type() == BBL::Type::Float)
+                            loopHasFloat = true;
+                    }
                 }
             }
 
-            if (false && loopHasTable) {
+            if (loopHasTable && !loopHasFloat) {
                 uint8_t a1[] = { 0x48, 0x89, 0xdf };
                 emit(jit.buf, jit.size, a1, 3);
                 uint8_t a2[] = { 0x4c, 0x89, 0xe6 };
@@ -2250,6 +2262,7 @@ static void sinkAllocations(BblState& state, Trace& trace) {
     };
 
     std::unordered_map<uint8_t, AllocInfo> allocs;
+    std::unordered_map<uint8_t, uint8_t> aliases;
 
     for (size_t i = 0; i < trace.entries.size(); i++) {
         auto& e = trace.entries[i];
@@ -2314,18 +2327,29 @@ static void sinkAllocations(BblState& state, Trace& trace) {
                 }
             }
         } else {
+            // MOVE copies reference — track alias
+            if (op == OP_MOVE) {
+                auto it = allocs.find(B);
+                if (it != allocs.end() && !it->second.escaped) {
+                    aliases[A] = it->second.reg;
+                }
+            }
+            auto resolveAlias = [&](uint8_t r) -> uint8_t {
+                auto ait = aliases.find(r);
+                return ait != aliases.end() ? ait->second : r;
+            };
             for (auto& [reg, info] : allocs) {
                 if (info.escaped) continue;
                 if (op == OP_SETGLOBAL || op == OP_ENVSET) {
-                    if (A == reg) info.escaped = true;
+                    if (resolveAlias(A) == reg) info.escaped = true;
                 } else if (op == OP_CALL) {
                     uint8_t argc = decodeB(e.inst);
                     for (uint8_t a = A; a <= A + argc; a++)
-                        if (a == reg) info.escaped = true;
+                        if (resolveAlias(a) == reg) info.escaped = true;
                 } else if (op == OP_SETINDEX) {
-                    if (A == reg || B == reg) info.escaped = true;
+                    if (resolveAlias(A) == reg || resolveAlias(B) == reg) info.escaped = true;
                 } else if (op == OP_RETURN) {
-                    if (A == reg) info.escaped = true;
+                    if (resolveAlias(A) == reg) info.escaped = true;
                 }
             }
         }
@@ -2368,6 +2392,21 @@ static void sinkAllocations(BblState& state, Trace& trace) {
         for (auto& [name, srcReg] : info.fieldToReg)
             sunk.fields.push_back({name, srcReg});
         trace.sunkAllocs.push_back(std::move(sunk));
+
+        for (auto& [aliasReg, origReg] : aliases) {
+            if (origReg == info.reg) {
+                for (size_t j = info.tableIdx + 1; j < trace.entries.size(); j++) {
+                    auto& ej = trace.entries[j];
+                    if (ej.eliminated) continue;
+                    if (decodeOP(ej.inst) == OP_MOVE &&
+                        decodeA(ej.inst) + ej.regBase == aliasReg &&
+                        decodeB(ej.inst) + ej.regBase == info.reg) {
+                        ej.eliminated = true;
+                        break;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2440,26 +2479,26 @@ JitCode compileTrace(BblState& state, Trace& trace) {
             break;
         }
         case OP_LTJMP: {
-            size_t p = emitLtjmp(jit.buf, jit.size, A, B);
+            size_t p = emitCompareJmp(jit.buf, jit.size, A, B, 0x8d); // jge = exit when NOT less
             trace.snapshots.push_back({entry.chunk,
                 static_cast<size_t>(&entry.chunk->code[0] - entry.chunk->code.data()) + i, entry.regBase});
             errorExitPatches.push_back(p);
             break;
         }
         case OP_LEJMP: {
-            size_t p = emitLejmp(jit.buf, jit.size, A, B);
+            size_t p = emitCompareJmp(jit.buf, jit.size, A, B, 0x8f); // jg = exit when NOT le
             trace.snapshots.push_back({entry.chunk, i, entry.regBase});
             errorExitPatches.push_back(p);
             break;
         }
         case OP_GTJMP: {
-            size_t p = emitGtjmp(jit.buf, jit.size, A, B);
+            size_t p = emitCompareJmp(jit.buf, jit.size, A, B, 0x8e); // jle = exit when NOT gt
             trace.snapshots.push_back({entry.chunk, i, entry.regBase});
             errorExitPatches.push_back(p);
             break;
         }
         case OP_GEJMP: {
-            size_t p = emitGejmp(jit.buf, jit.size, A, B);
+            size_t p = emitCompareJmp(jit.buf, jit.size, A, B, 0x8c); // jl = exit when NOT ge
             trace.snapshots.push_back({entry.chunk, i, entry.regBase});
             errorExitPatches.push_back(p);
             break;
