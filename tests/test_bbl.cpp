@@ -5024,6 +5024,21 @@ TEST(test_anon_call) {
     ASSERT_EQ(bbl.execExpr("((fn (x) (+ x 1)) 5)").intVal(), (int64_t)6);
 }
 
+TEST(test_table_in_table) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_EQ(bbl.execExpr(R"_((= a (table "v" 10)) (= b (table "x" a)) (= c b.x) c.v)_").intVal(), (int64_t)10);
+}
+
+TEST(test_table_not_corrupted) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_EQ(bbl.execExpr(R"_((= a (table "v" 10)) (= b (table "x" a)) a.v)_").intVal(), (int64_t)10);
+}
+
+TEST(test_chained_dot_access) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_EQ(bbl.execExpr(R"_((= a (table "v" 10)) (= b (table "x" a)) b.x.v)_").intVal(), (int64_t)10);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -5740,6 +5755,9 @@ int main() {
     RUN(test_dot_call);
     RUN(test_dot_call_multi_arg);
     RUN(test_anon_call);
+    RUN(test_table_in_table);
+    RUN(test_table_not_corrupted);
+    RUN(test_chained_dot_access);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;
