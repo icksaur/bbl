@@ -5009,6 +5009,21 @@ TEST(test_execfile_unchanged) {
     ASSERT_EQ(bbl.execExpr("(= x 10) (+ x 1)").intVal(), (int64_t)11);
 }
 
+TEST(test_dot_call) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_EQ(bbl.execExpr("(= t (table \"f\" (fn (x) (+ x 1)))) (t.f 5)").intVal(), (int64_t)6);
+}
+
+TEST(test_dot_call_multi_arg) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_EQ(bbl.execExpr("(= t (table \"add\" (fn (a b) (+ a b)))) (t.add 3 4)").intVal(), (int64_t)7);
+}
+
+TEST(test_anon_call) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_EQ(bbl.execExpr("((fn (x) (+ x 1)) 5)").intVal(), (int64_t)6);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -5722,6 +5737,9 @@ int main() {
     RUN(test_import_inter_module_calls);
     RUN(test_import_recursive_fn);
     RUN(test_execfile_unchanged);
+    RUN(test_dot_call);
+    RUN(test_dot_call_multi_arg);
+    RUN(test_anon_call);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

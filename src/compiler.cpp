@@ -178,13 +178,13 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (head.type != NodeType::Symbol) {
-        // Dynamic call
         uint8_t base = dest;
         uint8_t savedNext = cs.nextReg;
         if (base < cs.nextReg) base = cs.allocReg();
         cs.freeRegsTo(base);
 
         compileInto(state, cs, head, base);
+        if (cs.nextReg <= base) cs.nextReg = base + 1;
         uint8_t argc = static_cast<uint8_t>(node.children.size() - 1);
         for (size_t i = 1; i < node.children.size(); i++) {
             uint8_t argReg = cs.allocReg();
