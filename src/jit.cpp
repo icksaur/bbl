@@ -1611,7 +1611,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             selfRefRegs.erase(A);
             closureRegs.erase(A);
         }
-        if (op != OP_LOADINT && op != OP_ADD && op != OP_SUB && op != OP_MUL &&
+        if (op != OP_LOADINT && op != OP_LOADK && op != OP_ADD && op != OP_SUB && op != OP_MUL &&
             op != OP_ADDI && op != OP_SUBI && op != OP_ADDK && op != OP_MOVE &&
             op != OP_TABLE &&
             op != OP_LTJMP && op != OP_LEJMP && op != OP_GTJMP && op != OP_GEJMP &&
@@ -1669,6 +1669,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         switch (op) {
         case OP_LOADK:
             emitLoadK(jit.buf, jit.size, A, &chunk.constants[Bx]);
+            if (chunk.constants[Bx].type() == BBL::Type::Int) knownTypes[A] = KnownType::Int;
             break;
         case OP_LOADINT:
             if (currentLoop && currentLoop->regMap[A] >= 0) {
