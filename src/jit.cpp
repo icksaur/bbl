@@ -1530,13 +1530,17 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     }
     size_t vecDataSizeOff = 0;
     for (size_t off = 0; off < sizeof(std::vector<uint8_t>); off += 8) {
-        if (off != vecDataPtrOff && *reinterpret_cast<size_t*>(reinterpret_cast<char*>(&vecDummy.data) + off) == 8) {
+        if (off == vecDataPtrOff) continue;
+        uintptr_t val = *reinterpret_cast<uintptr_t*>(reinterpret_cast<char*>(&vecDummy.data) + off);
+        if (val == reinterpret_cast<uintptr_t>(vecDataPtr) + 8) {
             vecDataSizeOff = off; break;
         }
     }
     vecDataPtrOff += vecDataOff;
     vecDataSizeOff += vecDataOff;
     uint8_t vecGcType = static_cast<uint8_t>(GcType::Vec);
+    size_t vecElemTypeTagOff = reinterpret_cast<char*>(&vecDummy.elemTypeTag) - reinterpret_cast<char*>(&vecDummy);
+    uint8_t vecIntTypeTag = static_cast<uint8_t>(BBL::Type::Int);
 
     BblString strDummy("test");
     size_t strDataOff = reinterpret_cast<char*>(&strDummy.data) - reinterpret_cast<char*>(&strDummy);
@@ -2605,6 +2609,117 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
 
                 patchRel32(jit.buf, donePatchSet, jit.size);
                 patchRel32(jit.buf, arrDoneSetPatch, jit.size);
+
+            } else if (methodStr == state.m.at) {
+                // Inline vector:at for integer vectors (elemSize==8)
+                // Type guard: check TAG_OBJECT + gcType == Vec
+                uint8_t ld_v[] = { 0x48, 0x8b, 0x83 };
+                emit(jit.buf, jit.size, ld_v, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE); // mov rax, [rbx+A*8]
+                uint8_t movcx_v[] = { 0x48, 0x89, 0xc1 };
+                emit(jit.buf, jit.size, movcx_v, 3);
+                uint8_t shrcx_v[] = { 0x48, 0xc1, 0xe9, 0x30 };
+                emit(jit.buf, jit.size, shrcx_v, 4);
+                uint8_t cmpw_v[] = { 0x66, 0x81, 0xf9 };
+                emit(jit.buf, jit.size, cmpw_v, 3);
+                emit16(jit.buf, jit.size, 0xFFFF); // TAG_OBJECT
+                uint8_t jne_v[] = { 0x0f, 0x85 };
+                emit(jit.buf, jit.size, jne_v, 2);
+                size_t vecSlowPatch1 = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Extract pointer
+                uint8_t shl16_v[] = { 0x48, 0xc1, 0xe0, 0x10 };
+                emit(jit.buf, jit.size, shl16_v, 4);
+                uint8_t shr16_v[] = { 0x48, 0xc1, 0xe8, 0x10 };
+                emit(jit.buf, jit.size, shr16_v, 4); // rax = vec ptr
+                // Check gcType == Vec
+                uint8_t cmpb_v[] = { 0x80, 0x38 };
+                emit(jit.buf, jit.size, cmpb_v, 2);
+                emit8(jit.buf, jit.size, vecGcType);
+                emit(jit.buf, jit.size, jne_v, 2);
+                size_t vecSlowPatch2 = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // rax = BblVec*. Check elemTypeTag == Int (BBL::Type is 4 bytes)
+                uint8_t cmpElemType[] = { 0x83, 0xb8 };
+                emit(jit.buf, jit.size, cmpElemType, 2);
+                emit32(jit.buf, jit.size, vecElemTypeTagOff);
+                emit8(jit.buf, jit.size, vecIntTypeTag); // cmp dword [rax+off], Int
+                emit(jit.buf, jit.size, jne_v, 2);
+                size_t vecSlowPatch3 = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // mov rdi, rax (save vec ptr)
+                uint8_t movrdi_v[] = { 0x48, 0x89, 0xc7 };
+                emit(jit.buf, jit.size, movrdi_v, 3);
+                // Unbox index: mov rsi, [rbx+(A+1)*8]
+                uint8_t ldidx[] = { 0x48, 0x8b, 0xb3 };
+                emit(jit.buf, jit.size, ldidx, 3);
+                emit32(jit.buf, jit.size, (A + 1) * VAL_SIZE);
+                uint8_t shlrsi_v[] = { 0x48, 0xc1, 0xe6, 0x10 };
+                emit(jit.buf, jit.size, shlrsi_v, 4);
+                uint8_t sarrsi_v[] = { 0x48, 0xc1, 0xfe, 0x10 };
+                emit(jit.buf, jit.size, sarrsi_v, 4); // rsi = index
+                // Bounds check: compute count = (end - begin) / 8
+                // Load end ptr: mov rcx, [rdi+vecDataSizeOff] (actually end ptr)
+                uint8_t ldDataEnd[] = { 0x48, 0x8b, 0x8f };
+                emit(jit.buf, jit.size, ldDataEnd, 3);
+                emit32(jit.buf, jit.size, vecDataSizeOff);
+                // Load begin ptr: mov rdx, [rdi+vecDataPtrOff]  (reuse rdx temp)
+                uint8_t ldDataBegin[] = { 0x48, 0x8b, 0x97 };
+                emit(jit.buf, jit.size, ldDataBegin, 3);
+                emit32(jit.buf, jit.size, vecDataPtrOff);
+                // sub rcx, rdx → byte count
+                uint8_t subrcx_rdx[] = { 0x48, 0x29, 0xd1 };
+                emit(jit.buf, jit.size, subrcx_rdx, 3);
+                // shr rcx, 3 (divide by 8 = elemSize for int vectors)
+                uint8_t shrcx3[] = { 0x48, 0xc1, 0xe9, 0x03 };
+                emit(jit.buf, jit.size, shrcx3, 4);
+                // cmp rsi, rcx (unsigned)
+                uint8_t cmprsi_rcx[] = { 0x48, 0x39, 0xce };
+                emit(jit.buf, jit.size, cmprsi_rcx, 3);
+                // jae slow (out of bounds)
+                uint8_t jae_v[] = { 0x0f, 0x83 };
+                emit(jit.buf, jit.size, jae_v, 2);
+                size_t vecSlowPatch4 = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Load data pointer: rdx already has begin ptr from bounds check
+                // Load element: mov rax, [rdx+rsi*8] (raw int64)
+                uint8_t ldElem[] = { 0x48, 0x8b, 0x04, 0xf2 };
+                emit(jit.buf, jit.size, ldElem, 4);
+                // NaN-box as int: and rax, PAYLOAD_MASK; or rax, TAG_INT
+                // Use the compact shl/shr + or pattern
+                emit(jit.buf, jit.size, shl16_v, 4); // shl rax, 16
+                emit(jit.buf, jit.size, shr16_v, 4); // shr rax, 16
+                uint8_t movabs_tag[] = { 0x48, 0xb9 };
+                emit(jit.buf, jit.size, movabs_tag, 2);
+                emit64(jit.buf, jit.size, NB_TAG_INT);
+                uint8_t orrax_rcx[] = { 0x48, 0x09, 0xc8 };
+                emit(jit.buf, jit.size, orrax_rcx, 3);
+                // Store result
+                uint8_t stval_v[] = { 0x48, 0x89, 0x83 };
+                emit(jit.buf, jit.size, stval_v, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE);
+                uint8_t jmp_v[] = { 0xe9 };
+                emit(jit.buf, jit.size, jmp_v, 1);
+                size_t vecDonePatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // slow path: generic mcall
+                patchRel32(jit.buf, vecSlowPatch1, jit.size);
+                patchRel32(jit.buf, vecSlowPatch2, jit.size);
+                patchRel32(jit.buf, vecSlowPatch3, jit.size);
+                patchRel32(jit.buf, vecSlowPatch4, jit.size);
+                {
+                    uint8_t a1[] = { 0x48, 0x89, 0xdf }; emit(jit.buf, jit.size, a1, 3);
+                    uint8_t a2[] = { 0x4c, 0x89, 0xe6 }; emit(jit.buf, jit.size, a2, 3);
+                    uint8_t a3[] = { 0xba }; emit(jit.buf, jit.size, a3, 1); emit32(jit.buf, jit.size, A);
+                    uint8_t a4[] = { 0xb9 }; emit(jit.buf, jit.size, a4, 1); emit32(jit.buf, jit.size, B);
+                    uint8_t movr8[] = { 0x49, 0xb8 }; emit(jit.buf, jit.size, movr8, 2);
+                    emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>(methodStr));
+                    uint8_t movabs[] = { 0x48, 0xb8 }; emit(jit.buf, jit.size, movabs, 2);
+                    emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>((void*)jitMcall));
+                    uint8_t call[] = { 0xff, 0xd0 }; emit(jit.buf, jit.size, call, 2);
+                    emitErrorCheck(jit.buf, jit.size, errorExitPatches);
+                }
+                patchRel32(jit.buf, vecDonePatch, jit.size);
 
             } else if (methodStr == state.m.length) {
                 emitCallHelper2(jit.buf, jit.size, (void*)jitLength, A, A, &errorExitPatches);
