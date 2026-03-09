@@ -1114,13 +1114,23 @@ static size_t emitCompareJmp(uint8_t* buf, size_t& pos, int A, int B, uint8_t jc
 }
 
 static size_t emitCompareJmpDirect(uint8_t* buf, size_t& pos, int A, int B, uint8_t jccByte) {
-    // Both operands known to be TAG_INT — compare NaN-boxed values directly
+    // Both operands known TAG_INT — unbox and compare payloads (signed)
     uint8_t mov1[] = { 0x48, 0x8b, 0x83 };
     emit(buf, pos, mov1, 3);
-    emit32(buf, pos, A * VAL_SIZE);
-    uint8_t cmp[] = { 0x48, 0x3b, 0x83 }; // cmp rax, [rbx + B*8]
-    emit(buf, pos, cmp, 3);
-    emit32(buf, pos, B * VAL_SIZE);
+    emit32(buf, pos, A * VAL_SIZE); // mov rax, [rbx+A*8]
+    uint8_t shl1[] = { 0x48, 0xc1, 0xe0, 0x10 };
+    emit(buf, pos, shl1, 4); // shl rax, 16
+    uint8_t sar1[] = { 0x48, 0xc1, 0xf8, 0x10 };
+    emit(buf, pos, sar1, 4); // sar rax, 16 (sign-extend payload)
+    uint8_t mov2[] = { 0x48, 0x8b, 0x8b };
+    emit(buf, pos, mov2, 3);
+    emit32(buf, pos, B * VAL_SIZE); // mov rcx, [rbx+B*8]
+    uint8_t shl2[] = { 0x48, 0xc1, 0xe1, 0x10 };
+    emit(buf, pos, shl2, 4); // shl rcx, 16
+    uint8_t sar2[] = { 0x48, 0xc1, 0xf9, 0x10 };
+    emit(buf, pos, sar2, 4); // sar rcx, 16
+    uint8_t cmp[] = { 0x48, 0x39, 0xc8 };
+    emit(buf, pos, cmp, 3); // cmp rax, rcx
     uint8_t jcc[] = { 0x0f, jccByte };
     emit(buf, pos, jcc, 2);
     size_t p = pos;
@@ -1319,12 +1329,23 @@ static void emitCmp(uint8_t* buf, size_t& pos, int A, int B, int C, uint8_t jccO
 }
 
 static void emitCmpDirect(uint8_t* buf, size_t& pos, int A, int B, int C, uint8_t jccOpcode) {
+    // Both known TAG_INT — unbox and compare payloads (signed)
     uint8_t mov1[] = { 0x48, 0x8b, 0x83 };
     emit(buf, pos, mov1, 3);
-    emit32(buf, pos, B * VAL_SIZE);
-    uint8_t cmp[] = { 0x48, 0x3b, 0x83 }; // cmp rax, [rbx + C*8]
-    emit(buf, pos, cmp, 3);
+    emit32(buf, pos, B * VAL_SIZE); // mov rax, [rbx+B*8]
+    uint8_t shl1[] = { 0x48, 0xc1, 0xe0, 0x10 };
+    emit(buf, pos, shl1, 4);
+    uint8_t sar1[] = { 0x48, 0xc1, 0xf8, 0x10 };
+    emit(buf, pos, sar1, 4); // sign-extend A
+    uint8_t mov2[] = { 0x48, 0x8b, 0x8b };
+    emit(buf, pos, mov2, 3);
     emit32(buf, pos, C * VAL_SIZE);
+    uint8_t shl2[] = { 0x48, 0xc1, 0xe1, 0x10 };
+    emit(buf, pos, shl2, 4);
+    uint8_t sar2[] = { 0x48, 0xc1, 0xf9, 0x10 };
+    emit(buf, pos, sar2, 4); // sign-extend B
+    uint8_t cmp[] = { 0x48, 0x39, 0xc8 };
+    emit(buf, pos, cmp, 3); // cmp rax, rcx
     uint8_t setcc[] = { 0x0f, jccOpcode, 0xc0 };
     emit(buf, pos, setcc, 3);
     uint8_t movzx[] = { 0x0f, 0xb6, 0xc0 };
