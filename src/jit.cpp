@@ -3462,15 +3462,9 @@ JitCode compileTrace(BblState& state, Trace& trace) {
         uint16_t Bx = decodeBx(inst);
 
         switch (op) {
-        case OP_ADD:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((0 << 16) | (B << 8) | C), &errorExitPatches);
-            break;
-        case OP_SUB:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((1 << 16) | (B << 8) | C), &errorExitPatches);
-            break;
-        case OP_MUL:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((2 << 16) | (B << 8) | C), &errorExitPatches);
-            break;
+        case OP_ADD: emitAdd(jit.buf, jit.size, A, B, C); break;
+        case OP_SUB: emitSub(jit.buf, jit.size, A, B, C); break;
+        case OP_MUL: emitMul(jit.buf, jit.size, A, B, C); break;
         case OP_ADDI: emitAddi(jit.buf, jit.size, A, sBx); break;
         case OP_SUBI: emitSubi(jit.buf, jit.size, A, sBx); break;
         case OP_MOVE: emitMove(jit.buf, jit.size, A, B); break;
