@@ -2127,13 +2127,13 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                     };
 
                     switch (cop) {
-                    case OP_ADD: emitAdd(jit.buf, jit.size, remap(cA), remap(cB), remap(cC)); break;
-                    case OP_SUB: emitSub(jit.buf, jit.size, remap(cA), remap(cB), remap(cC)); break;
-                    case OP_MUL: emitMul(jit.buf, jit.size, remap(cA), remap(cB), remap(cC)); break;
-                    case OP_ADDI: emitAddi(jit.buf, jit.size, remap(cA), csBx); break;
-                    case OP_SUBI: emitSubi(jit.buf, jit.size, remap(cA), csBx); break;
-                    case OP_MOVE: emitMove(jit.buf, jit.size, remap(cA), remap(cB)); break;
-                    case OP_LOADINT: emitLoadInt(jit.buf, jit.size, remap(cA), csBx); break;
+                    case OP_ADD: emitAdd(jit.buf, jit.size, remap(cA), remap(cB), remap(cC)); knownTypes[remap(cA)] = KnownType::Int; break;
+                    case OP_SUB: emitSub(jit.buf, jit.size, remap(cA), remap(cB), remap(cC)); knownTypes[remap(cA)] = KnownType::Int; break;
+                    case OP_MUL: emitMul(jit.buf, jit.size, remap(cA), remap(cB), remap(cC)); knownTypes[remap(cA)] = KnownType::Int; break;
+                    case OP_ADDI: emitAddi(jit.buf, jit.size, remap(cA), csBx); knownTypes[remap(cA)] = KnownType::Int; break;
+                    case OP_SUBI: emitSubi(jit.buf, jit.size, remap(cA), csBx); knownTypes[remap(cA)] = KnownType::Int; break;
+                    case OP_MOVE: emitMove(jit.buf, jit.size, remap(cA), remap(cB)); knownTypes[remap(cA)] = knownTypes[remap(cB)]; break;
+                    case OP_LOADINT: emitLoadInt(jit.buf, jit.size, remap(cA), csBx); knownTypes[remap(cA)] = KnownType::Int; break;
                     case OP_LOADK: emitLoadK(jit.buf, jit.size, remap(cA), &callee->chunk.constants[decodeBx(cinst)]); break;
                     case OP_RETURN:
                         // Inline return: move callee result to caller's base register
