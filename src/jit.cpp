@@ -1051,6 +1051,27 @@ static void emitSubi(uint8_t* buf, size_t& pos, int A, int imm) {
     emit32(buf, pos, static_cast<uint32_t>(imm));
 }
 
+static void emitFAdd(uint8_t* buf, size_t& pos, int A, int B, int C) {
+    uint8_t ld[] = { 0xf2, 0x0f, 0x10, 0x83 }; emit(buf, pos, ld, 4); emit32(buf, pos, B * VAL_SIZE);
+    uint8_t op[] = { 0xf2, 0x0f, 0x58, 0x83 }; emit(buf, pos, op, 4); emit32(buf, pos, C * VAL_SIZE);
+    uint8_t st[] = { 0xf2, 0x0f, 0x11, 0x83 }; emit(buf, pos, st, 4); emit32(buf, pos, A * VAL_SIZE);
+}
+static void emitFSub(uint8_t* buf, size_t& pos, int A, int B, int C) {
+    uint8_t ld[] = { 0xf2, 0x0f, 0x10, 0x83 }; emit(buf, pos, ld, 4); emit32(buf, pos, B * VAL_SIZE);
+    uint8_t op[] = { 0xf2, 0x0f, 0x5c, 0x83 }; emit(buf, pos, op, 4); emit32(buf, pos, C * VAL_SIZE);
+    uint8_t st[] = { 0xf2, 0x0f, 0x11, 0x83 }; emit(buf, pos, st, 4); emit32(buf, pos, A * VAL_SIZE);
+}
+static void emitFMul(uint8_t* buf, size_t& pos, int A, int B, int C) {
+    uint8_t ld[] = { 0xf2, 0x0f, 0x10, 0x83 }; emit(buf, pos, ld, 4); emit32(buf, pos, B * VAL_SIZE);
+    uint8_t op[] = { 0xf2, 0x0f, 0x59, 0x83 }; emit(buf, pos, op, 4); emit32(buf, pos, C * VAL_SIZE);
+    uint8_t st[] = { 0xf2, 0x0f, 0x11, 0x83 }; emit(buf, pos, st, 4); emit32(buf, pos, A * VAL_SIZE);
+}
+static void emitFDiv(uint8_t* buf, size_t& pos, int A, int B, int C) {
+    uint8_t ld[] = { 0xf2, 0x0f, 0x10, 0x83 }; emit(buf, pos, ld, 4); emit32(buf, pos, B * VAL_SIZE);
+    uint8_t op[] = { 0xf2, 0x0f, 0x5e, 0x83 }; emit(buf, pos, op, 4); emit32(buf, pos, C * VAL_SIZE);
+    uint8_t st[] = { 0xf2, 0x0f, 0x11, 0x83 }; emit(buf, pos, st, 4); emit32(buf, pos, A * VAL_SIZE);
+}
+
 // LOADINT R[A] = NaN-boxed int
 static void emitLoadInt(uint8_t* buf, size_t& pos, int A, int imm) {
     uint64_t val = NB_TAG_INT | (static_cast<uint64_t>(static_cast<int64_t>(imm)) & NB_PAYLOAD);
@@ -1507,7 +1528,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     std::unordered_map<uint8_t, BblClosure*> closureRegs;
     std::set<uint8_t> selfRefRegs;
     bool hasSelfCalls = false;
-    enum class KnownType : uint8_t { Unknown = 0, Int, Table };
+    enum class KnownType : uint8_t { Unknown = 0, Int, Table, Float };
     KnownType knownTypes[256];
     memset(knownTypes, 0, sizeof(knownTypes));
     std::vector<size_t> selfCallPatches;
@@ -1693,6 +1714,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         case OP_LOADK:
             emitLoadK(jit.buf, jit.size, A, &chunk.constants[Bx]);
             if (chunk.constants[Bx].type() == BBL::Type::Int) knownTypes[A] = KnownType::Int;
+            else if (chunk.constants[Bx].type() == BBL::Type::Float) knownTypes[A] = KnownType::Float;
             break;
         case OP_LOADINT:
             if (currentLoop && currentLoop->regMap[A] >= 0) {
@@ -1737,6 +1759,11 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             if (hasSelfCalls || (knownTypes[B] == KnownType::Int && knownTypes[C] == KnownType::Int)) {
                 emitAdd(jit.buf, jit.size, A, B, C);
                 knownTypes[A] = KnownType::Int;
+                break;
+            }
+            if (knownTypes[B] == KnownType::Float && knownTypes[C] == KnownType::Float) {
+                emitFAdd(jit.buf, jit.size, A, B, C);
+                knownTypes[A] = KnownType::Float;
                 break;
             }
             // Type guard: if R[B] and R[C] are both int, fast path
@@ -1846,6 +1873,11 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 knownTypes[A] = KnownType::Int;
                 break;
             }
+            if (knownTypes[B] == KnownType::Float && knownTypes[C] == KnownType::Float) {
+                emitFSub(jit.buf, jit.size, A, B, C);
+                knownTypes[A] = KnownType::Float;
+                break;
+            }
             uint8_t ld[] = { 0x48, 0x8b, 0x83 };
             emit(jit.buf, jit.size, ld, 3);
             emit32(jit.buf, jit.size, B * VAL_SIZE);
@@ -1896,6 +1928,9 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 else if (dA == dC) { emitImulRR(jit.buf, jit.size, dA, dB); }
                 else { emitMovRR(jit.buf, jit.size, dA, dB); emitImulRR(jit.buf, jit.size, dA, dC); }
                 knownTypes[A] = KnownType::Int;
+            } else if (knownTypes[B] == KnownType::Float && knownTypes[C] == KnownType::Float) {
+                emitFMul(jit.buf, jit.size, A, B, C);
+                knownTypes[A] = KnownType::Float;
             } else {
                 emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((2 << 16) | (B << 8) | C), &errorExitPatches);
             }
@@ -2262,7 +2297,12 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         case OP_GTE: { bool d = knownTypes[B] == KnownType::Int && knownTypes[C] == KnownType::Int; (d ? emitCmpDirect : emitCmp)(jit.buf, jit.size, A, B, C, 0x9d); break; }
 
         case OP_DIV:
-            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((3 << 16) | (B << 8) | C), &errorExitPatches);
+            if (knownTypes[B] == KnownType::Float && knownTypes[C] == KnownType::Float) {
+                emitFDiv(jit.buf, jit.size, A, B, C);
+                knownTypes[A] = KnownType::Float;
+            } else {
+                emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((3 << 16) | (B << 8) | C), &errorExitPatches);
+            }
             break;
         case OP_MOD:
             emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((4 << 16) | (B << 8) | C), &errorExitPatches);

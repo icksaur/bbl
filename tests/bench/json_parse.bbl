@@ -1,0 +1,15 @@
+(= run (fn ()
+    (= data (table
+        "name" "John Doe"
+        "age" 42
+        "active" true
+        "scores" (table 0 95 1 87 2 92 3 78 4 88)))
+    (= i 0)
+    (= sum 0)
+    (loop (< i 100000)
+        (= j (json-encode data))
+        (= t (json-parse j))
+        (= sum (+ sum (t:get "age")))
+        (= i (+ i 1)))
+    (print sum)))
+(run)
