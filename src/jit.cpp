@@ -725,7 +725,7 @@ int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loo
 
     if (!lt.compiled) {
         lt.hotCount++;
-        if (lt.hotCount < 64) return -1;
+        if (lt.hotCount < 32) return -1;
         lt.hotCount = 0;
 
         Trace trace = recordTrace(*state, *chunk, loopPc, regs);
