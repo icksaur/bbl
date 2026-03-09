@@ -274,40 +274,41 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
             size_t loopPc = static_cast<size_t>(frame->ip - frame->chunk->code.data() - 1);
             frame->ip -= sBx;
 
-            if (!frame->chunk->traceCompiled && !frame->chunk->traceBlacklisted) {
-                frame->chunk->hotCount++;
-                if (frame->chunk->hotCount >= 64) {
+            auto& lt = frame->chunk->loopTraces[static_cast<uint32_t>(loopPc)];
+            if (!lt.compiled && !lt.blacklisted) {
+                lt.hotCount++;
+                if (lt.hotCount >= 64) {
                     Trace trace = recordTrace(state, *frame->chunk, loopPc, frame->regs);
                     if (trace.valid) {
                         optimizeTrace(state, trace);
                         JitCode jit = compileTrace(state, trace);
                         if (jit.buf) {
-                            frame->chunk->traceCode = jit.buf;
-                            frame->chunk->traceCapacity = jit.capacity;
-                            frame->chunk->traceCompiled = true;
-                            frame->chunk->traceSnapshots = new std::vector<Snapshot>(std::move(trace.snapshots));
+                            lt.code = jit.buf;
+                            lt.capacity = jit.capacity;
+                            lt.compiled = true;
+                            lt.snapshots = new std::vector<Snapshot>(std::move(trace.snapshots));
                             if (!trace.sunkAllocs.empty())
-                                frame->chunk->traceSunkAllocs = new std::vector<SunkAllocation>(std::move(trace.sunkAllocs));
+                                lt.sunkAllocs = new std::vector<SunkAllocation>(std::move(trace.sunkAllocs));
                         } else {
-                            frame->chunk->traceBlacklisted = true;
+                            lt.blacklisted = true;
                         }
                     } else {
-                        frame->chunk->traceBlacklisted = true;
+                        lt.blacklisted = true;
                     }
-                    frame->chunk->hotCount = 0;
+                    lt.hotCount = 0;
                 }
             }
-            if (frame->chunk->traceCompiled && frame->chunk->traceCode) {
+            if (lt.compiled && lt.code) {
                 JitCode traceJit;
-                traceJit.buf = static_cast<uint8_t*>(frame->chunk->traceCode);
-                traceJit.capacity = frame->chunk->traceCapacity;
+                traceJit.buf = static_cast<uint8_t*>(lt.code);
+                traceJit.capacity = lt.capacity;
                 TraceResult result = executeTrace(traceJit, frame->regs, &state);
                 if (result.completed) {
                     frame->ip = &frame->chunk->code[loopPc + 1];
                     break;
                 }
-                if (frame->chunk->traceSunkAllocs) {
-                    for (auto& sunk : *frame->chunk->traceSunkAllocs) {
+                if (lt.sunkAllocs) {
+                    for (auto& sunk : *lt.sunkAllocs) {
                         BblTable* tbl = state.allocTable();
                         for (auto& f : sunk.fields)
                             tbl->set(BblValue::makeString(state.intern(f.name)), frame->regs[f.srcReg]);

@@ -647,8 +647,10 @@ BblState::~BblState() {
             }
             case GcType::Closure: {
                 auto* c = static_cast<BblClosure*>(obj);
-                if (c->chunk.traceCode) jitFree(c->chunk.traceCode, c->chunk.traceCapacity);
-                delete c->chunk.traceSnapshots; delete c->chunk.traceSunkAllocs;
+                for (auto& [pc, lt] : c->chunk.loopTraces) {
+                    if (lt.code) jitFree(lt.code, lt.capacity);
+                    delete lt.snapshots; delete lt.sunkAllocs;
+                }
                 c->~BblClosure();
                 break;
             }
@@ -892,8 +894,10 @@ void BblState::gc() {
                     break;
                 case GcType::Closure: {
                     auto* c = static_cast<BblClosure*>(dead);
-                    if (c->chunk.traceCode) jitFree(c->chunk.traceCode, c->chunk.traceCapacity);
-                    delete c->chunk.traceSnapshots; delete c->chunk.traceSunkAllocs;
+                    for (auto& [pc, lt] : c->chunk.loopTraces) {
+                        if (lt.code) jitFree(lt.code, lt.capacity);
+                        delete lt.snapshots; delete lt.sunkAllocs;
+                    }
                     closureSlab.free(c);
                     break;
                 }

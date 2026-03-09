@@ -719,37 +719,38 @@ void jitEnvSet(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg) 
 }
 
 int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loopPc) {
-    if (chunk->traceBlacklisted) return -1;
+    auto& lt = chunk->loopTraces[loopPc];
+    if (lt.blacklisted) return -1;
     if (state->maxSteps > 0) return -1;
 
-    if (!chunk->traceCompiled) {
-        chunk->hotCount++;
-        if (chunk->hotCount < 64) return -1;
-        chunk->hotCount = 0;
+    if (!lt.compiled) {
+        lt.hotCount++;
+        if (lt.hotCount < 64) return -1;
+        lt.hotCount = 0;
 
         Trace trace = recordTrace(*state, *chunk, loopPc, regs);
-        if (!trace.valid) { chunk->traceBlacklisted = true; return -1; }
+        if (!trace.valid) { lt.blacklisted = true; return -1; }
 
         optimizeTrace(*state, trace);
         JitCode jit = compileTrace(*state, trace);
-        if (!jit.buf) { chunk->traceBlacklisted = true; return -1; }
+        if (!jit.buf) { lt.blacklisted = true; return -1; }
 
-        chunk->traceCode = jit.buf;
-        chunk->traceCapacity = jit.capacity;
-        chunk->traceCompiled = true;
-        chunk->traceSnapshots = new std::vector<Snapshot>(std::move(trace.snapshots));
+        lt.code = jit.buf;
+        lt.capacity = jit.capacity;
+        lt.compiled = true;
+        lt.snapshots = new std::vector<Snapshot>(std::move(trace.snapshots));
         if (!trace.sunkAllocs.empty())
-            chunk->traceSunkAllocs = new std::vector<SunkAllocation>(std::move(trace.sunkAllocs));
+            lt.sunkAllocs = new std::vector<SunkAllocation>(std::move(trace.sunkAllocs));
     }
 
     JitCode traceJit;
-    traceJit.buf = static_cast<uint8_t*>(chunk->traceCode);
-    traceJit.capacity = chunk->traceCapacity;
+    traceJit.buf = static_cast<uint8_t*>(lt.code);
+    traceJit.capacity = lt.capacity;
 
     TraceResult result = executeTrace(traceJit, regs, state);
 
-    if (!result.completed && chunk->traceSunkAllocs) {
-        for (auto& sunk : *chunk->traceSunkAllocs) {
+    if (!result.completed && lt.sunkAllocs) {
+        for (auto& sunk : *lt.sunkAllocs) {
             BblTable* tbl = state->allocTable();
             for (auto& f : sunk.fields)
                 tbl->set(BblValue::makeString(state->intern(f.name)), regs[f.srcReg]);
@@ -3460,14 +3461,9 @@ JitCode compileTrace(BblState& state, Trace& trace) {
         uint16_t Bx = decodeBx(inst);
 
         switch (op) {
-        case OP_ADD:
-        case OP_SUB:
-        case OP_MUL: {
-            uint8_t arithOp = (op == OP_ADD) ? 0 : (op == OP_SUB) ? 1 : 2;
-            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A,
-                static_cast<uint32_t>((arithOp << 16) | (B << 8) | C), &errorExitPatches);
-            break;
-        }
+        case OP_ADD: emitAdd(jit.buf, jit.size, A, B, C); break;
+        case OP_SUB: emitSub(jit.buf, jit.size, A, B, C); break;
+        case OP_MUL: emitMul(jit.buf, jit.size, A, B, C); break;
         case OP_ADDI: emitAddi(jit.buf, jit.size, A, sBx); break;
         case OP_SUBI: emitSubi(jit.buf, jit.size, A, sBx); break;
         case OP_MOVE: emitMove(jit.buf, jit.size, A, B); break;

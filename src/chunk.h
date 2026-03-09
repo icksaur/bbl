@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include <string>
+#include <unordered_map>
 
 struct BblValue;
 struct Snapshot;
@@ -124,13 +125,16 @@ struct Chunk {
     std::vector<BblValue> constants;
     std::vector<int> lines;
     uint8_t numRegs = 2;
-    uint16_t hotCount = 0;
-    bool traceCompiled = false;
-    bool traceBlacklisted = false;
-    void* traceCode = nullptr;
-    size_t traceCapacity = 0;
-    std::vector<Snapshot>* traceSnapshots = nullptr;
-    std::vector<SunkAllocation>* traceSunkAllocs = nullptr;
+    struct LoopTrace {
+        uint16_t hotCount = 0;
+        bool compiled = false;
+        bool blacklisted = false;
+        void* code = nullptr;
+        size_t capacity = 0;
+        std::vector<Snapshot>* snapshots = nullptr;
+        std::vector<SunkAllocation>* sunkAllocs = nullptr;
+    };
+    std::unordered_map<uint32_t, LoopTrace> loopTraces;
 
     void emitABC(uint8_t op, uint8_t A, uint8_t B, uint8_t C, int line) {
         code.push_back(encodeABC(op, A, B, C));
