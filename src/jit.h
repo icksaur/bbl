@@ -23,6 +23,7 @@ struct TraceEntry {
     uint8_t regBase;
     bool branchTaken = false;
     bool eliminated = false;
+    uint8_t resultType = 0;
 };
 
 struct Snapshot {

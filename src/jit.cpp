@@ -3114,7 +3114,8 @@ Trace recordTrace(BblState& state, Chunk& chunk, size_t loopPc, BblValue* regs) 
             return trace;
         }
 
-        trace.entries.push_back({inst, curChunk, regBase});
+        trace.entries.push_back({inst, curChunk, regBase, false, false,
+            static_cast<uint8_t>(regs[decodeA(inst) + regBase].type())});
         pc++;
 
         // Follow calls
@@ -3459,13 +3460,21 @@ JitCode compileTrace(BblState& state, Trace& trace) {
         uint16_t Bx = decodeBx(inst);
 
         switch (op) {
-        case OP_ADD: emitAdd(jit.buf, jit.size, A, B, C); break;
-        case OP_SUB: emitSub(jit.buf, jit.size, A, B, C); break;
-        case OP_MUL: emitMul(jit.buf, jit.size, A, B, C); break;
+        case OP_ADD:
+        case OP_SUB:
+        case OP_MUL: {
+            uint8_t arithOp = (op == OP_ADD) ? 0 : (op == OP_SUB) ? 1 : 2;
+            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A,
+                static_cast<uint32_t>((arithOp << 16) | (B << 8) | C), &errorExitPatches);
+            break;
+        }
         case OP_ADDI: emitAddi(jit.buf, jit.size, A, sBx); break;
         case OP_SUBI: emitSubi(jit.buf, jit.size, A, sBx); break;
         case OP_MOVE: emitMove(jit.buf, jit.size, A, B); break;
         case OP_LOADINT: emitLoadInt(jit.buf, jit.size, A, sBx); break;
+        case OP_DIV:
+            emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((3 << 16) | (B << 8) | C), &errorExitPatches);
+            break;
         case OP_LOADNULL: emitLoadNull(jit.buf, jit.size, A); break;
         case OP_LOADK: emitLoadK(jit.buf, jit.size, A, &entry.chunk->constants[Bx]); break;
         case OP_LOADBOOL: {
