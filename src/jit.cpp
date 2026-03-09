@@ -2107,6 +2107,26 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             auto cit = closureRegs.find(A);
             if (cit != closureRegs.end() && B == cit->second->arity) {
                 BblClosure* callee = cit->second;
+                
+                // Guard: verify callee pointer matches at runtime
+                // mov rax, [rbx+A*8]; shl rax, 16; shr rax, 16; movabs rcx, expected; cmp rax, rcx; jne slow
+                uint8_t ldcl[] = { 0x48, 0x8b, 0x83 };
+                emit(jit.buf, jit.size, ldcl, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE);
+                uint8_t shl16cl[] = { 0x48, 0xc1, 0xe0, 0x10 };
+                emit(jit.buf, jit.size, shl16cl, 4);
+                uint8_t shr16cl[] = { 0x48, 0xc1, 0xe8, 0x10 };
+                emit(jit.buf, jit.size, shr16cl, 4);
+                uint8_t movabscl[] = { 0x48, 0xb9 };
+                emit(jit.buf, jit.size, movabscl, 2);
+                emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>(callee));
+                uint8_t cmpcl[] = { 0x48, 0x39, 0xc8 };
+                emit(jit.buf, jit.size, cmpcl, 3);
+                uint8_t jnecl[] = { 0x0f, 0x85 };
+                emit(jit.buf, jit.size, jnecl, 2);
+                size_t guardPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+
                 // Inline the callee's bytecode with register remapping:
                 // Callee R[0] = callee (unused), R[1..arity] = args from caller R[A+1..A+argc]
                 // Callee's other regs mapped to caller regs above A+argc
@@ -2146,6 +2166,14 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                     }
                 }
                 inline_done:;
+                uint8_t jmpDoneCl[] = { 0xe9 };
+                emit(jit.buf, jit.size, jmpDoneCl, 1);
+                size_t inlineDonePatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Guard miss: fall to C helper
+                patchRel32(jit.buf, guardPatch, jit.size);
+                emitCallHelper2(jit.buf, jit.size, (void*)jitCall, A, B, &errorExitPatches);
+                patchRel32(jit.buf, inlineDonePatch, jit.size);
             } else {
                 emitCallHelper2(jit.buf, jit.size, (void*)jitCall, A, B, &errorExitPatches);
             }
