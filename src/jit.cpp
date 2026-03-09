@@ -3214,7 +3214,9 @@ static void eliminateDeadStores(Trace& trace) {
                 uint8_t prevOp = decodeOP(prevEntry.inst);
                 if (prevOp == OP_LOADINT || prevOp == OP_LOADK ||
                     prevOp == OP_LOADNULL || prevOp == OP_LOADBOOL ||
-                    prevOp == OP_MOVE) {
+                    prevOp == OP_MOVE ||
+                    prevOp == OP_ADD || prevOp == OP_SUB || prevOp == OP_MUL ||
+                    prevOp == OP_ADDI || prevOp == OP_SUBI || prevOp == OP_ADDK) {
                     prevEntry.eliminated = true;
                 }
             }
@@ -3385,6 +3387,7 @@ static void sinkAllocations(BblState& state, Trace& trace) {
 void optimizeTrace(BblState& state, Trace& trace) {
     eliminateDeadStores(trace);
     sinkAllocations(state, trace);
+    eliminateDeadStores(trace);
 }
 
 JitCode compileTrace(BblState& state, Trace& trace) {
