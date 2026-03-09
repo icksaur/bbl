@@ -3120,7 +3120,7 @@ Trace recordTrace(BblState& state, Chunk& chunk, size_t loopPc, BblValue* regs) 
             if (taken) pc = pc - 1 + 1 + off;
         }
 
-        if (op == OP_MCALL || op == OP_TRYBEGIN || op == OP_TRYEND ||
+        if (op == OP_TRYBEGIN || op == OP_TRYEND ||
             op == OP_EXEC || op == OP_EXECFILE || op == OP_STRUCT || op == OP_VECTOR) {
             return trace;
         }
@@ -3543,6 +3543,23 @@ JitCode compileTrace(BblState& state, Trace& trace) {
         case OP_LENGTH:
             emitCallHelper2(jit.buf, jit.size, (void*)jitLength, A, B, &errorExitPatches);
             break;
+        case OP_MCALL: {
+            uint8_t origA = decodeA(inst) + entry.regBase;
+            uint8_t origB = decodeB(inst);
+            uint8_t origC = decodeC(inst);
+            BblString* methodStr = entry.chunk->constants[origC].stringVal();
+            uint8_t a1[] = { 0x48, 0x89, 0xdf }; emit(jit.buf, jit.size, a1, 3);
+            uint8_t a2[] = { 0x4c, 0x89, 0xe6 }; emit(jit.buf, jit.size, a2, 3);
+            uint8_t a3[] = { 0xba }; emit(jit.buf, jit.size, a3, 1); emit32(jit.buf, jit.size, origA);
+            uint8_t a4[] = { 0xb9 }; emit(jit.buf, jit.size, a4, 1); emit32(jit.buf, jit.size, origB);
+            uint8_t movr8[] = { 0x49, 0xb8 }; emit(jit.buf, jit.size, movr8, 2);
+            emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>(methodStr));
+            uint8_t movabs[] = { 0x48, 0xb8 }; emit(jit.buf, jit.size, movabs, 2);
+            emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>((void*)jitMcall));
+            uint8_t call[] = { 0xff, 0xd0 }; emit(jit.buf, jit.size, call, 2);
+            emitErrorCheck(jit.buf, jit.size, errorExitPatches);
+            break;
+        }
 
         case OP_EQ: emitCmp(jit.buf, jit.size, A, B, C, 0x94); break;
         case OP_NEQ: emitCmp(jit.buf, jit.size, A, B, C, 0x95); break;
