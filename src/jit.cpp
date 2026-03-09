@@ -1534,6 +1534,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     size_t tblCapacityOff = reinterpret_cast<char*>(&tblDummy.capacity) - reinterpret_cast<char*>(&tblDummy);
     size_t tblArrayOff = reinterpret_cast<char*>(&tblDummy.array) - reinterpret_cast<char*>(&tblDummy);
     size_t tblAsizeOff = reinterpret_cast<char*>(&tblDummy.asize) - reinterpret_cast<char*>(&tblDummy);
+    size_t tblCountOff = reinterpret_cast<char*>(&tblDummy.count) - reinterpret_cast<char*>(&tblDummy);
     size_t gcTypeOff = reinterpret_cast<char*>(&tblDummy.gcType) - reinterpret_cast<char*>(&tblDummy);
     uint8_t tableGcType = static_cast<uint8_t>(GcType::Table);
 
@@ -2562,20 +2563,35 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 uint8_t ldArr_s[] = { 0x48, 0x8b, 0x8f };
                 emit(jit.buf, jit.size, ldArr_s, 3);
                 emit32(jit.buf, jit.size, tblArrayOff);
-                // Check if slot occupied: cmp qword [rcx+rsi*8], 0
+                // Check if slot empty: cmp qword [rcx+rsi*8], 0
                 uint8_t cmpArrSlot[] = { 0x48, 0x83, 0x3c, 0xf1, 0x00 };
                 emit(jit.buf, jit.size, cmpArrSlot, 5);
-                // je → slow_path (new key needs count++)
-                uint8_t je_s[] = { 0x0f, 0x84 };
-                emit(jit.buf, jit.size, je_s, 2);
-                size_t arrNewKeySetPatch = jit.size;
-                emit32(jit.buf, jit.size, 0);
-                // Store value: mov rax, [rbx+(A+2)*8]; mov [rcx+rsi*8], rax
+                // je → new_key (need to increment count)
+                uint8_t je_newkey[] = { 0x74 };
+                emit(jit.buf, jit.size, je_newkey, 1);
+                size_t newKeyPatch = jit.size;
+                emit8(jit.buf, jit.size, 0); // rel8
+                // Existing key: just store value
                 uint8_t ldnewval_s[] = { 0x48, 0x8b, 0x83 };
                 emit(jit.buf, jit.size, ldnewval_s, 3);
                 emit32(jit.buf, jit.size, (A + 2) * VAL_SIZE);
                 uint8_t stArrVal[] = { 0x48, 0x89, 0x04, 0xf1 };
                 emit(jit.buf, jit.size, stArrVal, 4); // mov [rcx+rsi*8], rax
+                uint8_t jmp_done_s[] = { 0xeb };
+                emit(jit.buf, jit.size, jmp_done_s, 1);
+                size_t existDonePatch = jit.size;
+                emit8(jit.buf, jit.size, 0); // rel8
+                // new_key: store value + increment count
+                jit.buf[newKeyPatch] = static_cast<uint8_t>(jit.size - newKeyPatch - 1);
+                emit(jit.buf, jit.size, ldnewval_s, 3);
+                emit32(jit.buf, jit.size, (A + 2) * VAL_SIZE);
+                emit(jit.buf, jit.size, stArrVal, 4); // mov [rcx+rsi*8], rax
+                // inc dword [rdi + tblCountOff]
+                uint8_t incCount[] = { 0xff, 0x87 };
+                emit(jit.buf, jit.size, incCount, 2);
+                emit32(jit.buf, jit.size, tblCountOff);
+                // done:
+                jit.buf[existDonePatch] = static_cast<uint8_t>(jit.size - existDonePatch - 1);
                 // Store null result
                 uint8_t movabs_null_s[] = { 0x48, 0xb8 };
                 emit(jit.buf, jit.size, movabs_null_s, 2);
@@ -2592,7 +2608,6 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 patchRel32(jit.buf, arrSkipSetPatch, jit.size);
                 patchRel32(jit.buf, arrNegSetPatch, jit.size);
                 patchRel32(jit.buf, arrOobSetPatch, jit.size);
-                patchRel32(jit.buf, arrNewKeySetPatch, jit.size);
 
                 // Hash probe (same as get)
                 uint8_t ldcap[] = { 0x8b, 0x8f };
