@@ -2728,7 +2728,51 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 patchRel32(jit.buf, vecDonePatch, jit.size);
 
             } else if (methodStr == state.m.length) {
+                // Inline string:length: check TAG_STRING, extract ptr, load size, NaN-box
+                uint8_t ld_len[] = { 0x48, 0x8b, 0x83 };
+                emit(jit.buf, jit.size, ld_len, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE); // mov rax, [rbx+A*8]
+                uint8_t movcx_len[] = { 0x48, 0x89, 0xc1 };
+                emit(jit.buf, jit.size, movcx_len, 3); // mov rcx, rax
+                uint8_t shrcx_len[] = { 0x48, 0xc1, 0xe9, 0x30 };
+                emit(jit.buf, jit.size, shrcx_len, 4); // shr rcx, 48
+                uint8_t cmpw_len[] = { 0x66, 0x81, 0xf9 };
+                emit(jit.buf, jit.size, cmpw_len, 3);
+                emit16(jit.buf, jit.size, 0xFFFE); // TAG_STRING upper bits
+                uint8_t jne_len[] = { 0x0f, 0x85 };
+                emit(jit.buf, jit.size, jne_len, 2);
+                size_t lenSlowPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Extract pointer: shl rax, 16; shr rax, 16
+                uint8_t shl16_len[] = { 0x48, 0xc1, 0xe0, 0x10 };
+                emit(jit.buf, jit.size, shl16_len, 4);
+                uint8_t shr16_len[] = { 0x48, 0xc1, 0xe8, 0x10 };
+                emit(jit.buf, jit.size, shr16_len, 4);
+                // Load std::string size: the "end" pointer approach
+                // Actually use strSizeOff which was computed from dummy
+                uint8_t ldsize_len[] = { 0x48, 0x8b, 0x80 };
+                emit(jit.buf, jit.size, ldsize_len, 3);
+                emit32(jit.buf, jit.size, strSizeOff); // mov rax, [rax+strSizeOff]
+                // NaN-box as int: shl 16; shr 16; or TAG_INT
+                emit(jit.buf, jit.size, shl16_len, 4);
+                emit(jit.buf, jit.size, shr16_len, 4);
+                uint8_t movabs_tag_len[] = { 0x48, 0xb9 };
+                emit(jit.buf, jit.size, movabs_tag_len, 2);
+                emit64(jit.buf, jit.size, NB_TAG_INT);
+                uint8_t orrax_len[] = { 0x48, 0x09, 0xc8 };
+                emit(jit.buf, jit.size, orrax_len, 3);
+                // Store result
+                uint8_t stval_len[] = { 0x48, 0x89, 0x83 };
+                emit(jit.buf, jit.size, stval_len, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE);
+                uint8_t jmp_len[] = { 0xe9 };
+                emit(jit.buf, jit.size, jmp_len, 1);
+                size_t lenDonePatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // slow path: C helper for non-strings (vectors, tables, etc.)
+                patchRel32(jit.buf, lenSlowPatch, jit.size);
                 emitCallHelper2(jit.buf, jit.size, (void*)jitLength, A, A, &errorExitPatches);
+                patchRel32(jit.buf, lenDonePatch, jit.size);
             } else {
                 uint8_t a1[] = { 0x48, 0x89, 0xdf }; emit(jit.buf, jit.size, a1, 3);
                 uint8_t a2[] = { 0x4c, 0x89, 0xe6 }; emit(jit.buf, jit.size, a2, 3);
