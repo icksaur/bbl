@@ -2013,6 +2013,9 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                     hasSelfCalls = true;
                     break;
                 }
+                if (gv && gv->type() == BBL::Type::Fn && gv->isClosure()) {
+                    closureRegs[A] = gv->closureVal();
+                }
             }
             if (symId < state.vm->globalsFlat.size()) {
                 // Inline: load vm ptr from [r12+112], load globalsFlat.data() from [vm+8288],
@@ -2066,6 +2069,9 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                         selfRefRegs.insert(A);
                         hasSelfCalls = true;
                         break;
+                    }
+                    if (v && v->type() == BBL::Type::Fn && v->isClosure()) {
+                        closureRegs[A] = v->closureVal();
                     }
                 }
             }
