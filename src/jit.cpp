@@ -1804,7 +1804,6 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             patchRel32(jit.buf, slowPatch2, jit.size);
             emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((0 << 16) | (B << 8) | C), &errorExitPatches);
             patchRel32(jit.buf, donePatch, jit.size);
-            knownTypes[A] = KnownType::Unknown;
             break;
         }
         case OP_ADDI: {
@@ -1914,7 +1913,6 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             patchRel32(jit.buf, slowPatch2, jit.size);
             emitCallHelper2(jit.buf, jit.size, (void*)jitArith, A, static_cast<uint32_t>((1 << 16) | (B << 8) | C), &errorExitPatches);
             patchRel32(jit.buf, donePatch, jit.size);
-            knownTypes[A] = KnownType::Unknown;
             break;
         }
         case OP_SUBI:
