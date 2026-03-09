@@ -150,7 +150,7 @@ void jitSetCapture(BblValue* regs, BblState* state, uint8_t srcReg, uint8_t capI
 
 void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint16_t protoIdx) {
     BblClosure* proto = chunk->constants[protoIdx].closureVal();
-    BblClosure* closure = new BblClosure();
+    BblClosure* closure = state->closureSlab.alloc();
     closure->chunk = proto->chunk;
     closure->arity = proto->arity;
     closure->name = proto->name;
@@ -159,6 +159,7 @@ void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, 
     closure->jitProto = proto;
     closure->env = proto->env;
     closure->gcNext = state->gcHead; state->gcHead = closure;
+    state->allocCount++;
 
     for (size_t i = 0; i < proto->captureDescs.size(); i++) {
         auto& desc = proto->captureDescs[i];

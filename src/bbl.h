@@ -566,6 +566,7 @@ struct BblState {
     std::unordered_map<std::string, BblString*> internTable;
     GcObj* gcHead = nullptr;
     SlabAllocator<BblTable> tableSlab;
+    SlabAllocator<BblClosure> closureSlab;
     std::unique_ptr<VmState> vm;
 
     // Type descriptors

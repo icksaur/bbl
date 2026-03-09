@@ -329,13 +329,14 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
 
         case OP_CLOSURE: {
             BblClosure* proto = K(Bx).closureVal();
-            BblClosure* closure = new BblClosure();
+            BblClosure* closure = state.closureSlab.alloc();
             closure->chunk = proto->chunk;
             closure->arity = proto->arity;
             closure->name = proto->name;
             closure->captureDescs = proto->captureDescs;
             closure->captures.resize(proto->captureDescs.size());
             closure->gcNext = state.gcHead; state.gcHead = closure;
+            state.allocCount++;
 
             for (size_t i = 0; i < proto->captureDescs.size(); i++) {
                 auto& desc = proto->captureDescs[i];
