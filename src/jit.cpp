@@ -2259,6 +2259,73 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                     emit(jit.buf, jit.size, shr16, 4); // rdi = table ptr
                 }
 
+                // Array fast path: check if key is integer in [0, asize)
+                // Load key: mov rsi, [rbx + (A+1)*8]
+                uint8_t ldkey_arr[] = { 0x48, 0x8b, 0xb3 };
+                emit(jit.buf, jit.size, ldkey_arr, 3);
+                emit32(jit.buf, jit.size, (A + 1) * VAL_SIZE);
+                // Check TAG_INT: shr rsi copy, 48; cmp with 0xFFFA
+                uint8_t movrax_rsi_a[] = { 0x48, 0x89, 0xf0 };
+                emit(jit.buf, jit.size, movrax_rsi_a, 3); // mov rax, rsi
+                uint8_t shrrax48[] = { 0x48, 0xc1, 0xe8, 0x30 };
+                emit(jit.buf, jit.size, shrrax48, 4); // shr rax, 48
+                uint8_t cmpax[] = { 0x66, 0x3d };
+                emit(jit.buf, jit.size, cmpax, 2);
+                emit16(jit.buf, jit.size, 0xFFFA); // cmp ax, TAG_INT>>48
+                uint8_t jne_rel32_a[] = { 0x0f, 0x85 };
+                emit(jit.buf, jit.size, jne_rel32_a, 2);
+                size_t arrSkipPatch = jit.size;
+                emit32(jit.buf, jit.size, 0); // jne → hash_probe
+                // Extract int: shl rsi, 16; sar rsi, 16
+                uint8_t shlrsi[] = { 0x48, 0xc1, 0xe6, 0x10 };
+                emit(jit.buf, jit.size, shlrsi, 4);
+                uint8_t sarrsi[] = { 0x48, 0xc1, 0xfe, 0x10 };
+                emit(jit.buf, jit.size, sarrsi, 4); // rsi = int value
+                // Check >= 0: test rsi, rsi; js → hash
+                uint8_t testrsi[] = { 0x48, 0x85, 0xf6 };
+                emit(jit.buf, jit.size, testrsi, 3);
+                uint8_t js_rel32[] = { 0x0f, 0x88 };
+                emit(jit.buf, jit.size, js_rel32, 2);
+                size_t arrNegPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // cmp esi, [rdi + tblAsizeOff]
+                uint8_t cmpesi[] = { 0x3b, 0xb7 };
+                emit(jit.buf, jit.size, cmpesi, 2);
+                emit32(jit.buf, jit.size, tblAsizeOff);
+                // jae → hash
+                uint8_t jae_rel32[] = { 0x0f, 0x83 };
+                emit(jit.buf, jit.size, jae_rel32, 2);
+                size_t arrOobPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Load array: mov rcx, [rdi + tblArrayOff]
+                uint8_t ldArr[] = { 0x48, 0x8b, 0x8f };
+                emit(jit.buf, jit.size, ldArr, 3);
+                emit32(jit.buf, jit.size, tblArrayOff);
+                // Load value: mov rax, [rcx + rsi*8]
+                uint8_t ldArrVal[] = { 0x48, 0x8b, 0x04, 0xf1 };
+                emit(jit.buf, jit.size, ldArrVal, 4);
+                // test rax, rax; jz → hash (empty slot)
+                uint8_t testrax[] = { 0x48, 0x85, 0xc0 };
+                emit(jit.buf, jit.size, testrax, 3);
+                uint8_t jz_rel32[] = { 0x0f, 0x84 };
+                emit(jit.buf, jit.size, jz_rel32, 2);
+                size_t arrEmptyPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Store result: mov [rbx+A*8], rax; jmp done
+                uint8_t stval_a[] = { 0x48, 0x89, 0x83 };
+                emit(jit.buf, jit.size, stval_a, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE);
+                uint8_t jmprel32_a[] = { 0xe9 };
+                emit(jit.buf, jit.size, jmprel32_a, 1);
+                size_t arrDonePatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+
+                // hash_probe: (patch array miss jumps here)
+                patchRel32(jit.buf, arrSkipPatch, jit.size);
+                patchRel32(jit.buf, arrNegPatch, jit.size);
+                patchRel32(jit.buf, arrOobPatch, jit.size);
+                patchRel32(jit.buf, arrEmptyPatch, jit.size);
+
                 // Load capacity: mov ecx, [rdi + tblCapacityOff]
                 uint8_t ldcap[] = { 0x8b, 0x8f };
                 emit(jit.buf, jit.size, ldcap, 2);
@@ -2353,6 +2420,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
 
                 // done:
                 patchRel32(jit.buf, donePatch1, jit.size);
+                patchRel32(jit.buf, arrDonePatch, jit.size);
 
             } else if (methodStr == state.m.set) {
                 // Inline table set: type guard → hash probe → update value (existing keys only)
@@ -2394,6 +2462,76 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                     uint8_t shr16[] = { 0x48, 0xc1, 0xef, 0x10 };
                     emit(jit.buf, jit.size, shr16, 4);
                 }
+
+                // Array fast path for set: check if key is integer in [0, asize)
+                uint8_t ldkey_s[] = { 0x48, 0x8b, 0xb3 };
+                emit(jit.buf, jit.size, ldkey_s, 3);
+                emit32(jit.buf, jit.size, (A + 1) * VAL_SIZE); // mov rsi, key
+                uint8_t movrax_rsi_s[] = { 0x48, 0x89, 0xf0 };
+                emit(jit.buf, jit.size, movrax_rsi_s, 3);
+                uint8_t shrrax48_s[] = { 0x48, 0xc1, 0xe8, 0x30 };
+                emit(jit.buf, jit.size, shrrax48_s, 4);
+                uint8_t cmpax_s[] = { 0x66, 0x3d };
+                emit(jit.buf, jit.size, cmpax_s, 2);
+                emit16(jit.buf, jit.size, 0xFFFA);
+                uint8_t jne_s[] = { 0x0f, 0x85 };
+                emit(jit.buf, jit.size, jne_s, 2);
+                size_t arrSkipSetPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Extract int
+                uint8_t shlrsi_s[] = { 0x48, 0xc1, 0xe6, 0x10 };
+                emit(jit.buf, jit.size, shlrsi_s, 4);
+                uint8_t sarrsi_s[] = { 0x48, 0xc1, 0xfe, 0x10 };
+                emit(jit.buf, jit.size, sarrsi_s, 4);
+                // Bounds check
+                uint8_t testrsi_s[] = { 0x48, 0x85, 0xf6 };
+                emit(jit.buf, jit.size, testrsi_s, 3);
+                uint8_t js_s[] = { 0x0f, 0x88 };
+                emit(jit.buf, jit.size, js_s, 2);
+                size_t arrNegSetPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                uint8_t cmpesi_s[] = { 0x3b, 0xb7 };
+                emit(jit.buf, jit.size, cmpesi_s, 2);
+                emit32(jit.buf, jit.size, tblAsizeOff);
+                uint8_t jae_s[] = { 0x0f, 0x83 };
+                emit(jit.buf, jit.size, jae_s, 2);
+                size_t arrOobSetPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Load array ptr: mov rcx, [rdi + tblArrayOff]
+                uint8_t ldArr_s[] = { 0x48, 0x8b, 0x8f };
+                emit(jit.buf, jit.size, ldArr_s, 3);
+                emit32(jit.buf, jit.size, tblArrayOff);
+                // Check if slot occupied: cmp qword [rcx+rsi*8], 0
+                uint8_t cmpArrSlot[] = { 0x48, 0x83, 0x3c, 0xf1, 0x00 };
+                emit(jit.buf, jit.size, cmpArrSlot, 5);
+                // je → slow_path (new key needs count++)
+                uint8_t je_s[] = { 0x0f, 0x84 };
+                emit(jit.buf, jit.size, je_s, 2);
+                size_t arrNewKeySetPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Store value: mov rax, [rbx+(A+2)*8]; mov [rcx+rsi*8], rax
+                uint8_t ldnewval_s[] = { 0x48, 0x8b, 0x83 };
+                emit(jit.buf, jit.size, ldnewval_s, 3);
+                emit32(jit.buf, jit.size, (A + 2) * VAL_SIZE);
+                uint8_t stArrVal[] = { 0x48, 0x89, 0x04, 0xf1 };
+                emit(jit.buf, jit.size, stArrVal, 4); // mov [rcx+rsi*8], rax
+                // Store null result
+                uint8_t movabs_null_s[] = { 0x48, 0xb8 };
+                emit(jit.buf, jit.size, movabs_null_s, 2);
+                emit64(jit.buf, jit.size, NB_TAG_NULL);
+                uint8_t stval_s[] = { 0x48, 0x89, 0x83 };
+                emit(jit.buf, jit.size, stval_s, 3);
+                emit32(jit.buf, jit.size, A * VAL_SIZE);
+                uint8_t jmprel32_s[] = { 0xe9 };
+                emit(jit.buf, jit.size, jmprel32_s, 1);
+                size_t arrDoneSetPatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+
+                // hash_probe: patch array misses
+                patchRel32(jit.buf, arrSkipSetPatch, jit.size);
+                patchRel32(jit.buf, arrNegSetPatch, jit.size);
+                patchRel32(jit.buf, arrOobSetPatch, jit.size);
+                patchRel32(jit.buf, arrNewKeySetPatch, jit.size);
 
                 // Hash probe (same as get)
                 uint8_t ldcap[] = { 0x8b, 0x8f };
@@ -2466,6 +2604,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 emitCallHelper2(jit.buf, jit.size, (void*)jitTableSet, A, B, &errorExitPatches);
 
                 patchRel32(jit.buf, donePatchSet, jit.size);
+                patchRel32(jit.buf, arrDoneSetPatch, jit.size);
 
             } else if (methodStr == state.m.length) {
                 emitCallHelper2(jit.buf, jit.size, (void*)jitLength, A, A, &errorExitPatches);
