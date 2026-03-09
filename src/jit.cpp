@@ -3393,6 +3393,11 @@ JitCode compileTrace(BblState& state, Trace& trace) {
     jit.buf = static_cast<uint8_t*>(jitAlloc(jit.capacity));
     jit.size = 0;
 
+    BblTable tblDummy;
+    size_t tblArrayOff = reinterpret_cast<char*>(&tblDummy.array) - reinterpret_cast<char*>(&tblDummy);
+    size_t tblAsizeOff = reinterpret_cast<char*>(&tblDummy.asize) - reinterpret_cast<char*>(&tblDummy);
+    size_t tblCountOff = reinterpret_cast<char*>(&tblDummy.count) - reinterpret_cast<char*>(&tblDummy);
+
     emitPrologue(jit.buf, jit.size);
 
     size_t loopStart = jit.size;
@@ -3563,16 +3568,188 @@ JitCode compileTrace(BblState& state, Trace& trace) {
             uint8_t origB = decodeB(inst);
             uint8_t origC = decodeC(inst);
             BblString* methodStr = entry.chunk->constants[origC].stringVal();
-            uint8_t a1[] = { 0x48, 0x89, 0xdf }; emit(jit.buf, jit.size, a1, 3);
-            uint8_t a2[] = { 0x4c, 0x89, 0xe6 }; emit(jit.buf, jit.size, a2, 3);
-            uint8_t a3[] = { 0xba }; emit(jit.buf, jit.size, a3, 1); emit32(jit.buf, jit.size, origA);
-            uint8_t a4[] = { 0xb9 }; emit(jit.buf, jit.size, a4, 1); emit32(jit.buf, jit.size, origB);
-            uint8_t movr8[] = { 0x49, 0xb8 }; emit(jit.buf, jit.size, movr8, 2);
-            emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>(methodStr));
-            uint8_t movabs[] = { 0x48, 0xb8 }; emit(jit.buf, jit.size, movabs, 2);
-            emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>((void*)jitMcall));
-            uint8_t call[] = { 0xff, 0xd0 }; emit(jit.buf, jit.size, call, 2);
-            emitErrorCheck(jit.buf, jit.size, errorExitPatches);
+
+            if (methodStr == state.m.get) {
+                // Inline array get: extract table ptr, check int key, bounds, load
+                uint8_t ld[] = { 0x48, 0x8b, 0x83 };
+                emit(jit.buf, jit.size, ld, 3);
+                emit32(jit.buf, jit.size, origA * VAL_SIZE); // mov rax, [rbx+A*8] (table)
+                uint8_t shl16[] = { 0x48, 0xc1, 0xe0, 0x10 };
+                emit(jit.buf, jit.size, shl16, 4);
+                uint8_t shr16[] = { 0x48, 0xc1, 0xe8, 0x10 };
+                emit(jit.buf, jit.size, shr16, 4); // rax = table ptr
+                uint8_t movrdi[] = { 0x48, 0x89, 0xc7 };
+                emit(jit.buf, jit.size, movrdi, 3); // mov rdi, rax
+                // Load key
+                uint8_t ldkey[] = { 0x48, 0x8b, 0xb3 };
+                emit(jit.buf, jit.size, ldkey, 3);
+                emit32(jit.buf, jit.size, (origA + 1) * VAL_SIZE); // mov rsi, key
+                // Check TAG_INT
+                uint8_t movrax_rsi[] = { 0x48, 0x89, 0xf0 };
+                emit(jit.buf, jit.size, movrax_rsi, 3);
+                uint8_t shrrax48[] = { 0x48, 0xc1, 0xe8, 0x30 };
+                emit(jit.buf, jit.size, shrrax48, 4);
+                uint8_t cmpax[] = { 0x66, 0x3d };
+                emit(jit.buf, jit.size, cmpax, 2);
+                emit16(jit.buf, jit.size, 0xFFFA);
+                uint8_t jne_g[] = { 0x0f, 0x85 };
+                emit(jit.buf, jit.size, jne_g, 2);
+                size_t gSlowPatch1 = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Extract int
+                uint8_t shlrsi[] = { 0x48, 0xc1, 0xe6, 0x10 };
+                emit(jit.buf, jit.size, shlrsi, 4);
+                uint8_t sarrsi[] = { 0x48, 0xc1, 0xfe, 0x10 };
+                emit(jit.buf, jit.size, sarrsi, 4);
+                // Bounds: test rsi, rsi; js slow
+                uint8_t testrsi[] = { 0x48, 0x85, 0xf6 };
+                emit(jit.buf, jit.size, testrsi, 3);
+                uint8_t js_g[] = { 0x0f, 0x88 };
+                emit(jit.buf, jit.size, js_g, 2);
+                size_t gSlowPatch2 = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // cmp esi, [rdi+tblAsizeOff]
+                uint8_t cmpesi[] = { 0x3b, 0xb7 };
+                emit(jit.buf, jit.size, cmpesi, 2);
+                emit32(jit.buf, jit.size, tblAsizeOff);
+                uint8_t jae_g[] = { 0x0f, 0x83 };
+                emit(jit.buf, jit.size, jae_g, 2);
+                size_t gSlowPatch3 = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Load array[k]
+                uint8_t ldArr[] = { 0x48, 0x8b, 0x8f };
+                emit(jit.buf, jit.size, ldArr, 3);
+                emit32(jit.buf, jit.size, tblArrayOff);
+                uint8_t ldVal[] = { 0x48, 0x8b, 0x04, 0xf1 };
+                emit(jit.buf, jit.size, ldVal, 4); // mov rax, [rcx+rsi*8]
+                uint8_t testrax[] = { 0x48, 0x85, 0xc0 };
+                emit(jit.buf, jit.size, testrax, 3);
+                uint8_t jz_g[] = { 0x0f, 0x84 };
+                emit(jit.buf, jit.size, jz_g, 2);
+                size_t gSlowPatch4 = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Store result
+                uint8_t stval[] = { 0x48, 0x89, 0x83 };
+                emit(jit.buf, jit.size, stval, 3);
+                emit32(jit.buf, jit.size, origA * VAL_SIZE);
+                uint8_t jmpDone[] = { 0xe9 };
+                emit(jit.buf, jit.size, jmpDone, 1);
+                size_t gDonePatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Slow path
+                patchRel32(jit.buf, gSlowPatch1, jit.size);
+                patchRel32(jit.buf, gSlowPatch2, jit.size);
+                patchRel32(jit.buf, gSlowPatch3, jit.size);
+                patchRel32(jit.buf, gSlowPatch4, jit.size);
+                emitCallHelper2(jit.buf, jit.size, (void*)jitTableGet, origA, origB, &errorExitPatches);
+                patchRel32(jit.buf, gDonePatch, jit.size);
+
+            } else if (methodStr == state.m.set) {
+                // Inline array set: extract table ptr, check int key, bounds, store
+                uint8_t ld[] = { 0x48, 0x8b, 0x83 };
+                emit(jit.buf, jit.size, ld, 3);
+                emit32(jit.buf, jit.size, origA * VAL_SIZE);
+                uint8_t shl16[] = { 0x48, 0xc1, 0xe0, 0x10 };
+                emit(jit.buf, jit.size, shl16, 4);
+                uint8_t shr16[] = { 0x48, 0xc1, 0xe8, 0x10 };
+                emit(jit.buf, jit.size, shr16, 4);
+                uint8_t movrdi[] = { 0x48, 0x89, 0xc7 };
+                emit(jit.buf, jit.size, movrdi, 3);
+                // Load + check key
+                uint8_t ldkey[] = { 0x48, 0x8b, 0xb3 };
+                emit(jit.buf, jit.size, ldkey, 3);
+                emit32(jit.buf, jit.size, (origA + 1) * VAL_SIZE);
+                uint8_t movrax_rsi[] = { 0x48, 0x89, 0xf0 };
+                emit(jit.buf, jit.size, movrax_rsi, 3);
+                uint8_t shrrax48[] = { 0x48, 0xc1, 0xe8, 0x30 };
+                emit(jit.buf, jit.size, shrrax48, 4);
+                uint8_t cmpax[] = { 0x66, 0x3d };
+                emit(jit.buf, jit.size, cmpax, 2);
+                emit16(jit.buf, jit.size, 0xFFFA);
+                uint8_t jne_s[] = { 0x0f, 0x85 };
+                emit(jit.buf, jit.size, jne_s, 2);
+                size_t sSlowPatch1 = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                uint8_t shlrsi[] = { 0x48, 0xc1, 0xe6, 0x10 };
+                emit(jit.buf, jit.size, shlrsi, 4);
+                uint8_t sarrsi[] = { 0x48, 0xc1, 0xfe, 0x10 };
+                emit(jit.buf, jit.size, sarrsi, 4);
+                uint8_t testrsi[] = { 0x48, 0x85, 0xf6 };
+                emit(jit.buf, jit.size, testrsi, 3);
+                uint8_t js_s[] = { 0x0f, 0x88 };
+                emit(jit.buf, jit.size, js_s, 2);
+                size_t sSlowPatch2 = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                uint8_t cmpesi[] = { 0x3b, 0xb7 };
+                emit(jit.buf, jit.size, cmpesi, 2);
+                emit32(jit.buf, jit.size, tblAsizeOff);
+                uint8_t jae_s[] = { 0x0f, 0x83 };
+                emit(jit.buf, jit.size, jae_s, 2);
+                size_t sSlowPatch3 = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Load array ptr
+                uint8_t ldArr[] = { 0x48, 0x8b, 0x8f };
+                emit(jit.buf, jit.size, ldArr, 3);
+                emit32(jit.buf, jit.size, tblArrayOff);
+                // Check empty → je newkey
+                uint8_t cmpSlot[] = { 0x48, 0x83, 0x3c, 0xf1, 0x00 };
+                emit(jit.buf, jit.size, cmpSlot, 5);
+                uint8_t je_nk[] = { 0x74 };
+                emit(jit.buf, jit.size, je_nk, 1);
+                size_t nkPatch = jit.size;
+                emit8(jit.buf, jit.size, 0);
+                // Existing: store value
+                uint8_t ldnv[] = { 0x48, 0x8b, 0x83 };
+                emit(jit.buf, jit.size, ldnv, 3);
+                emit32(jit.buf, jit.size, (origA + 2) * VAL_SIZE);
+                uint8_t stArr[] = { 0x48, 0x89, 0x04, 0xf1 };
+                emit(jit.buf, jit.size, stArr, 4);
+                uint8_t jmpEx[] = { 0xeb };
+                emit(jit.buf, jit.size, jmpEx, 1);
+                size_t exPatch = jit.size;
+                emit8(jit.buf, jit.size, 0);
+                // New key: store + inc count
+                jit.buf[nkPatch] = static_cast<uint8_t>(jit.size - nkPatch - 1);
+                emit(jit.buf, jit.size, ldnv, 3);
+                emit32(jit.buf, jit.size, (origA + 2) * VAL_SIZE);
+                emit(jit.buf, jit.size, stArr, 4);
+                uint8_t incCnt[] = { 0xff, 0x87 };
+                emit(jit.buf, jit.size, incCnt, 2);
+                emit32(jit.buf, jit.size, tblCountOff);
+                // Done
+                jit.buf[exPatch] = static_cast<uint8_t>(jit.size - exPatch - 1);
+                // Store null result
+                uint8_t movNull[] = { 0x48, 0xb8 };
+                emit(jit.buf, jit.size, movNull, 2);
+                emit64(jit.buf, jit.size, NB_TAG_NULL);
+                uint8_t stRes[] = { 0x48, 0x89, 0x83 };
+                emit(jit.buf, jit.size, stRes, 3);
+                emit32(jit.buf, jit.size, origA * VAL_SIZE);
+                uint8_t jmpDone[] = { 0xe9 };
+                emit(jit.buf, jit.size, jmpDone, 1);
+                size_t sDonePatch = jit.size;
+                emit32(jit.buf, jit.size, 0);
+                // Slow path
+                patchRel32(jit.buf, sSlowPatch1, jit.size);
+                patchRel32(jit.buf, sSlowPatch2, jit.size);
+                patchRel32(jit.buf, sSlowPatch3, jit.size);
+                emitCallHelper2(jit.buf, jit.size, (void*)jitTableSet, origA, origB, &errorExitPatches);
+                patchRel32(jit.buf, sDonePatch, jit.size);
+
+            } else if (methodStr == state.m.length) {
+                emitCallHelper2(jit.buf, jit.size, (void*)jitLength, origA, origA, &errorExitPatches);
+            } else {
+                uint8_t a1[] = { 0x48, 0x89, 0xdf }; emit(jit.buf, jit.size, a1, 3);
+                uint8_t a2[] = { 0x4c, 0x89, 0xe6 }; emit(jit.buf, jit.size, a2, 3);
+                uint8_t a3[] = { 0xba }; emit(jit.buf, jit.size, a3, 1); emit32(jit.buf, jit.size, origA);
+                uint8_t a4[] = { 0xb9 }; emit(jit.buf, jit.size, a4, 1); emit32(jit.buf, jit.size, origB);
+                uint8_t movr8[] = { 0x49, 0xb8 }; emit(jit.buf, jit.size, movr8, 2);
+                emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>(methodStr));
+                uint8_t movabs[] = { 0x48, 0xb8 }; emit(jit.buf, jit.size, movabs, 2);
+                emit64(jit.buf, jit.size, reinterpret_cast<uint64_t>((void*)jitMcall));
+                uint8_t call[] = { 0xff, 0xd0 }; emit(jit.buf, jit.size, call, 2);
+                emitErrorCheck(jit.buf, jit.size, errorExitPatches);
+            }
             break;
         }
 

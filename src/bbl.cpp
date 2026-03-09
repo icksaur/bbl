@@ -86,7 +86,8 @@ std::expected<BblValue, BBL::GetError> BblTable::get(const BblValue& key) const 
 
 void BblTable::arrayGrow(uint32_t minSize) {
     uint32_t newSize = asize ? asize : 4;
-    while (newSize < minSize) newSize *= 2;
+    uint32_t growFactor = (newSize > 1024) ? 4 : 2;
+    while (newSize < minSize) newSize *= growFactor;
     auto* newArr = static_cast<BblValue*>(calloc(newSize, sizeof(BblValue)));
     if (array) { memcpy(newArr, array, asize * sizeof(BblValue)); free(array); }
     array = newArr;
