@@ -1988,7 +1988,8 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 }
             }
 
-            if (loopHasTable && !loopHasFloat) {
+            if (!loopHasFloat && !emitStepChecks &&
+                !(laIt != loopAllocMap.end() && laIt->second.active)) {
                 uint8_t a1[] = { 0x48, 0x89, 0xdf };
                 emit(jit.buf, jit.size, a1, 3);
                 uint8_t a2[] = { 0x4c, 0x89, 0xe6 };
