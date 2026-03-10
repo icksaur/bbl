@@ -182,6 +182,8 @@ void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, 
 }
 
 void jitTable(BblValue* regs, BblState* state, uint8_t destReg, uint8_t pairCount) {
+    if (!state->gcPaused && !state->gcRunning && state->allocCount >= state->gen0Threshold)
+        state->gcMinor();
     BblTable* tbl = state->allocTable();
     for (int i = 0; i < pairCount; i++)
         tbl->set(regs[destReg + 1 + i*2], regs[destReg + 2 + i*2]);
