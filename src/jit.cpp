@@ -50,6 +50,7 @@ extern "C" {
     int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loopPc);
     void jitTableGet(BblValue* regs, BblState* state, uint8_t base, uint8_t argc);
     void jitTableSet(BblValue* regs, BblState* state, uint8_t base, uint8_t argc);
+    void jitWriteBarrier(GcObj* container, BblState* state, uint64_t valBits, uint64_t unused);
 }
 
 static thread_local bool g_jitError = false;
@@ -790,6 +791,11 @@ void jitTableSet(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
     regs[base] = BblValue::makeNull();
 }
 
+void jitWriteBarrier(GcObj* container, BblState* state, uint64_t valBits, uint64_t) {
+    BblValue val; val.bits = valBits;
+    state->writeBarrier(container, val);
+}
+
 static std::string jitValToStr(BblState& state, const BblValue& v) {
     switch (v.type()) {
         case BBL::Type::Null: return "null";
@@ -1217,6 +1223,42 @@ static void emitLineStore(uint8_t* buf, size_t& pos, size_t runtimeLineOff, int 
     emit(buf, pos, prefix, 4);
     emit32(buf, pos, static_cast<uint32_t>(runtimeLineOff));
     emit32(buf, pos, static_cast<uint32_t>(line));
+}
+
+static void emitWriteBarrier(uint8_t* buf, size_t& pos) {
+    // rdi = container (GcObj*), rax = stored value
+    // Fast path: test byte [rdi+2], 1  (check container->old)
+    uint8_t testOld[] = { 0xf6, 0x47, 0x02, 0x01 };
+    emit(buf, pos, testOld, 4);
+    // jz skip (container is young → no barrier)
+    uint8_t jz[] = { 0x74 };
+    emit(buf, pos, jz, 1);
+    size_t skipPatch = pos;
+    emit8(buf, pos, 0);
+    // Slow path: call jitWriteBarrier(container=rdi, state=r12, valBits=rax, 0)
+    // rdi already = container, rsi = r12 (state)
+    uint8_t movRsi[] = { 0x4c, 0x89, 0xe6 }; // mov rsi, r12
+    emit(buf, pos, movRsi, 3);
+    uint8_t movRdx[] = { 0x48, 0x89, 0xc2 }; // mov rdx, rax
+    emit(buf, pos, movRdx, 3);
+    uint8_t xorRcx[] = { 0x31, 0xc9 }; // xor ecx, ecx
+    emit(buf, pos, xorRcx, 2);
+    // Save rax (value) across call
+    uint8_t pushRax[] = { 0x50 };
+    emit(buf, pos, pushRax, 1);
+    uint8_t pushRdi[] = { 0x57 };
+    emit(buf, pos, pushRdi, 1);
+    uint8_t movabs[] = { 0x48, 0xb8 };
+    emit(buf, pos, movabs, 2);
+    emit64(buf, pos, reinterpret_cast<uint64_t>((void*)jitWriteBarrier));
+    uint8_t call[] = { 0xff, 0xd0 };
+    emit(buf, pos, call, 2);
+    uint8_t popRdi[] = { 0x5f };
+    emit(buf, pos, popRdi, 1);
+    uint8_t popRax[] = { 0x58 };
+    emit(buf, pos, popRax, 1);
+    // skip:
+    buf[skipPatch] = static_cast<uint8_t>(pos - skipPatch - 1);
 }
 
 static void emitCallHelper2(uint8_t* buf, size_t& pos, void* fn, uint32_t arg3, uint32_t arg4, std::vector<size_t>* errPatches = nullptr) {
@@ -2631,21 +2673,23 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 emit32(jit.buf, jit.size, (A + 2) * VAL_SIZE);
                 uint8_t stArrVal[] = { 0x48, 0x89, 0x04, 0xf1 };
                 emit(jit.buf, jit.size, stArrVal, 4); // mov [rcx+rsi*8], rax
-                uint8_t jmp_done_s[] = { 0xeb };
+                emitWriteBarrier(jit.buf, jit.size);
+                uint8_t jmp_done_s[] = { 0xe9 };
                 emit(jit.buf, jit.size, jmp_done_s, 1);
                 size_t existDonePatch = jit.size;
-                emit8(jit.buf, jit.size, 0); // rel8
+                emit32(jit.buf, jit.size, 0); // rel32
                 // new_key: store value + increment count
                 jit.buf[newKeyPatch] = static_cast<uint8_t>(jit.size - newKeyPatch - 1);
                 emit(jit.buf, jit.size, ldnewval_s, 3);
                 emit32(jit.buf, jit.size, (A + 2) * VAL_SIZE);
                 emit(jit.buf, jit.size, stArrVal, 4); // mov [rcx+rsi*8], rax
+                emitWriteBarrier(jit.buf, jit.size);
                 // inc dword [rdi + tblCountOff]
                 uint8_t incCount[] = { 0xff, 0x87 };
                 emit(jit.buf, jit.size, incCount, 2);
                 emit32(jit.buf, jit.size, tblCountOff);
                 // done:
-                jit.buf[existDonePatch] = static_cast<uint8_t>(jit.size - existDonePatch - 1);
+                patchRel32(jit.buf, existDonePatch, jit.size);
                 // Store null result
                 uint8_t movabs_null_s[] = { 0x48, 0xb8 };
                 emit(jit.buf, jit.size, movabs_null_s, 2);
@@ -3775,20 +3819,22 @@ JitCode compileTrace(BblState& state, Trace& trace) {
                 emit32(jit.buf, jit.size, (origA + 2) * VAL_SIZE);
                 uint8_t stArr[] = { 0x48, 0x89, 0x04, 0xf1 };
                 emit(jit.buf, jit.size, stArr, 4);
-                uint8_t jmpEx[] = { 0xeb };
+                emitWriteBarrier(jit.buf, jit.size);
+                uint8_t jmpEx[] = { 0xe9 };
                 emit(jit.buf, jit.size, jmpEx, 1);
                 size_t exPatch = jit.size;
-                emit8(jit.buf, jit.size, 0);
+                emit32(jit.buf, jit.size, 0);
                 // New key: store + inc count
                 jit.buf[nkPatch] = static_cast<uint8_t>(jit.size - nkPatch - 1);
                 emit(jit.buf, jit.size, ldnv, 3);
                 emit32(jit.buf, jit.size, (origA + 2) * VAL_SIZE);
                 emit(jit.buf, jit.size, stArr, 4);
+                emitWriteBarrier(jit.buf, jit.size);
                 uint8_t incCnt[] = { 0xff, 0x87 };
                 emit(jit.buf, jit.size, incCnt, 2);
                 emit32(jit.buf, jit.size, tblCountOff);
                 // Done
-                jit.buf[exPatch] = static_cast<uint8_t>(jit.size - exPatch - 1);
+                patchRel32(jit.buf, exPatch, jit.size);
                 // Store null result
                 uint8_t movNull[] = { 0x48, 0xb8 };
                 emit(jit.buf, jit.size, movNull, 2);
