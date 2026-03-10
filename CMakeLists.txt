@@ -13,6 +13,7 @@ target_include_directories(lz4 PUBLIC vendor/lz4)
 add_library(bbl_lib STATIC src/bbl.cpp src/compiler.cpp src/vm.cpp src/disasm.cpp src/jit.cpp)
 target_include_directories(bbl_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(bbl_lib PUBLIC Threads::Threads lz4 yyjson)
+set_source_files_properties(src/jit.cpp PROPERTIES COMPILE_OPTIONS "-fomit-frame-pointer")
 
 add_executable(bbl src/main.cpp src/lsp.cpp)
 target_link_libraries(bbl PRIVATE bbl_lib)
