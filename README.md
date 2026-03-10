@@ -140,8 +140,8 @@ BBL::addStdLib(bbl);
 bbl.execfile("types.bbl");
 bbl.execfile("scene.bbl");
 
-auto* verts = bbl.getVector<vertex>("player-verts");
-auto* tex = bbl.getBinary("player-texture");
+auto* verts = bbl.getVectorData<vertex>("player-verts");
+auto* tex = bbl.getBinary("player-texture").value();
 // ~BblState frees all script data, runs GC
 ```
 

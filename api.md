@@ -78,6 +78,41 @@ bbl.currentFile = "scene.bbl";                     // shown in error backtraces
 bbl.scriptDir = std::filesystem::path("scripts/"); // base for relative paths
 ```
 
+### call
+
+```cpp
+auto fn = bbl.get("my-fn").value();
+BblValue result = bbl.call(fn, {BblValue::makeInt(42)});
+```
+
+Invoke a pre-compiled BBL closure or C function without re-parsing.  Three
+overloads:
+
+```cpp
+BblValue call(BblValue callable, std::initializer_list<BblValue> args);
+BblValue call(BblValue callable, std::span<const BblValue> args);
+BblValue call(BblValue callable);  // no args
+```
+
+Returns the function's return value.  Errors propagate as `BBL::Error`.
+Not thread-safe — must be called from the same thread that owns the BblState.
+
+For C functions that return multiple values, access all return values via:
+
+```cpp
+const std::vector<BblValue>& rv = bbl.getReturnValues();
+// rv[0] = first return, rv[1] = second, etc.
+```
+
+### defnTable
+
+```cpp
+bbl.defnTable("WindowFlags", {{"NoTitleBar", 1}, {"NoResize", 2}, {"NoMove", 4}});
+```
+
+Creates a table with string keys and integer values, sets it as a global.
+Access from script as `WindowFlags.NoTitleBar`.
+
 ---
 
 ## C Function Registration
@@ -503,33 +538,46 @@ uint8_t* ptr = b->data.data();
 
 ## Garbage Collection
 
-Mark-and-sweep.  Managed objects: strings, binaries, closures, vectors, tables,
-userdata.
+Generational (two-generation) collector.  Managed objects: strings, binaries,
+closures, vectors, tables, userdata.
 
 ### Configuration
 
 ```cpp
-bbl.gcThreshold = 256;    // trigger GC after this many allocations (default)
+bbl.gen0Threshold = 512;    // trigger nursery collection after this many allocations
+bbl.gen1Threshold = 4096;   // full collection threshold
 ```
 
-Adaptive: after each sweep, threshold is set to `max(256, liveCount * 2)`.
+Gen0 threshold adapts after each minor collection.
 
 ### Manual Collection
 
 ```cpp
-bbl.gc();
+bbl.gc();       // minor collection (nursery only) — fast
+bbl.gcMinor();  // same as gc()
+bbl.gcFull();   // full collection (nursery + tenured) — thorough
+```
+
+### Pausing GC
+
+```cpp
+bbl.pauseGC();    // prevent all collections
+bbl.resumeGC();   // re-enable collections
+
+// RAII helper:
+{
+    GcPauseGuard guard(&bbl);
+    // ... GC paused in this scope ...
+}
 ```
 
 ### GC Roots
 
-- Scope chain (all live bindings from root through call stack)
-- String intern table
-- Type descriptor table
-
-### Safe Points
-
-GC triggers only at safe points (top of exec/execExpr, loop iterations) where
-all live values are rooted in scope bindings.
+- VM register file (stack)
+- Global symbol table
+- Call arguments, return values
+- Method name cache, symbol name table
+- Module cache, current environment
 
 ---
 
