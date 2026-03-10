@@ -1,11 +1,13 @@
 // Side exit with sunk allocation: table is sunk (loop-local),
 // but a type guard fails mid-iteration. The side exit must
 // materialize the table from register values.
-(= results 0)
-(= i 0)
-(loop (< i 100)
-  (= t (table "a" i "b" (+ i 1)))
-  (= val (if (< i 80) t.a (* t.b 1.0)))
-  (= results (+ results val))
-  (= i (+ i 1)))
-(print results)
+(= run (fn ()
+    (= results 0)
+    (= i 0)
+    (loop (< i 100)
+      (= t (table "a" i "b" (+ i 1)))
+      (= val (if (< i 80) t.a (* t.b 1.0)))
+      (= results (+ results val))
+      (= i (+ i 1)))
+    (print results)))
+(run)

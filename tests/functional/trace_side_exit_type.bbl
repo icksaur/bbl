@@ -2,10 +2,12 @@
 // First 50 iterations use int, then switch to float.
 // A tracing JIT records int types, guards will fail at iteration 50.
 // The side exit must correctly resume with float values.
-(= sum 0)
-(= i 0)
-(loop (< i 100)
-  (= val (if (< i 50) i (* i 1.5)))
-  (= sum (+ sum val))
-  (= i (+ i 1)))
-(print sum)
+(= run (fn ()
+    (= sum 0)
+    (= i 0)
+    (loop (< i 100)
+      (= val (if (< i 50) i (* i 1.5)))
+      (= sum (+ sum val))
+      (= i (+ i 1)))
+    (print sum)))
+(run)
