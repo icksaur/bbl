@@ -582,6 +582,7 @@ struct BblState {
     size_t gen0Threshold = 4096;
     size_t gen1Threshold = 4096;
     bool gcPaused = false;
+    bool gcRunning = false;
     std::vector<GcObj*> rememberedSet;
     void pauseGC() { gcPaused = true; }
     void resumeGC() { gcPaused = false; }

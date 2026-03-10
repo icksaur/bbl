@@ -701,7 +701,7 @@ BblString* BblState::intern(const std::string& s) {
     if (it != internTable.end()) {
         return it->second;
     }
-    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
+    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* str = new BblString{s, false, true};
     str->gcNext = nurseryHead; nurseryHead = str;
     internTable[str->data] = str;
@@ -710,7 +710,7 @@ BblString* BblState::intern(const std::string& s) {
 }
 
 BblString* BblState::allocString(std::string s) {
-    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
+    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* str = new BblString{std::move(s)};
     str->gcNext = nurseryHead; nurseryHead = str;
     allocCount++;
@@ -745,7 +745,7 @@ size_t BblBinary::length() const {
 }
 
 BblBinary* BblState::allocBinary(std::vector<uint8_t> data) {
-    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
+    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* b = new BblBinary();
     b->data = std::move(data);
     b->gcNext = nurseryHead; nurseryHead = b;
@@ -754,7 +754,7 @@ BblBinary* BblState::allocBinary(std::vector<uint8_t> data) {
 }
 
 BblBinary* BblState::allocLazyBinary(const char* src, size_t size, bool isCompressed) {
-    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
+    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* b = new BblBinary();
     b->lazySource = src;
     b->lazySize = size;
@@ -765,7 +765,7 @@ BblBinary* BblState::allocLazyBinary(const char* src, size_t size, bool isCompre
 }
 
 BblFn* BblState::allocFn() {
-    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
+    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* f = new BblFn{};
     f->gcNext = nurseryHead; nurseryHead = f;
     allocCount++;
@@ -773,7 +773,7 @@ BblFn* BblState::allocFn() {
 }
 
 BblStruct* BblState::allocStruct(StructDesc* desc) {
-    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
+    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* s = new BblStruct();
     s->desc = desc;
     s->data.resize(desc->totalSize, 0);
@@ -783,7 +783,7 @@ BblStruct* BblState::allocStruct(StructDesc* desc) {
 }
 
 BblVec* BblState::allocVector(const std::string& elemType, BBL::Type elemTypeTag, size_t elemSize) {
-    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
+    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* v = new BblVec();
     v->elemType = elemType;
     v->elemTypeTag = elemTypeTag;
@@ -794,7 +794,7 @@ BblVec* BblState::allocVector(const std::string& elemType, BBL::Type elemTypeTag
 }
 
 BblTable* BblState::allocTable() {
-    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
+    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     BblTable* t = tableSlab.alloc();
     t->gcNext = nurseryHead; nurseryHead = t;
     allocCount++;
@@ -802,7 +802,7 @@ BblTable* BblState::allocTable() {
 }
 
 BblUserData* BblState::allocUserData(const std::string& typeName, void* data) {
-    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
+    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto it = userDataDescs.find(typeName);
     if (it == userDataDescs.end()) {
         throw BBL::Error{"unknown userdata type: " + typeName};
@@ -1028,6 +1028,8 @@ static void sweepList(BblState& state, GcObj** head, size_t& liveCount) {
 }
 
 void BblState::gcMinor() {
+    if (gcRunning) return;
+    gcRunning = true;
     markRoots(*this, gcMarkGen0);
 
     for (GcObj* obj : rememberedSet) {
@@ -1068,9 +1070,12 @@ void BblState::gcMinor() {
     gen0Threshold = std::max<size_t>(256, nurseryLive * 4);
     allocCount = 0;
     memset(sliceCache, 0, sizeof(sliceCache));
+    gcRunning = false;
 }
 
 void BblState::gcFull() {
+    if (gcRunning) return;
+    gcRunning = true;
     markRoots(*this, gcMark);
 
     size_t liveCount = 0;
@@ -1095,10 +1100,11 @@ void BblState::gcFull() {
     gen1Threshold = std::max<size_t>(4096, liveCount * 2);
     allocCount = 0;
     memset(sliceCache, 0, sizeof(sliceCache));
+    gcRunning = false;
 }
 
 void BblState::gc() {
-    gcFull();
+    gcMinor();
 }
 
 // ---------- Eval ----------
@@ -1174,7 +1180,9 @@ void BblState::exec(const std::string& source) {
     g_currentBblState = this;
     BblLexer lexer(source.c_str(), source.size());
     auto nodes = parse(lexer);
+    pauseGC();
     Chunk chunk = compile(*this, nodes);
+    resumeGC();
     jitExecute(*this, chunk);
     materializeLazyBinaries();
 }
@@ -1183,7 +1191,9 @@ BblValue BblState::execExpr(const std::string& source) {
     g_currentBblState = this;
     BblLexer lexer(source.c_str(), source.size());
     auto nodes = parse(lexer);
+    pauseGC();
     Chunk chunk = compile(*this, nodes);
+    resumeGC();
     auto result = jitExecute(*this, chunk);
     materializeLazyBinaries();
     return result;
