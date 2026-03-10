@@ -101,8 +101,14 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
             state->callArgs.push_back(regs[base + 1 + i]);
         state->hasReturn = false;
         state->returnValue = BblValue::makeNull();
-        callee.cfnVal()(state);
-        regs[base] = state->hasReturn ? state->returnValue : BblValue::makeNull();
+        state->returnValues.clear();
+        state->returnCount = callee.cfnVal()(state);
+        if (state->returnCount > 1 && state->returnValues.size() >= (size_t)state->returnCount) {
+            for (int i = 0; i < state->returnCount; i++)
+                regs[base + i] = state->returnValues[i];
+        } else {
+            regs[base] = state->hasReturn ? state->returnValue : BblValue::makeNull();
+        }
     } else if (callee.type() == BBL::Type::Fn && callee.isClosure()) {
         BblClosure* closure = callee.closureVal();
 
@@ -3072,6 +3078,16 @@ BblValue jitExecute(BblState& state, Chunk& chunk) {
     }
 
     return result;
+}
+
+BblValue jitCallChecked(BblValue* regs, BblState* state, uint8_t argc) {
+    g_jitError = false;
+    jitCall(regs, state, 0, argc);
+    if (g_jitError) {
+        g_jitError = false;
+        throw BBL::Error{g_jitErrorMsg};
+    }
+    return regs[0];
 }
 
 void jitFree(JitCode& jit) {

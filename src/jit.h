@@ -15,7 +15,12 @@ struct JitCode {
 
 JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self = nullptr);
 BblValue jitExecute(BblState& state, Chunk& chunk);
+BblValue jitCallChecked(BblValue* regs, BblState* state, uint8_t argc);
 void jitFree(JitCode& jit);
+
+extern "C" {
+    void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc);
+}
 
 struct TraceEntry {
     uint32_t inst;

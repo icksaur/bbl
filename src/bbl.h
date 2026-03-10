@@ -12,6 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <expected>
+#include <span>
 #include <string>
 #include <string_view>
 #include <ostream>
@@ -591,6 +592,8 @@ struct BblState {
     std::vector<BblValue> callArgs;
     BblValue returnValue;
     bool hasReturn = false;
+    int returnCount = 0;
+    std::vector<BblValue> returnValues;
 
     // Backtrace
     std::vector<Frame> callStack;
@@ -687,6 +690,14 @@ struct BblState {
     void defn(const std::string& name, BblCFunction fn);
     void registerStruct(const BBL::StructBuilder& builder);
     void registerType(const BBL::TypeBuilder& builder);
+
+    BblValue call(BblValue callable, std::initializer_list<BblValue> args);
+    BblValue call(BblValue callable, std::span<const BblValue> args);
+    BblValue call(BblValue callable);
+    const std::vector<BblValue>& getReturnValues() const { return returnValues; }
+
+    void defnTable(const std::string& name,
+                   std::initializer_list<std::pair<std::string, int64_t>> entries);
 
     // Struct/vector helpers
     BblValue readField(BblStruct* s, const FieldDesc& fd);

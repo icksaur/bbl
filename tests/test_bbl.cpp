@@ -5178,6 +5178,168 @@ TEST(test_stress_deep_closures) {
     ASSERT_EQ(bbl.execExpr("(= x 42) (= f (fn () (fn () (fn () x)))) (= g (f)) (= h (g)) (h)").intVal(), (int64_t)42);
 }
 
+// ========== bbl.call Tests ==========
+
+TEST(test_call_closure) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= square (fn (x) (* x x)))");
+    auto fn = bbl.get("square").value();
+    BblValue result = bbl.call(fn, {BblValue::makeInt(7)});
+    ASSERT_EQ(result.intVal(), (int64_t)49);
+}
+
+TEST(test_call_closure_no_args) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= greet (fn () 42))");
+    auto fn = bbl.get("greet").value();
+    BblValue result = bbl.call(fn);
+    ASSERT_EQ(result.intVal(), (int64_t)42);
+}
+
+TEST(test_call_closure_multi_args) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= add3 (fn (a b c) (+ a (+ b c))))");
+    auto fn = bbl.get("add3").value();
+    BblValue result = bbl.call(fn, {BblValue::makeInt(10), BblValue::makeInt(20), BblValue::makeInt(30)});
+    ASSERT_EQ(result.intVal(), (int64_t)60);
+}
+
+TEST(test_call_cfn) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.defn("double-it", [](BblState* s) -> int {
+        s->pushInt(s->getIntArg(0) * 2);
+        return 1;
+    });
+    auto fn = bbl.get("double-it").value();
+    BblValue result = bbl.call(fn, {BblValue::makeInt(21)});
+    ASSERT_EQ(result.intVal(), (int64_t)42);
+}
+
+TEST(test_call_with_captures) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= make-adder (fn (n) (fn (x) (+ x n))))");
+    bbl.exec("(= add5 (make-adder 5))");
+    auto fn = bbl.get("add5").value();
+    BblValue result = bbl.call(fn, {BblValue::makeInt(10)});
+    ASSERT_EQ(result.intVal(), (int64_t)15);
+}
+
+TEST(test_call_non_callable) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.call(BblValue::makeInt(42)));
+}
+
+TEST(test_call_error_propagation) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= bad (fn () (error \"boom\")))");
+    auto fn = bbl.get("bad").value();
+    ASSERT_THROW(bbl.call(fn));
+}
+
+TEST(test_call_repeated) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= inc (fn (x) (+ x 1)))");
+    auto fn = bbl.get("inc").value();
+    for (int i = 0; i < 1000; i++) {
+        BblValue result = bbl.call(fn, {BblValue::makeInt(i)});
+        ASSERT_EQ(result.intVal(), (int64_t)(i + 1));
+    }
+}
+
+TEST(test_call_modifies_globals) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= items (table \"count\" 0)) (= bump (fn () (= items.count (+ items.count 1))))");
+    auto fn = bbl.get("bump").value();
+    bbl.call(fn);
+    bbl.call(fn);
+    bbl.call(fn);
+    ASSERT_EQ(bbl.execExpr("items.count").intVal(), (int64_t)3);
+}
+
+// ========== defnTable Tests ==========
+
+TEST(test_defn_table) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.defnTable("Colors", {{"Red", 1}, {"Green", 2}, {"Blue", 3}});
+    ASSERT_EQ(bbl.execExpr("Colors.Red").intVal(), (int64_t)1);
+    ASSERT_EQ(bbl.execExpr("Colors.Green").intVal(), (int64_t)2);
+    ASSERT_EQ(bbl.execExpr("Colors.Blue").intVal(), (int64_t)3);
+}
+
+// ========== Multi-Return Tests ==========
+
+TEST(test_multi_return_cfn) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.defn("div-mod", [](BblState* s) -> int {
+        int64_t a = s->getIntArg(0);
+        int64_t b = s->getIntArg(1);
+        s->pushInt(a / b);
+        s->pushInt(a % b);
+        return 2;
+    });
+    auto fn = bbl.get("div-mod").value();
+    BblValue result = bbl.call(fn, {BblValue::makeInt(17), BblValue::makeInt(5)});
+    ASSERT_EQ(result.intVal(), (int64_t)3);
+    auto& rv = bbl.getReturnValues();
+    ASSERT_EQ((int)rv.size(), 2);
+    ASSERT_EQ(rv[0].intVal(), (int64_t)3);
+    ASSERT_EQ(rv[1].intVal(), (int64_t)2);
+}
+
+TEST(test_multi_return_three_values) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.defn("rgb", [](BblState* s) -> int {
+        s->pushInt(255);
+        s->pushInt(128);
+        s->pushInt(0);
+        return 3;
+    });
+    auto fn = bbl.get("rgb").value();
+    bbl.call(fn);
+    auto& rv = bbl.getReturnValues();
+    ASSERT_EQ((int)rv.size(), 3);
+    ASSERT_EQ(rv[0].intVal(), (int64_t)255);
+    ASSERT_EQ(rv[1].intVal(), (int64_t)128);
+    ASSERT_EQ(rv[2].intVal(), (int64_t)0);
+}
+
+TEST(test_multi_return_single_compat) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.defn("single", [](BblState* s) -> int {
+        s->pushInt(42);
+        return 1;
+    });
+    ASSERT_EQ(bbl.execExpr("(single)").intVal(), (int64_t)42);
+}
+
+// ========== Atomic Buffer Tests ==========
+
+TEST(test_atomic_buffer_basic) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= buf (atomic-buffer "float32" 4))
+        (= w (buf:write))
+        (w:set 0 1.0)
+        (w:set 1 2.0)
+        (w:set 2 3.0)
+        (w:set 3 4.0)
+    )");
+    passed++;
+}
+
+TEST(test_atomic_buffer_swap) {
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"(
+        (= buf (atomic-buffer "float32" 2))
+        (= w (buf:write))
+        (w:set 0 42.0)
+        (buf:swap)
+        (= r (buf:read))
+        (r:at 0)
+    )");
+    ASSERT_NEAR(result.floatVal(), 42.0, 0.001);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -5919,6 +6081,29 @@ int main() {
     RUN(test_stress_binary_zero_size);
     RUN(test_stress_many_functions);
     RUN(test_stress_deep_closures);
+
+    std::cout << "--- bbl.call ---" << std::endl;
+    RUN(test_call_closure);
+    RUN(test_call_closure_no_args);
+    RUN(test_call_closure_multi_args);
+    RUN(test_call_cfn);
+    RUN(test_call_with_captures);
+    RUN(test_call_non_callable);
+    RUN(test_call_error_propagation);
+    RUN(test_call_repeated);
+    RUN(test_call_modifies_globals);
+
+    std::cout << "--- defnTable ---" << std::endl;
+    RUN(test_defn_table);
+
+    std::cout << "--- Multi-Return ---" << std::endl;
+    RUN(test_multi_return_cfn);
+    RUN(test_multi_return_three_values);
+    RUN(test_multi_return_single_compat);
+
+    std::cout << "--- Atomic Buffer ---" << std::endl;
+    RUN(test_atomic_buffer_basic);
+    RUN(test_atomic_buffer_swap);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

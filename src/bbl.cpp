@@ -1031,6 +1031,33 @@ BblValue BblState::execExpr(const std::string& source) {
     return result;
 }
 
+BblValue BblState::call(BblValue callable, std::span<const BblValue> args) {
+    if (args.size() > 255) throw BBL::Error{"call: too many arguments (limit 255)"};
+    std::vector<BblValue> regs(args.size() + 256);
+    regs[0] = callable;
+    for (size_t i = 0; i < args.size(); i++)
+        regs[1 + i] = args[i];
+    return jitCallChecked(regs.data(), this, static_cast<uint8_t>(args.size()));
+}
+
+BblValue BblState::call(BblValue callable, std::initializer_list<BblValue> args) {
+    return call(callable, std::span<const BblValue>(args.begin(), args.size()));
+}
+
+BblValue BblState::call(BblValue callable) {
+    std::vector<BblValue> regs(256);
+    regs[0] = callable;
+    return jitCallChecked(regs.data(), this, 0);
+}
+
+void BblState::defnTable(const std::string& name,
+                         std::initializer_list<std::pair<std::string, int64_t>> entries) {
+    BblTable* t = allocTable();
+    for (auto& [k, v] : entries)
+        t->set(BblValue::makeString(intern(k)), BblValue::makeInt(v));
+    set(name, BblValue::makeTable(t));
+}
+
 std::filesystem::path BblState::resolveSandboxPath(const std::string& path, const char* context) {
     namespace fs = std::filesystem;
     fs::path fspath(path);
@@ -1324,37 +1351,44 @@ BblValue BblState::getArg(int i) const {
 void BblState::pushInt(int64_t val) {
     returnValue = BblValue::makeInt(val);
     hasReturn = true;
+    returnValues.push_back(returnValue);
 }
 
 void BblState::pushFloat(double val) {
     returnValue = BblValue::makeFloat(val);
     hasReturn = true;
+    returnValues.push_back(returnValue);
 }
 
 void BblState::pushBool(bool val) {
     returnValue = BblValue::makeBool(val);
     hasReturn = true;
+    returnValues.push_back(returnValue);
 }
 
 void BblState::pushString(const char* str) {
     returnValue = BblValue::makeString(intern(str));
     hasReturn = true;
+    returnValues.push_back(returnValue);
 }
 
 void BblState::pushNull() {
     returnValue = BblValue::makeNull();
     hasReturn = true;
+    returnValues.push_back(returnValue);
 }
 
 void BblState::pushTable(BblTable* tbl) {
     returnValue = BblValue::makeTable(tbl);
     hasReturn = true;
+    returnValues.push_back(returnValue);
 }
 
 void BblState::pushBinary(const uint8_t* ptr, size_t size) {
     std::vector<uint8_t> data(ptr, ptr + size);
     returnValue = BblValue::makeBinary(allocBinary(std::move(data)));
     hasReturn = true;
+    returnValues.push_back(returnValue);
 }
 
 // ---------- StructBuilder ----------
@@ -2751,6 +2785,11 @@ void BBL::addNet(BblState& bbl) {
     });
 }
 
+struct AtomicDoubleBuffer {
+    BblVec* vecs[2];
+    std::atomic<int> readIdx{0};
+};
+
 void BBL::addCore(BblState& bbl) {
     bbl.defn("compress", [](BblState* b) -> int {
         BblBinary* bin = b->getBinaryArg(0);
@@ -3010,6 +3049,53 @@ static void addSandbox(BblState& bbl) {
         b->hasReturn = true;
         return 1;
     });
+
+    bbl.defn("atomic-buffer", [](BblState* b) -> int {
+        const char* elemType = b->getStringArg(0);
+        int64_t size = b->getIntArg(1);
+        BBL::Type tag = BBL::Type::Null;
+        size_t elemSize = 0;
+        if (strcmp(elemType, "float32") == 0 || strcmp(elemType, "float") == 0) { tag = BBL::Type::Float; elemSize = sizeof(float); }
+        else if (strcmp(elemType, "int") == 0) { tag = BBL::Type::Int; elemSize = sizeof(int64_t); }
+        else throw BBL::Error{"atomic-buffer: unsupported element type '" + std::string(elemType) + "'"};
+
+        auto* buf = new AtomicDoubleBuffer();
+        buf->vecs[0] = b->allocVector(elemType, tag, elemSize);
+        buf->vecs[0]->data.resize(size * elemSize, 0);
+        buf->vecs[1] = b->allocVector(elemType, tag, elemSize);
+        buf->vecs[1]->data.resize(size * elemSize, 0);
+        b->pushUserData("AtomicBuffer", buf);
+        return 1;
+    });
+
+    BBL::TypeBuilder ab("AtomicBuffer");
+    ab.method("write", [](BblState* b) -> int {
+        auto* buf = static_cast<AtomicDoubleBuffer*>(b->callArgs[0].userdataVal()->data);
+        int writeIdx = 1 - buf->readIdx.load(std::memory_order_acquire);
+        b->returnValue = BblValue::makeVector(buf->vecs[writeIdx]);
+        b->hasReturn = true;
+        return 1;
+    });
+    ab.method("read", [](BblState* b) -> int {
+        auto* buf = static_cast<AtomicDoubleBuffer*>(b->callArgs[0].userdataVal()->data);
+        int ri = buf->readIdx.load(std::memory_order_acquire);
+        b->returnValue = BblValue::makeVector(buf->vecs[ri]);
+        b->hasReturn = true;
+        return 1;
+    });
+    ab.method("swap", [](BblState* b) -> int {
+        auto* buf = static_cast<AtomicDoubleBuffer*>(b->callArgs[0].userdataVal()->data);
+        buf->readIdx.store(1 - buf->readIdx.load(std::memory_order_relaxed), std::memory_order_release);
+        return 0;
+    });
+    ab.method("length", [](BblState* b) -> int {
+        auto* buf = static_cast<AtomicDoubleBuffer*>(b->callArgs[0].userdataVal()->data);
+        int ri = buf->readIdx.load(std::memory_order_relaxed);
+        b->pushInt(static_cast<int64_t>(buf->vecs[ri]->data.size() / buf->vecs[ri]->elemSize));
+        return 1;
+    });
+    ab.destructor([](void* p) { delete static_cast<AtomicDoubleBuffer*>(p); });
+    bbl.registerType(ab);
 }
 
 void BBL::addStdLib(BblState& bbl) {
