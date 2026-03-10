@@ -266,7 +266,12 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         } else if (methodStr == state->m.clear) { vec->data.clear(); regs[base] = BblValue::makeNull(); }
         else if (methodStr == state->m.at) regs[base] = state->readVecElem(vec, static_cast<size_t>(args[0].intVal()));
         else if (methodStr == state->m.set) { state->writeVecElem(vec, static_cast<size_t>(args[0].intVal()), args[1]); regs[base] = BblValue::makeNull(); }
-        else if (methodStr == state->m.resize) { vec->data.resize(static_cast<size_t>(args[0].intVal()) * vec->elemSize, 0); regs[base] = BblValue::makeNull(); }
+        else if (methodStr == state->m.resize) {
+            if (args[0].type() != BBL::Type::Int) JIT_ERROR(state, "vector.resize: argument must be an integer");
+            int64_t n = args[0].intVal();
+            if (n < 0) JIT_ERROR(state, "vector.resize: size must be non-negative");
+            vec->data.resize(static_cast<size_t>(n) * vec->elemSize, 0); regs[base] = BblValue::makeNull();
+        }
         else if (methodStr == state->m.reserve) {
             int64_t cap = args[0].intVal();
             if (cap < 0) JIT_ERROR(state, "vector.reserve: capacity must be non-negative");

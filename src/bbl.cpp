@@ -701,7 +701,6 @@ BblString* BblState::intern(const std::string& s) {
     if (it != internTable.end()) {
         return it->second;
     }
-    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* str = new BblString{s, false, true};
     str->gcNext = nurseryHead; nurseryHead = str;
     internTable[str->data] = str;
@@ -710,7 +709,6 @@ BblString* BblState::intern(const std::string& s) {
 }
 
 BblString* BblState::allocString(std::string s) {
-    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* str = new BblString{std::move(s)};
     str->gcNext = nurseryHead; nurseryHead = str;
     allocCount++;
@@ -745,7 +743,6 @@ size_t BblBinary::length() const {
 }
 
 BblBinary* BblState::allocBinary(std::vector<uint8_t> data) {
-    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* b = new BblBinary();
     b->data = std::move(data);
     b->gcNext = nurseryHead; nurseryHead = b;
@@ -754,7 +751,6 @@ BblBinary* BblState::allocBinary(std::vector<uint8_t> data) {
 }
 
 BblBinary* BblState::allocLazyBinary(const char* src, size_t size, bool isCompressed) {
-    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* b = new BblBinary();
     b->lazySource = src;
     b->lazySize = size;
@@ -765,7 +761,6 @@ BblBinary* BblState::allocLazyBinary(const char* src, size_t size, bool isCompre
 }
 
 BblFn* BblState::allocFn() {
-    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* f = new BblFn{};
     f->gcNext = nurseryHead; nurseryHead = f;
     allocCount++;
@@ -773,7 +768,6 @@ BblFn* BblState::allocFn() {
 }
 
 BblStruct* BblState::allocStruct(StructDesc* desc) {
-    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* s = new BblStruct();
     s->desc = desc;
     s->data.resize(desc->totalSize, 0);
@@ -783,7 +777,6 @@ BblStruct* BblState::allocStruct(StructDesc* desc) {
 }
 
 BblVec* BblState::allocVector(const std::string& elemType, BBL::Type elemTypeTag, size_t elemSize) {
-    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto* v = new BblVec();
     v->elemType = elemType;
     v->elemTypeTag = elemTypeTag;
@@ -794,7 +787,6 @@ BblVec* BblState::allocVector(const std::string& elemType, BBL::Type elemTypeTag
 }
 
 BblTable* BblState::allocTable() {
-    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     BblTable* t = tableSlab.alloc();
     t->gcNext = nurseryHead; nurseryHead = t;
     allocCount++;
@@ -802,7 +794,6 @@ BblTable* BblState::allocTable() {
 }
 
 BblUserData* BblState::allocUserData(const std::string& typeName, void* data) {
-    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcFull();
     auto it = userDataDescs.find(typeName);
     if (it == userDataDescs.end()) {
         throw BBL::Error{"unknown userdata type: " + typeName};
@@ -983,6 +974,22 @@ static void markRoots(BblState& state, void (*markFn)(BblValue&)) {
             markFn(envVal);
         }
     }
+    auto markStr = [&](BblString* s) {
+        if (s) { BblValue sv = BblValue::makeString(s); markFn(sv); }
+    };
+    markStr(state.m.length); markStr(state.m.push); markStr(state.m.pop);
+    markStr(state.m.clear); markStr(state.m.at); markStr(state.m.set);
+    markStr(state.m.get); markStr(state.m.resize); markStr(state.m.reserve);
+    markStr(state.m.has); markStr(state.m.del); markStr(state.m.keys);
+    markStr(state.m.find); markStr(state.m.contains);
+    markStr(state.m.starts_with); markStr(state.m.ends_with);
+    markStr(state.m.slice); markStr(state.m.split); markStr(state.m.replace);
+    markStr(state.m.upper); markStr(state.m.lower); markStr(state.m.trim);
+    markStr(state.m.copy_from); markStr(state.m.join);
+    markStr(state.m.trim_left); markStr(state.m.trim_right);
+    markStr(state.m.pad_left); markStr(state.m.pad_right);
+    markStr(state.m.as); markStr(state.m.set_as);
+    for (auto& [id, s] : state.symbolNames) markStr(s);
 }
 
 static void sweepList(BblState& state, GcObj** head, size_t& liveCount) {
@@ -1178,6 +1185,7 @@ void BblState::materializeLazyBinaries() {
 
 void BblState::exec(const std::string& source) {
     g_currentBblState = this;
+    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcMinor();
     BblLexer lexer(source.c_str(), source.size());
     auto nodes = parse(lexer);
     pauseGC();
@@ -1189,6 +1197,7 @@ void BblState::exec(const std::string& source) {
 
 BblValue BblState::execExpr(const std::string& source) {
     g_currentBblState = this;
+    if (!gcPaused && !gcRunning && allocCount >= gen0Threshold) gcMinor();
     BblLexer lexer(source.c_str(), source.size());
     auto nodes = parse(lexer);
     pauseGC();
@@ -3224,7 +3233,7 @@ static void addSandbox(BblState& bbl) {
         int64_t size = b->getIntArg(1);
         BBL::Type tag = BBL::Type::Null;
         size_t elemSize = 0;
-        if (strcmp(elemType, "float32") == 0 || strcmp(elemType, "float") == 0) { tag = BBL::Type::Float; elemSize = sizeof(float); }
+        if (strcmp(elemType, "float32") == 0 || strcmp(elemType, "float") == 0) { tag = BBL::Type::Float; elemSize = sizeof(double); }
         else if (strcmp(elemType, "int") == 0) { tag = BBL::Type::Int; elemSize = sizeof(int64_t); }
         else throw BBL::Error{"atomic-buffer: unsupported element type '" + std::string(elemType) + "'"};
 

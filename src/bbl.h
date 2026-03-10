@@ -579,7 +579,7 @@ struct BblState {
 
     // GC
     size_t allocCount = 0;
-    size_t gen0Threshold = 4096;
+    size_t gen0Threshold = 512;
     size_t gen1Threshold = 4096;
     bool gcPaused = false;
     bool gcRunning = false;
