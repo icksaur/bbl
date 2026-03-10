@@ -317,7 +317,7 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
                 }
             }
 
-            if (state.allocCount >= state.gcThreshold) state.gc();
+            if (!state.gcPaused && state.allocCount >= state.gen0Threshold) state.gcMinor();
             if (state.maxSteps && ++state.stepCount > state.maxSteps)
                 throw BBL::Error{"step limit exceeded"};
             if (state.terminated.load(std::memory_order_relaxed))
@@ -336,7 +336,7 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
             closure->name = proto->name;
             closure->captureDescs = proto->captureDescs;
             closure->captures.resize(proto->captureDescs.size());
-            closure->gcNext = state.gcHead; state.gcHead = closure;
+            closure->gcNext = state.nurseryHead; state.nurseryHead = closure;
             state.allocCount++;
 
             for (size_t i = 0; i < proto->captureDescs.size(); i++) {

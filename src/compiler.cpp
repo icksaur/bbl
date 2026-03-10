@@ -910,7 +910,7 @@ static void compileFn(BblState& state, CompilerState& cs, const AstNode& node, c
     proto->arity = fnCs.arity;
     proto->name = assignName;
     proto->env = state.currentEnv;
-    proto->gcNext = state.gcHead; state.gcHead = proto;
+    proto->gcNext = state.nurseryHead; state.nurseryHead = proto;
 
     uint16_t protoIdx = addConstIdx(cs, BblValue::makeClosure(proto));
     cs.chunk.emitABx(OP_CLOSURE, dest, protoIdx, node.line);

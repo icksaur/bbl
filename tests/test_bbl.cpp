@@ -1542,7 +1542,7 @@ TEST(test_gc_closure_survives) {
 
 TEST(test_gc_stress) {
     BblState bbl;
-    bbl.gcThreshold = 16;
+    bbl.gen0Threshold = 16;
     BBL::addStdLib(bbl);
     bbl.exec(R"(
         (= i 0)
@@ -1559,7 +1559,7 @@ TEST(test_gc_flat_scope_slots) {
     // A function allocates a table and returns it; GC fires during the call
     // because gcThreshold is set very low.
     BblState bbl;
-    bbl.gcThreshold = 1;
+    bbl.gen0Threshold = 1;
     BBL::addStdLib(bbl);
     bbl.exec(R"(
         (= make-table (fn (x) (table "val" x)))

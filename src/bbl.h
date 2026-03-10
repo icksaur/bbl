@@ -74,6 +74,8 @@ enum class GcType : uint8_t { String, Binary, Struct, Vec, Table, Fn, Closure, U
 struct GcObj {
     GcType gcType;
     bool marked = false;
+    bool old = false;
+    bool dirty = false;
     GcObj* gcNext = nullptr;
 };
 
@@ -565,7 +567,8 @@ struct SlabAllocator {
 
 struct BblState {
     std::unordered_map<std::string, BblString*> internTable;
-    GcObj* gcHead = nullptr;
+    GcObj* nurseryHead = nullptr;
+    GcObj* tenuredHead = nullptr;
     SlabAllocator<BblTable> tableSlab;
     SlabAllocator<BblClosure> closureSlab;
     std::unique_ptr<VmState> vm;
@@ -576,10 +579,12 @@ struct BblState {
 
     // GC
     size_t allocCount = 0;
-    size_t gcThreshold = 4096;
-    size_t savedGcThreshold = 0;
-    void pauseGC() { savedGcThreshold = gcThreshold; gcThreshold = SIZE_MAX; }
-    void resumeGC() { gcThreshold = savedGcThreshold; }
+    size_t gen0Threshold = 4096;
+    size_t gen1Threshold = 4096;
+    bool gcPaused = false;
+    std::vector<GcObj*> rememberedSet;
+    void pauseGC() { gcPaused = true; }
+    void resumeGC() { gcPaused = false; }
 
     struct SliceCacheEntry { BblString* src = nullptr; uint32_t pos = 0; uint32_t len = 0; BblString* result = nullptr; };
     static constexpr int SLICE_CACHE_SIZE = 32;
@@ -680,6 +685,25 @@ struct BblState {
     BblUserData* allocUserData(const std::string& typeName, void* data);
 
     void gc();
+    void gcMinor();
+    void gcFull();
+
+    static bool isGcPointer(BblValue v) {
+        if (v.isDouble()) return false;
+        uint64_t tag = (v.bits >> 48) & 7;
+        return tag >= 3 && tag != 4;
+    }
+
+    inline void writeBarrier(GcObj* container, BblValue newVal) {
+        if (!container->old) return;
+        if (!isGcPointer(newVal)) return;
+        GcObj* obj = reinterpret_cast<GcObj*>(newVal.bits & BblValue::PAYLOAD_MASK);
+        if (obj->old) return;
+        if (!container->dirty) {
+            container->dirty = true;
+            rememberedSet.push_back(container);
+        }
+    }
 
     void exec(const std::string& source);
     void materializeLazyBinaries();

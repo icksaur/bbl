@@ -20,6 +20,8 @@
 #include "vm.h"
 #include "jit.h"
 
+static thread_local BblState* g_currentBblState = nullptr;
+
 // ---------- BblValue ----------
 
 static bool bblValueKeyEqual(const BblValue& a, const BblValue& b) {
@@ -103,6 +105,7 @@ void BblTable::set(const BblValue& key, const BblValue& val) {
             if (static_cast<uint64_t>(k) >= asize) arrayGrow(static_cast<uint32_t>(k) + 1);
             bool isNew = (array[k].bits == 0);
             array[k] = val;
+            if (g_currentBblState) g_currentBblState->writeBarrier(this, val);
             if (isNew) { count++; delete order; order = nullptr; }
             if (k >= nextIntKey) nextIntKey = k + 1;
             return;
@@ -113,6 +116,10 @@ void BblTable::set(const BblValue& key, const BblValue& val) {
     bool isNew = !e->isOccupied();
     e->key = key;
     e->val = val;
+    if (g_currentBblState) {
+        g_currentBblState->writeBarrier(this, key);
+        g_currentBblState->writeBarrier(this, val);
+    }
     
     if (isNew) {
         count++;
@@ -598,6 +605,7 @@ std::vector<AstNode> parse(BblLexer& lexer) {
 // ---------- BblState ----------
 
 BblState::BblState() {
+    g_currentBblState = this;
     vm = std::make_unique<VmState>();
 
     m.length = intern("length"); m.push = intern("push"); m.pop = intern("pop");
@@ -653,35 +661,39 @@ BblState::BblState() {
 }
 
 BblState::~BblState() {
-    GcObj* obj = gcHead;
-    while (obj) {
-        GcObj* next = obj->gcNext;
-        switch (obj->gcType) {
-            case GcType::String:  delete static_cast<BblString*>(obj); break;
-            case GcType::Binary:  delete static_cast<BblBinary*>(obj); break;
-            case GcType::Fn:      delete static_cast<BblFn*>(obj); break;
-            case GcType::Struct:  delete static_cast<BblStruct*>(obj); break;
-            case GcType::Vec:     delete static_cast<BblVec*>(obj); break;
-            case GcType::Table:   static_cast<BblTable*>(obj)->~BblTable(); break;
-            case GcType::UserData: {
-                auto* u = static_cast<BblUserData*>(obj);
-                if (u->desc && u->desc->destructor && u->data) u->desc->destructor(u->data);
-                delete u;
-                break;
-            }
-            case GcType::Closure: {
-                auto* c = static_cast<BblClosure*>(obj);
-                for (auto& [pc, lt] : c->chunk.loopTraces) {
-                    if (lt.code) jitFree(lt.code, lt.capacity);
-                    delete lt.snapshots; delete lt.sunkAllocs;
+    auto freeList = [this](GcObj* obj) {
+        while (obj) {
+            GcObj* next = obj->gcNext;
+            switch (obj->gcType) {
+                case GcType::String:  delete static_cast<BblString*>(obj); break;
+                case GcType::Binary:  delete static_cast<BblBinary*>(obj); break;
+                case GcType::Fn:      delete static_cast<BblFn*>(obj); break;
+                case GcType::Struct:  delete static_cast<BblStruct*>(obj); break;
+                case GcType::Vec:     delete static_cast<BblVec*>(obj); break;
+                case GcType::Table:   static_cast<BblTable*>(obj)->~BblTable(); break;
+                case GcType::UserData: {
+                    auto* u = static_cast<BblUserData*>(obj);
+                    if (u->desc && u->desc->destructor && u->data) u->desc->destructor(u->data);
+                    delete u;
+                    break;
                 }
-                c->~BblClosure();
-                break;
+                case GcType::Closure: {
+                    auto* c = static_cast<BblClosure*>(obj);
+                    for (auto& [pc, lt] : c->chunk.loopTraces) {
+                        if (lt.code) jitFree(lt.code, lt.capacity);
+                        delete lt.snapshots; delete lt.sunkAllocs;
+                    }
+                    c->~BblClosure();
+                    break;
+                }
             }
+            obj = next;
         }
-        obj = next;
-    }
-    gcHead = nullptr;
+    };
+    freeList(nurseryHead);
+    freeList(tenuredHead);
+    nurseryHead = nullptr;
+    tenuredHead = nullptr;
 }
 
 BblString* BblState::intern(const std::string& s) {
@@ -689,16 +701,18 @@ BblString* BblState::intern(const std::string& s) {
     if (it != internTable.end()) {
         return it->second;
     }
+    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
     auto* str = new BblString{s, false, true};
-    str->gcNext = gcHead; gcHead = str;
+    str->gcNext = nurseryHead; nurseryHead = str;
     internTable[str->data] = str;
     allocCount++;
     return str;
 }
 
 BblString* BblState::allocString(std::string s) {
+    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
     auto* str = new BblString{std::move(s)};
-    str->gcNext = gcHead; gcHead = str;
+    str->gcNext = nurseryHead; nurseryHead = str;
     allocCount++;
     return str;
 }
@@ -731,57 +745,64 @@ size_t BblBinary::length() const {
 }
 
 BblBinary* BblState::allocBinary(std::vector<uint8_t> data) {
+    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
     auto* b = new BblBinary();
     b->data = std::move(data);
-    b->gcNext = gcHead; gcHead = b;
+    b->gcNext = nurseryHead; nurseryHead = b;
     allocCount++;
     return b;
 }
 
 BblBinary* BblState::allocLazyBinary(const char* src, size_t size, bool isCompressed) {
+    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
     auto* b = new BblBinary();
     b->lazySource = src;
     b->lazySize = size;
     b->compressed = isCompressed;
-    b->gcNext = gcHead; gcHead = b;
+    b->gcNext = nurseryHead; nurseryHead = b;
     allocCount++;
     return b;
 }
 
 BblFn* BblState::allocFn() {
+    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
     auto* f = new BblFn{};
-    f->gcNext = gcHead; gcHead = f;
+    f->gcNext = nurseryHead; nurseryHead = f;
     allocCount++;
     return f;
 }
 
 BblStruct* BblState::allocStruct(StructDesc* desc) {
+    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
     auto* s = new BblStruct();
     s->desc = desc;
     s->data.resize(desc->totalSize, 0);
-    s->gcNext = gcHead; gcHead = s;
+    s->gcNext = nurseryHead; nurseryHead = s;
     allocCount++;
     return s;
 }
 
 BblVec* BblState::allocVector(const std::string& elemType, BBL::Type elemTypeTag, size_t elemSize) {
+    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
     auto* v = new BblVec();
     v->elemType = elemType;
     v->elemTypeTag = elemTypeTag;
     v->elemSize = elemSize;
-    v->gcNext = gcHead; gcHead = v;
+    v->gcNext = nurseryHead; nurseryHead = v;
     allocCount++;
     return v;
 }
 
 BblTable* BblState::allocTable() {
+    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
     BblTable* t = tableSlab.alloc();
-    t->gcNext = gcHead; gcHead = t;
+    t->gcNext = nurseryHead; nurseryHead = t;
     allocCount++;
     return t;
 }
 
 BblUserData* BblState::allocUserData(const std::string& typeName, void* data) {
+    if (!gcPaused && allocCount >= gen0Threshold) gcFull();
     auto it = userDataDescs.find(typeName);
     if (it == userDataDescs.end()) {
         throw BBL::Error{"unknown userdata type: " + typeName};
@@ -789,7 +810,7 @@ BblUserData* BblState::allocUserData(const std::string& typeName, void* data) {
     auto* u = new BblUserData();
     u->desc = &it->second;
     u->data = data;
-    u->gcNext = gcHead; gcHead = u;
+    u->gcNext = nurseryHead; nurseryHead = u;
     allocCount++;
     return u;
 }
@@ -868,53 +889,115 @@ static void gcMark(BblValue& val) {
     }
 }
 
-void BblState::gc() {
-    // Mark phase
-    for (auto& arg : callArgs) {
-        gcMark(arg);
-    }
-    gcMark(returnValue);
-    gcMark(lastRecvPayload);
+static void gcMarkGen0(BblValue& val);
 
-    // Mark VM stack and frame closures
-    if (vm) {
-        for (BblValue* p = vm->stack.data(); p < vm->stackTop; p++)
-            gcMark(*p);
-        for (int i = 0; i < vm->frameCount; i++) {
-            if (vm->frames[i].regs[0].closureVal()) {
-                BblValue cv = BblValue::makeClosure(vm->frames[i].regs[0].closureVal());
-                gcMark(cv);
+static void gcMarkGen0(BblValue& val) {
+    switch (val.type()) {
+        case BBL::Type::Binary:
+            if (val.binaryVal() && !val.binaryVal()->marked) {
+                if (val.binaryVal()->old) return;
+                val.binaryVal()->marked = true;
+            }
+            break;
+        case BBL::Type::Fn:
+            if (val.isClosure() && val.closureVal() && !val.closureVal()->marked) {
+                if (val.closureVal()->old) return;
+                val.closureVal()->marked = true;
+                for (auto& cap : val.closureVal()->captures)
+                    gcMarkGen0(cap);
+                if (val.closureVal()->env && !val.closureVal()->env->marked && !val.closureVal()->env->old) {
+                    BblValue envVal = BblValue::makeTable(val.closureVal()->env);
+                    gcMarkGen0(envVal);
+                }
+            } else if (!val.isCFn() && !val.isClosure() && val.fnVal() && !val.fnVal()->marked) {
+                if (val.fnVal()->old) return;
+                val.fnVal()->marked = true;
+                for (auto& [name, cap] : val.fnVal()->captures)
+                    gcMarkGen0(cap);
+            }
+            break;
+        case BBL::Type::Struct:
+            if (val.structVal() && !val.structVal()->marked && !val.structVal()->old)
+                val.structVal()->marked = true;
+            break;
+        case BBL::Type::Vector:
+            if (val.vectorVal() && !val.vectorVal()->marked && !val.vectorVal()->old)
+                val.vectorVal()->marked = true;
+            break;
+        case BBL::Type::Table:
+            if (val.tableVal() && !val.tableVal()->marked) {
+                if (val.tableVal()->old) return;
+                val.tableVal()->marked = true;
+                for (uint32_t i = 0; i < val.tableVal()->asize; i++) {
+                    if (val.tableVal()->array[i].bits != 0) {
+                        BblValue av = val.tableVal()->array[i];
+                        gcMarkGen0(av);
+                    }
+                }
+                for (uint32_t i = 0; i < val.tableVal()->capacity; i++) {
+                    auto& e = val.tableVal()->buckets[i];
+                    if (e.isOccupied()) {
+                        BblValue km = e.key;
+                        BblValue vm = e.val;
+                        gcMarkGen0(km);
+                        gcMarkGen0(vm);
+                    }
+                }
+            }
+            break;
+        case BBL::Type::UserData:
+            if (val.userdataVal() && !val.userdataVal()->marked && !val.userdataVal()->old)
+                val.userdataVal()->marked = true;
+            break;
+        case BBL::Type::String:
+            if (val.stringVal() && !val.stringVal()->marked && !val.stringVal()->old)
+                val.stringVal()->marked = true;
+            break;
+        default:
+            break;
+    }
+}
+
+static void markRoots(BblState& state, void (*markFn)(BblValue&)) {
+    for (auto& arg : state.callArgs) markFn(arg);
+    markFn(state.returnValue);
+    markFn(state.lastRecvPayload);
+    for (auto& rv : state.returnValues) markFn(rv);
+    if (state.vm) {
+        for (auto& v : state.vm->stack) markFn(v);
+        for (int i = 0; i < state.vm->frameCount; i++) {
+            if (state.vm->frames[i].regs[0].closureVal()) {
+                BblValue cv = BblValue::makeClosure(state.vm->frames[i].regs[0].closureVal());
+                markFn(cv);
             }
         }
-        for (auto& [id, val] : vm->globals)
-            gcMark(val);
+        for (auto& [id, val] : state.vm->globals) markFn(val);
     }
-
-    if (currentEnv && !currentEnv->marked) {
-        BblValue envVal = BblValue::makeTable(currentEnv);
-        gcMark(envVal);
+    if (state.currentEnv && !state.currentEnv->marked) {
+        BblValue envVal = BblValue::makeTable(state.currentEnv);
+        markFn(envVal);
     }
-    for (auto& [path, env] : moduleCache) {
+    for (auto& [path, env] : state.moduleCache) {
         if (env && !env->marked) {
             BblValue envVal = BblValue::makeTable(env);
-            gcMark(envVal);
+            markFn(envVal);
         }
     }
+}
 
-    // Sweep: walk linked list, free unmarked, clear marks on survivors
-    size_t liveCount = 0;
-    GcObj** p = &gcHead;
+static void sweepList(BblState& state, GcObj** head, size_t& liveCount) {
+    GcObj** p = head;
     while (*p) {
         if (!(*p)->marked) {
             GcObj* dead = *p;
             *p = dead->gcNext;
             switch (dead->gcType) {
                 case GcType::String:
-                    internTable.erase(static_cast<BblString*>(dead)->data);
+                    state.internTable.erase(static_cast<BblString*>(dead)->data);
                     delete static_cast<BblString*>(dead);
                     break;
                 case GcType::Table:
-                    tableSlab.free(static_cast<BblTable*>(dead));
+                    state.tableSlab.free(static_cast<BblTable*>(dead));
                     break;
                 case GcType::Closure: {
                     auto* c = static_cast<BblClosure*>(dead);
@@ -922,7 +1005,7 @@ void BblState::gc() {
                         if (lt.code) jitFree(lt.code, lt.capacity);
                         delete lt.snapshots; delete lt.sunkAllocs;
                     }
-                    closureSlab.free(c);
+                    state.closureSlab.free(c);
                     break;
                 }
                 case GcType::UserData: {
@@ -942,10 +1025,80 @@ void BblState::gc() {
             liveCount++;
         }
     }
+}
 
-    gcThreshold = std::max<size_t>(4096, liveCount * 2);
+void BblState::gcMinor() {
+    markRoots(*this, gcMarkGen0);
+
+    for (GcObj* obj : rememberedSet) {
+        if (obj->gcType == GcType::Table) {
+            auto* tbl = static_cast<BblTable*>(obj);
+            for (uint32_t i = 0; i < tbl->asize; i++) {
+                if (tbl->array[i].bits != 0) gcMarkGen0(tbl->array[i]);
+            }
+            for (uint32_t i = 0; i < tbl->capacity; i++) {
+                auto& e = tbl->buckets[i];
+                if (e.isOccupied()) { gcMarkGen0(e.key); gcMarkGen0(e.val); }
+            }
+        } else if (obj->gcType == GcType::Closure) {
+            auto* c = static_cast<BblClosure*>(obj);
+            for (auto& cap : c->captures) gcMarkGen0(cap);
+        }
+    }
+
+    size_t nurseryLive = 0;
+    sweepList(*this, &nurseryHead, nurseryLive);
+
+    GcObj** tail = &tenuredHead;
+    while (*tail) tail = &(*tail)->gcNext;
+
+    GcObj* promoted = nurseryHead;
+    while (promoted) {
+        promoted->old = true;
+        promoted->dirty = false;
+        promoted = promoted->gcNext;
+    }
+    *tail = nurseryHead;
+    nurseryHead = nullptr;
+
+    rememberedSet.clear();
+    for (GcObj* obj = tenuredHead; obj; obj = obj->gcNext)
+        obj->dirty = false;
+
+    gen0Threshold = std::max<size_t>(256, nurseryLive * 4);
     allocCount = 0;
     memset(sliceCache, 0, sizeof(sliceCache));
+}
+
+void BblState::gcFull() {
+    markRoots(*this, gcMark);
+
+    size_t liveCount = 0;
+    sweepList(*this, &nurseryHead, liveCount);
+    sweepList(*this, &tenuredHead, liveCount);
+
+    GcObj** tail = &tenuredHead;
+    while (*tail) tail = &(*tail)->gcNext;
+    GcObj* promoted = nurseryHead;
+    while (promoted) {
+        promoted->old = true;
+        promoted->dirty = false;
+        promoted = promoted->gcNext;
+    }
+    *tail = nurseryHead;
+    nurseryHead = nullptr;
+
+    rememberedSet.clear();
+    for (GcObj* obj = tenuredHead; obj; obj = obj->gcNext)
+        obj->dirty = false;
+
+    gen1Threshold = std::max<size_t>(4096, liveCount * 2);
+    allocCount = 0;
+    memset(sliceCache, 0, sizeof(sliceCache));
+}
+
+void BblState::gc() {
+    gcFull();
 }
 
 // ---------- Eval ----------
@@ -1007,14 +1160,18 @@ static BblValue stringNoArgMethod(BblState& bbl, const std::string& data, const 
 // ---------- exec / execfile ----------
 
 void BblState::materializeLazyBinaries() {
-    for (GcObj* obj = gcHead; obj; obj = obj->gcNext) {
-        if (obj->gcType == GcType::Binary) {
+    for (GcObj* obj = nurseryHead; obj; obj = obj->gcNext) {
+        if (obj->gcType == GcType::Binary)
             static_cast<BblBinary*>(obj)->materialize();
-        }
+    }
+    for (GcObj* obj = tenuredHead; obj; obj = obj->gcNext) {
+        if (obj->gcType == GcType::Binary)
+            static_cast<BblBinary*>(obj)->materialize();
     }
 }
 
 void BblState::exec(const std::string& source) {
+    g_currentBblState = this;
     BblLexer lexer(source.c_str(), source.size());
     auto nodes = parse(lexer);
     Chunk chunk = compile(*this, nodes);
@@ -1023,6 +1180,7 @@ void BblState::exec(const std::string& source) {
 }
 
 BblValue BblState::execExpr(const std::string& source) {
+    g_currentBblState = this;
     BblLexer lexer(source.c_str(), source.size());
     auto nodes = parse(lexer);
     Chunk chunk = compile(*this, nodes);
@@ -1032,6 +1190,7 @@ BblValue BblState::execExpr(const std::string& source) {
 }
 
 BblValue BblState::call(BblValue callable, std::span<const BblValue> args) {
+    g_currentBblState = this;
     if (args.size() > 255) throw BBL::Error{"call: too many arguments (limit 255)"};
     std::vector<BblValue> regs(args.size() + 256);
     regs[0] = callable;

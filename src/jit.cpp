@@ -148,10 +148,10 @@ void jitGetCapture(BblValue* regs, BblState* state, uint8_t destReg, uint8_t cap
 }
 
 void jitSetCapture(BblValue* regs, BblState* state, uint8_t srcReg, uint8_t capIdx) {
-    (void)state;
     if (!regs[0].isClosure()) JIT_ERROR(state, "no closure for capture");
     BblClosure* closure = regs[0].closureVal();
     closure->captures[capIdx] = regs[srcReg];
+    state->writeBarrier(closure, regs[srcReg]);
 }
 
 void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, uint16_t protoIdx) {
@@ -164,7 +164,7 @@ void jitClosure(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, 
     closure->captures.resize(proto->captureDescs.size());
     closure->jitProto = proto;
     closure->env = proto->env;
-    closure->gcNext = state->gcHead; state->gcHead = closure;
+    closure->gcNext = state->nurseryHead; state->nurseryHead = closure;
     state->allocCount++;
 
     for (size_t i = 0; i < proto->captureDescs.size(); i++) {
