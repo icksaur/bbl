@@ -5039,6 +5039,145 @@ TEST(test_chained_dot_access) {
     ASSERT_EQ(bbl.execExpr(R"_((= a (table "v" 10)) (= b (table "x" a)) b.x.v)_").intVal(), (int64_t)10);
 }
 
+// ========== Stress Tests ==========
+
+TEST(test_stress_deep_nesting_parser) {
+    BblState bbl; BBL::addStdLib(bbl);
+    std::string deep(300, '(');
+    deep += "1";
+    deep += std::string(300, ')');
+    ASSERT_THROW(bbl.exec(deep));
+}
+
+TEST(test_stress_moderate_nesting_ok) {
+    BblState bbl; BBL::addStdLib(bbl);
+    std::string src = "(+ 1";
+    for (int i = 0; i < 100; i++) src += " (+ 1";
+    src += " 0";
+    for (int i = 0; i <= 100; i++) src += ")";
+    auto result = bbl.execExpr(src);
+    ASSERT_EQ(result.intVal(), (int64_t)101);
+}
+
+TEST(test_stress_register_overflow) {
+    BblState bbl; BBL::addStdLib(bbl);
+    std::string src = "(vector int";
+    for (int i = 0; i < 260; i++) src += " " + std::to_string(i);
+    src += ")";
+    ASSERT_THROW(bbl.exec(src));
+}
+
+TEST(test_stress_table_register_overflow) {
+    BblState bbl; BBL::addStdLib(bbl);
+    std::string src = "(table";
+    for (int i = 0; i < 140; i++)
+        src += " \"k" + std::to_string(i) + "\" " + std::to_string(i);
+    src += ")";
+    ASSERT_THROW(bbl.exec(src));
+}
+
+TEST(test_stress_argc_overflow) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= f (fn (a) a))");
+    std::string src = "(f";
+    for (int i = 0; i < 260; i++) src += " 1";
+    src += ")";
+    ASSERT_THROW(bbl.exec(src));
+}
+
+TEST(test_stress_int_overflow) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("99999999999999999999"));
+}
+
+TEST(test_stress_float_overflow) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("1.7976931348623159e99999"));
+}
+
+TEST(test_stress_binary_bad_size) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("0b:hello"));
+}
+
+TEST(test_stress_binary_huge_size) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("0b999999999999999999:x"));
+}
+
+TEST(test_stress_loop_no_args) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("(loop)"));
+}
+
+TEST(test_stress_each_non_symbol) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("(each 42 (vector int 1 2 3) (print 1))"));
+}
+
+TEST(test_stress_long_symbol) {
+    BblState bbl; BBL::addStdLib(bbl);
+    std::string sym(5000, 'a');
+    bbl.exec("(= " + sym + " 42)");
+    ASSERT_EQ(bbl.execExpr(sym).intVal(), (int64_t)42);
+}
+
+TEST(test_stress_long_string) {
+    BblState bbl; BBL::addStdLib(bbl);
+    std::string s(5000, 'x');
+    auto result = bbl.execExpr("\"" + s + "\"");
+    ASSERT_EQ(result.stringVal()->data, s);
+}
+
+TEST(test_stress_empty_input) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("");
+    bbl.exec("   ");
+    bbl.exec("// just a comment");
+    passed += 3;
+}
+
+TEST(test_stress_unclosed_paren_deep) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec("(+ 1 (+ 2 (+ 3"));
+}
+
+TEST(test_stress_unmatched_close) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec(")"));
+}
+
+TEST(test_stress_escape_at_eof) {
+    BblState bbl; BBL::addStdLib(bbl);
+    std::string src = "\"hello\\";
+    ASSERT_THROW(bbl.exec(src));
+}
+
+TEST(test_stress_binary_zero_size) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(= b 0b0:)");
+    passed++;
+}
+
+TEST(test_stress_many_functions) {
+    BblState bbl; BBL::addStdLib(bbl);
+    std::string src;
+    for (int i = 0; i < 200; i++)
+        src += "(= f" + std::to_string(i) + " (fn (x) (+ x " + std::to_string(i) + ")))\n";
+    src += "(= result (f199 1))";
+    bbl.exec(src);
+    ASSERT_EQ(bbl.execExpr("result").intVal(), (int64_t)200);
+}
+
+TEST(test_stress_deep_closures) {
+    BblState bbl; BBL::addStdLib(bbl);
+    std::string src = "(= x 10) (= f (fn () (fn () (fn () (fn () (fn () x)))))))";
+    src += " (((((f))))";
+    ASSERT_THROW(bbl.exec(src)); // unmatched parens intentional — just test it doesn't crash
+    // Simpler valid test: 3-deep closure chain
+    ASSERT_EQ(bbl.execExpr("(= x 42) (= f (fn () (fn () (fn () x)))) (= g (f)) (= h (g)) (h)").intVal(), (int64_t)42);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -5758,6 +5897,28 @@ int main() {
     RUN(test_table_in_table);
     RUN(test_table_not_corrupted);
     RUN(test_chained_dot_access);
+
+    std::cout << "--- Stress Tests ---" << std::endl;
+    RUN(test_stress_deep_nesting_parser);
+    RUN(test_stress_moderate_nesting_ok);
+    RUN(test_stress_register_overflow);
+    RUN(test_stress_table_register_overflow);
+    RUN(test_stress_argc_overflow);
+    RUN(test_stress_int_overflow);
+    RUN(test_stress_float_overflow);
+    RUN(test_stress_binary_bad_size);
+    RUN(test_stress_binary_huge_size);
+    RUN(test_stress_loop_no_args);
+    RUN(test_stress_each_non_symbol);
+    RUN(test_stress_long_symbol);
+    RUN(test_stress_long_string);
+    RUN(test_stress_empty_input);
+    RUN(test_stress_unclosed_paren_deep);
+    RUN(test_stress_unmatched_close);
+    RUN(test_stress_escape_at_eof);
+    RUN(test_stress_binary_zero_size);
+    RUN(test_stress_many_functions);
+    RUN(test_stress_deep_closures);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

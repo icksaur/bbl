@@ -3,6 +3,7 @@
 #include "compat.h"
 #include <algorithm>
 #include <cerrno>
+#include <charconv>
 #include <fstream>
 #include <sstream>
 #include <cstring>
@@ -13,6 +14,7 @@
 #include <filesystem>
 #include <ctime>
 #include <cstdlib>
+#include <string_view>
 #include <sys/stat.h>
 #include "compiler.h"
 #include "vm.h"
@@ -236,7 +238,10 @@ Token BblLexer::readString() {
                 case '\\': result += '\\'; break;
                 case 'n':  result += '\n'; break;
                 case 't':  result += '\t'; break;
-                default:   result += esc; break;
+                case 'r':  result += '\r'; break;
+                case '0':  result += '\0'; break;
+                default:
+                    throw BBL::Error{"unknown escape sequence '\\" + std::string(1, esc) + "' at line " + std::to_string(startLine)};
             }
         } else {
             result += advance();
@@ -281,15 +286,18 @@ Token BblLexer::readNumber() {
         }
     }
 
-    std::string numStr(src + start, src + pos);
     Token t;
     t.line = startLine;
     if (isFloat) {
         t.type = TokenType::Float;
-        t.floatVal = std::stod(numStr);
+        auto [ptr, ec] = std::from_chars(src + start, src + pos, t.floatVal);
+        if (ec != std::errc{})
+            throw BBL::Error{"invalid float at line " + std::to_string(startLine)};
     } else {
         t.type = TokenType::Int;
-        t.intVal = std::stoll(numStr);
+        auto [ptr, ec] = std::from_chars(src + start, src + pos, t.intVal);
+        if (ec != std::errc{})
+            throw BBL::Error{"invalid integer at line " + std::to_string(startLine)};
     }
     return t;
 }
@@ -304,7 +312,14 @@ Token BblLexer::readBinary() {
     if (pos >= len || peek() != ':') {
         throw BBL::Error{"invalid binary literal at line " + std::to_string(startLine)};
     }
-    size_t size = std::stoull(std::string(src + sizeStart, src + pos));
+    size_t size;
+    try {
+        size = std::stoull(std::string(src + sizeStart, src + pos));
+    } catch (const std::exception&) {
+        throw BBL::Error{"invalid binary literal size at line " + std::to_string(startLine)};
+    }
+    if (size > 100'000'000)
+        throw BBL::Error{"binary literal too large (limit 100MB) at line " + std::to_string(startLine)};
     pos++; // skip :
     if (static_cast<size_t>(len - pos) < size) {
         throw BBL::Error{"binary literal: insufficient bytes at line " + std::to_string(startLine)};
@@ -328,7 +343,14 @@ Token BblLexer::readCompressedBinary() {
     while (pos < len && peek() >= '0' && peek() <= '9') pos++;
     if (pos >= len || peek() != ':')
         throw BBL::Error{"invalid compressed binary literal at line " + std::to_string(startLine)};
-    size_t size = std::stoull(std::string(src + sizeStart, src + pos));
+    size_t size;
+    try {
+        size = std::stoull(std::string(src + sizeStart, src + pos));
+    } catch (const std::exception&) {
+        throw BBL::Error{"invalid compressed binary literal size at line " + std::to_string(startLine)};
+    }
+    if (size > 100'000'000)
+        throw BBL::Error{"compressed binary literal too large (limit 100MB) at line " + std::to_string(startLine)};
     pos++; // skip :
     if (static_cast<size_t>(len - pos) < size)
         throw BBL::Error{"compressed binary literal: insufficient bytes at line " + std::to_string(startLine)};
@@ -374,21 +396,21 @@ Token BblLexer::readSymbolOrKeyword() {
         }
     }
 
-    std::string sym(src + start, src + pos);
+    std::string_view sv(src + start, pos - start);
     Token t;
     t.line = startLine;
 
-    if (sym == "true") {
+    if (sv == "true") {
         t.type = TokenType::Bool;
         t.boolVal = true;
-    } else if (sym == "false") {
+    } else if (sv == "false") {
         t.type = TokenType::Bool;
         t.boolVal = false;
-    } else if (sym == "null") {
+    } else if (sv == "null") {
         t.type = TokenType::Null;
     } else {
         t.type = TokenType::Symbol;
-        t.stringVal = std::move(sym);
+        t.stringVal = std::string(sv);
     }
     return t;
 }
@@ -460,9 +482,10 @@ Token BblLexer::nextToken() {
 
 // ---------- Parser ----------
 
-static AstNode parseExpr(BblLexer& lexer, Token& tok);
+static AstNode parseExpr(BblLexer& lexer, Token& tok, int depth = 0);
 
-static AstNode parsePrimary(BblLexer& lexer, Token& tok) {
+static AstNode parsePrimary(BblLexer& lexer, Token& tok, int depth) {
+    if (depth > 256) throw BBL::Error{"parse error: nesting too deep (limit 256) at line " + std::to_string(tok.line)};
     AstNode node;
     node.line = tok.line;
 
@@ -497,13 +520,14 @@ static AstNode parsePrimary(BblLexer& lexer, Token& tok) {
             node.stringVal = std::move(tok.stringVal);
             break;
         case TokenType::LParen: {
+            int openLine = tok.line;
             node.type = NodeType::List;
             tok = lexer.nextToken();
             while (tok.type != TokenType::RParen) {
                 if (tok.type == TokenType::Eof) {
-                    throw BBL::Error{"parse error: expected ')' at line " + std::to_string(lexer.currentLine())};
+                    throw BBL::Error{"parse error: expected ')' to close '(' at line " + std::to_string(openLine) + ", got EOF at line " + std::to_string(lexer.currentLine())};
                 }
-                node.children.push_back(parseExpr(lexer, tok));
+                node.children.push_back(parseExpr(lexer, tok, depth + 1));
             }
             break;
         }
@@ -513,8 +537,8 @@ static AstNode parsePrimary(BblLexer& lexer, Token& tok) {
     return node;
 }
 
-static AstNode parseExpr(BblLexer& lexer, Token& tok) {
-    AstNode lhs = parsePrimary(lexer, tok);
+static AstNode parseExpr(BblLexer& lexer, Token& tok, int depth) {
+    AstNode lhs = parsePrimary(lexer, tok, depth);
 
     // Handle dot access: v.x or v.x.y (chained)
     while (true) {
@@ -551,7 +575,7 @@ static AstNode parseExpr(BblLexer& lexer, Token& tok) {
             // and then the caller gets the next token from us.
             // Since the parser protocol is: caller passes in current token,
             // we modify tok to be the "lookahead" we didn't consume.
-            tok = next;
+            tok = std::move(next);
             return lhs;
         }
     }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chunk.h"
+#include "bbl.h"
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -21,6 +22,7 @@ struct CompilerState {
     CompilerState* enclosing = nullptr;
     uint8_t nextReg = 0;
     uint8_t maxRegs = 0;
+    int compileDepth = 0;
 
     struct LoopInfo {
         int start;
@@ -31,6 +33,7 @@ struct CompilerState {
     std::vector<LoopInfo> loops;
 
     uint8_t allocReg() {
+        if (nextReg >= 255) throw BBL::Error{"too many registers (limit 255)"};
         uint8_t r = nextReg++;
         if (nextReg > maxRegs) maxRegs = nextReg;
         return r;
