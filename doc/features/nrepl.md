@@ -59,16 +59,14 @@ It's not a separate tool — it's part of the running application.
 │  main.bbl                                   │
 │    ├── (import "physics.bbl")  → env table  │
 │    ├── (import "render.bbl")   → env table  │
-│    ├── (nrepl 7888)            → child state│
-│    └── main loop                            │
-│         ├── (nrepl-poll)   ←── eval channel │
-│         ├── (physics:step)                  │
-│         └── (render:frame)                  │
+│    └── (nrepl 7888)            → blocks     │
+│         └── processes eval requests via      │
+│             select on child's message queue  │
 │                                             │
 │  nREPL child state (TCP server)             │
 │    ├── accepts editor connections            │
 │    ├── reads JSON-RPC requests              │
-│    └── posts eval requests → eval channel   │
+│    └── posts eval requests to parent        │
 └────────────────┬────────────────────────────┘
                  │ TCP :7888
 ┌────────────────┴────────────────────────────┐
@@ -77,32 +75,52 @@ It's not a separate tool — it's part of the running application.
 └─────────────────────────────────────────────┘
 ```
 
-### Process Ownership
+### API: Blocking vs Non-Blocking
 
-The user starts their program. The program opts into nREPL:
+**`(nrepl port)`** — Blocking. Starts the TCP eval server and enters a
+select loop processing eval requests until the process is killed. The
+script does not continue past this call. Use for setup scripts and
+interactive development:
 
 ```bbl
 (import "physics.bbl")
 (import "render.bbl")
+(nrepl 7888)   // blocks here — process stays alive, accepting evals
+```
 
-(= repl (nrepl 7888))
+**`(nrepl-start port)`** — Non-blocking. Returns a handle. The caller
+must poll via `(nrepl-poll handle)` in their own loop. Use for game
+loops and servers that need to interleave eval with frame updates:
 
+```bbl
+(import "physics.bbl")
+(= repl (nrepl-start 7888))
 (loop running
-  (nrepl-poll repl)       // drain eval requests, execute on main thread
+  (nrepl-poll repl)        // drain + execute pending evals
   (physics:step dt)
   (render:frame))
 ```
 
-`(nrepl 7888)` spawns a child state that:
-1. Listens on TCP port 7888
-2. Writes port to `.bbl-nrepl-port` in current directory (editor discovery)
-3. Accepts connections
-4. Reads JSON-RPC messages
-5. Posts eval requests to a channel shared with the parent
-6. The parent drains the channel via `(nrepl-poll repl)`
+**`(nrepl-poll handle)`** — Non-blocking. Checks for pending eval
+requests via `try-recv` on the nREPL child. If a request is pending,
+executes it on the main thread (module-targeted if file specified),
+posts the result back to the child.
 
-The user stops the program normally. The nREPL server dies with it.
-No orphan processes. No lifecycle management.
+### Process Ownership
+
+The user starts and stops their program. `(nrepl 7888)` or
+`(nrepl-start 7888)` writes `.bbl-nrepl-port` in the working directory.
+On shutdown, the file is deleted. No orphan processes.
+
+Child states can also start their own nREPL on a different port:
+```bbl
+// worker.bbl (runs as child state)
+(import "ai.bbl")
+(nrepl 7889)   // own nREPL, evals in worker's module envs
+```
+
+Multiple port files: `.bbl-nrepl-port` contains JSON mapping names to
+ports, or each process writes a unique file.
 
 ### Thread Safety
 
@@ -211,63 +229,10 @@ The bbl-vscode extension adds:
 
 ## Implementation
 
-### BBL stdlib additions (~100 LOC)
+### Phase 1: nrepl-exec C function (~30 LOC)
 
-```bbl
-// nrepl.bbl — shipped as stdlib module
-// Called via (import "nrepl") or (nrepl port)
-
-(= nrepl (fn (port)
-  (= eval-ch (channel))
-  (= resp-ch (channel))
-  (= child (state-new "nrepl-server.bbl"))
-  (child:post (table "port" port "eval-ch-id" 0))
-  (table "child" child "eval-ch" eval-ch "resp-ch" resp-ch)))
-
-(= nrepl-poll (fn (repl)
-  (= req (repl.eval-ch:try-recv))
-  (if req (do
-    // Execute in module context
-    (= result (nrepl-exec req.code req.file))
-    (repl.resp-ch:send result)))))
-```
-
-Actually, the channel can't be passed between states (it's a userdata
-in the parent's GC heap). The real implementation needs a different approach:
-the nREPL child reads TCP, posts a BblMessage (table with code+file fields)
-to the parent via the existing state post/recv mechanism. The parent polls
-via `try-recv` on the child handle.
-
-### Revised architecture using existing post/recv:
-
-```bbl
-(= nrepl (fn (port)
-  (= child (state-new "nrepl-server.bbl"))
-  (child:post (table "port" port))
-  child))
-
-(= nrepl-poll (fn (child)
-  (= req (child:try-recv))
-  (if req (do
-    (= result (nrepl-exec req.code req.file))
-    (child:post (table "id" req.id "value" result))))))
-```
-
-The nREPL child:
-1. Receives port config via `(recv)`
-2. Starts TCP listener
-3. On request: `(post (table "id" id "code" code "file" file))`
-4. Waits for response: `(recv)` → sends back to TCP client
-
-### C++ additions (~30 LOC)
-
-`nrepl-exec` needs to be a C function that:
-1. Takes code string + optional file path
-2. Looks up module in parent's `moduleCache`
-3. Sets `currentEnv`
-4. Calls `execExpr(code)`
-5. Restores `currentEnv`
-6. Returns result as string
+Register `nrepl-exec` in addStdLib. Takes code string + optional file path.
+Switches `currentEnv`, captures print output, returns result table:
 
 ```cpp
 static int bblNreplExec(BblState* bbl) {
@@ -275,11 +240,13 @@ static int bblNreplExec(BblState* bbl) {
     const char* file = bbl->argCount() > 1 ? bbl->getStringArg(1) : nullptr;
 
     BblTable* savedEnv = bbl->currentEnv;
-    if (file) {
+    if (file && strlen(file) > 0) {
         auto key = std::filesystem::weakly_canonical(file).string();
         auto it = bbl->moduleCache.find(key);
         if (it != bbl->moduleCache.end())
             bbl->currentEnv = it->second;
+        else
+            throw BBL::Error{"nrepl-exec: module not loaded: " + std::string(file)};
     }
 
     std::string output;
@@ -288,12 +255,12 @@ static int bblNreplExec(BblState* bbl) {
         BblValue result = bbl->execExpr(code);
         bbl->currentEnv = savedEnv;
         bbl->printCapture = nullptr;
-        // Return result as table with value + output
         BblTable* tbl = bbl->allocTable();
         tbl->set(BblValue::makeString(bbl->intern("value")),
                  BblValue::makeString(bbl->allocString(valueToString(result))));
-        tbl->set(BblValue::makeString(bbl->intern("output")),
-                 BblValue::makeString(bbl->allocString(std::move(output))));
+        if (!output.empty())
+            tbl->set(BblValue::makeString(bbl->intern("output")),
+                     BblValue::makeString(bbl->allocString(std::move(output))));
         bbl->pushTable(tbl);
     } catch (const BBL::Error& e) {
         bbl->currentEnv = savedEnv;
@@ -307,22 +274,17 @@ static int bblNreplExec(BblState* bbl) {
 }
 ```
 
-Register as `bbl.defn("nrepl-exec", bblNreplExec)` in addStdLib.
-
-### nrepl-server.bbl (~60 lines)
+### Phase 2: nrepl-server.bbl (~60 LOC)
 
 Shipped as a stdlib script. The child state runs this:
 
 ```bbl
 (= config (recv))
 (= server (tcp-listen config.port))
-
-// Write port file for editor discovery
 (os:write-file ".bbl-nrepl-port" (str config.port))
 
 (loop true
   (= conn (server:accept))
-  // Read Content-Length header + JSON body
   (= header (conn:read-line))
   (= blank (conn:read-line))
   (= len (int (str:slice header 16)))
@@ -338,14 +300,51 @@ Shipped as a stdlib script. The child state runs this:
       (= msg (str "Content-Length: " (json-resp:length) "\r\n\r\n" json-resp))
       (conn:write msg)))
 
-  (if (== req.method "modules")
-    (do
-      // Return list of loaded module paths
-      // ... 
-      ))
-
   (conn:close))
 ```
+
+### Phase 3: Blocking / non-blocking API (~40 LOC)
+
+Implemented as C functions in addStdLib:
+
+**`(nrepl port)`** — blocking:
+1. Spawn child state running nrepl-server.bbl
+2. Post port config to child
+3. Enter select loop: `(loop true (nrepl-poll child) ...)`
+4. Uses `select` to block until child posts (zero CPU idle)
+
+**`(nrepl-start port)`** — non-blocking:
+1. Same spawn + config as above
+2. Returns child handle immediately
+
+**`(nrepl-poll handle)`** — non-blocking drain:
+1. `(= req (handle:try-recv))`
+2. If req: `(= result (nrepl-exec req.code req.file))`
+3. `(handle:post (table "id" req.id ...))`
+
+### Phase 4: Tests
+
+Unit tests (tests/test_bbl.cpp):
+- `test_nrepl_exec_root`: eval in root scope returns correct result
+- `test_nrepl_exec_module`: eval in module scope writes to env table
+- `test_nrepl_exec_redefine`: redefine function visible to callers
+- `test_nrepl_exec_print_capture`: print output captured in result
+- `test_nrepl_exec_error`: error returned as structured table
+- `test_nrepl_exec_unknown_module`: error for module not in cache
+
+Functional test:
+- `test_nrepl_tcp_roundtrip.bbl`: start nrepl-start, connect via TCP,
+  send eval request, verify response
+
+### Phase 5: VS Code Extension
+
+Add to bbl-vscode:
+- `bbl.evalSelection` command (Ctrl+Enter): send selection to nREPL
+- `bbl.evalFile` command (Ctrl+Shift+Enter): send entire file
+- Status bar: connection indicator + module name
+- Output panel: shows captured print output
+- Auto-connect: read `.bbl-nrepl-port` on workspace open
+- Disconnect on file deletion (process died)
 
 ## Port File Convention
 
