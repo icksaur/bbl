@@ -238,7 +238,6 @@ connections in ~8MB of memory.
 - Modify `MessageQueue::push()` to notify select waiter
 - Register `select` function (blocking multi-wait)
 - Register `select-timeout` function
-- Tests: select on 2 children, timeout, immediate availability
 
 ### Phase 3: Lightweight child states (~80 LOC)
 - Add `parentState` pointer to BblState
@@ -246,8 +245,6 @@ connections in ~8MB of memory.
 - Modify child creation to set parentState and share type descriptors
 - Share `m.*` method name cache via pointer
 - Reduce default VM stack size for children
-- Tests: child reads parent's interned strings, child interns new strings
-- Benchmark: child creation time and memory
 
 ### Phase 4: Channel as first-class value (~40 LOC)
 - `(channel)` creates a MessageQueue-backed userdata
@@ -255,16 +252,166 @@ connections in ~8MB of memory.
 - Usable with `select`
 - Enables communication patterns beyond parent-child
 
+### Phase 5: Lock-free ring buffer (~30 LOC)
+- SPSC ring buffer for audio-thread parameter updates
+- Power-of-2 capacity, atomic head/tail, zero mutex
+- `push` / `pop` both non-blocking, return success bool
+- BblValue-typed slots (8 bytes each)
+- Registered as `lock-free-ring` userdata
+
+```cpp
+struct LockFreeRing {
+    std::vector<BblValue> buf;
+    std::atomic<size_t> head{0};
+    std::atomic<size_t> tail{0};
+    size_t mask;  // capacity - 1
+
+    bool tryPush(BblValue v) {
+        size_t h = head.load(std::memory_order_relaxed);
+        size_t next = (h + 1) & mask;
+        if (next == tail.load(std::memory_order_acquire)) return false;
+        buf[h] = v;
+        head.store(next, std::memory_order_release);
+        return true;
+    }
+
+    bool tryPop(BblValue& out) {
+        size_t t = tail.load(std::memory_order_relaxed);
+        if (t == head.load(std::memory_order_acquire)) return false;
+        out = buf[t];
+        tail.store((t + 1) & mask, std::memory_order_release);
+        return true;
+    }
+};
+```
+
+BBL API:
+```bbl
+(= ring (lock-free-ring 256))
+(ring:push 42)           // returns true or false (full)
+(= val (ring:pop))       // returns value or null (empty)
+(= n (ring:length))      // current element count
+```
+
+This completes the audio story: dedicated BblState on audio thread with
+GC paused, `lock-free-ring` for parameter updates from main thread,
+`atomic-buffer` for sample data output.
+
+```cpp
+// C++ audio thread setup
+BblState audioBbl;
+BBL::addStdLib(audioBbl);
+audioBbl.pauseGC();  // never collect on audio thread
+audioBbl.exec(R"(
+    (= ring (lock-free-ring 64))
+    (= buf (vector float32))
+    (buf:resize 256)
+    (= freq 440.0)
+    (= dsp (fn ()
+        (= p (ring:pop))
+        (if p (= freq p))
+        (each i (range 256)
+            (buf:set i (* 0.5 (sin (* 2 3.14159 freq
+                       (/ (+ offset i) 44100))))))
+        (= offset (+ offset 256))))
+)");
+auto dspFn = audioBbl.get("dsp").value();
+auto* ring = /* get ring userdata */;
+
+void audioCallback(float* output, int frames) {
+    audioBbl.call(dspFn);
+    memcpy(output, audioBbl.getVectorData<float>("buf"), frames * sizeof(float));
+}
+
+// Main thread sends param updates via ring (no locks, no BBL interaction)
+ring->tryPush(BblValue::makeFloat(880.0));
+```
+
+## Test Plan
+
+### Unit Tests (tests/test_bbl.cpp)
+
+**tryRecv:**
+- `test_try_recv_empty` — try-recv on child with no messages returns null
+- `test_try_recv_has_message` — post to child, child try-recv gets it
+- `test_try_recv_preserves_order` — post 3 messages, try-recv returns in order
+
+**select:**
+- `test_select_immediate` — post to child before select, returns immediately
+- `test_select_two_children` — spawn 2 children, one posts, select returns correct index
+- `test_select_timeout_expires` — select-timeout with no messages returns null
+- `test_select_timeout_immediate` — select-timeout with ready message returns immediately
+
+**Lightweight children:**
+- `test_lightweight_child_basic` — spawn lightweight child, post/recv works
+- `test_lightweight_child_intern_shared` — child reads string interned by parent
+- `test_lightweight_child_intern_local` — child can intern new strings independently
+- `test_lightweight_child_struct_shared` — child uses struct type registered by parent
+
+**Channel:**
+- `test_channel_send_recv` — create channel, send value, recv value
+- `test_channel_try_recv_empty` — try-recv on empty channel returns null
+- `test_channel_with_select` — select on channel + child state
+- `test_channel_close` — close channel, recv returns error/null
+
+**Lock-free ring:**
+- `test_ring_push_pop` — push value, pop returns same value
+- `test_ring_empty_pop` — pop on empty ring returns null
+- `test_ring_full_push` — push to full ring returns false
+- `test_ring_ordering` — push 10 values, pop in same order
+- `test_ring_wrap_around` — push/pop past capacity boundary
+
+### Functional Tests (tests/functional/)
+
+**`concurrent_post_recv.bbl`:**
+```bbl
+// Parent spawns child, exchanges messages
+(= child (state-new "concurrent_child.bbl"))
+(child:post (table "msg" "hello"))
+(= reply (child:recv))
+(assert (== reply.msg "world"))
+(child:join)
+(print "PASS")
+```
+
+**`select_multi_child.bbl`:**
+```bbl
+// Spawn 3 children that respond at different speeds
+(= c1 (state-new "slow_child.bbl"))    // responds after 50ms
+(= c2 (state-new "fast_child.bbl"))    // responds after 10ms
+(= c3 (state-new "medium_child.bbl"))  // responds after 30ms
+// select should return c2 first
+(= ready (select c1 c2 c3))
+(assert (== ready.index 1))
+(print "PASS")
+```
+
+**`ring_buffer_threaded.bbl`:**
+```bbl
+// Main thread pushes to ring, child thread pops
+(= ring (lock-free-ring 64))
+(= child (state-new "ring_consumer.bbl"))
+(child:post (table "ring-ref" 0))  // pass ring via shared mechanism
+// push 100 values
+(= i 0)
+(loop (< i 100)
+  (loop (not (ring:push i)) (sleep 0.001))  // retry if full
+  (= i (+ i 1)))
+(= result (child:recv))
+(assert (== result.sum 4950))
+(print "PASS")
+```
+
 ## Acceptance Criteria
 
 1. `select` blocks until any source is ready, returns source index
 2. `select-timeout` returns null on timeout
 3. `try-recv` returns null immediately if empty
 4. Lightweight children share parent's intern table (verified by memory measurement)
-5. No data races (verified by ThreadSanitizer)
-6. All existing child-state tests pass
-7. New tests for select, try-recv, lightweight children
-8. HTTP server example works with 100+ concurrent connections
+5. Lock-free ring: push/pop work across threads without locks
+6. No data races (verified by ThreadSanitizer)
+7. All existing child-state tests pass
+8. All new unit + functional tests pass
 
 ## Risks
 
@@ -281,3 +428,8 @@ sources, consider an `epoll`-style ready queue. For BBL's use case
 **Channel GC**: Channel userdata holds a MessageQueue. If a channel is
 collected while another goroutine is blocked on it, the blocked goroutine
 must be woken with an error. Need a finalizer that wakes waiters.
+
+**Ring buffer GC**: BblValues in the ring may reference GC objects. If the
+ring lives on the audio thread (GC paused), those objects must be rooted
+elsewhere or be primitive values only. Document that audio-thread rings
+should carry primitives (int/float), not GC objects.
