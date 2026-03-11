@@ -5450,6 +5450,40 @@ TEST(test_channel_length) {
     ASSERT_EQ(bbl.execExpr("len").intVal(), (int64_t)3);
 }
 
+// ========== nREPL Tests ==========
+
+TEST(test_nrepl_exec_root) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"_(
+        (= result (nrepl-exec "(+ 1 2)"))
+    )_");
+    auto val = bbl.execExpr("result.value");
+    ASSERT_EQ(std::string(val.stringVal()->data), "3");
+}
+
+TEST(test_nrepl_exec_print_capture) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"_(
+        (= result (nrepl-exec "(print 42)"))
+    )_");
+    auto output = bbl.execExpr("result.output");
+    ASSERT_EQ(std::string(output.stringVal()->data), "42");
+}
+
+TEST(test_nrepl_exec_error) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"_(
+        (= result (nrepl-exec "(undefined-var)"))
+    )_");
+    auto err = bbl.execExpr("result.error");
+    ASSERT_TRUE(err.type() == BBL::Type::String);
+}
+
+TEST(test_nrepl_exec_unknown_module) {
+    BblState bbl; BBL::addStdLib(bbl);
+    ASSERT_THROW(bbl.exec(R"_((nrepl-exec "(+ 1 2)" "nonexistent.bbl"))_"));
+}
+
 // ========== Main ==========
 
 int main() {
@@ -6228,6 +6262,12 @@ int main() {
     RUN(test_channel_try_recv_has_data);
     RUN(test_channel_close);
     RUN(test_channel_length);
+
+    std::cout << "--- nREPL ---" << std::endl;
+    RUN(test_nrepl_exec_root);
+    RUN(test_nrepl_exec_print_capture);
+    RUN(test_nrepl_exec_error);
+    RUN(test_nrepl_exec_unknown_module);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

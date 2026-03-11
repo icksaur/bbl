@@ -3399,6 +3399,8 @@ static void addSandbox(BblState& bbl) {
     bbl.registerType(cb);
 }
 
+static BblValue deserializeMessage(BblState* bbl, BblMessage& msg);
+
 void BBL::addStdLib(BblState& bbl) {
     BBL::addPrint(bbl);
     BBL::addMath(bbl);
@@ -3456,6 +3458,110 @@ void BBL::addStdLib(BblState& bbl) {
 
         b->returnValue = BblValue::makeTable(env);
         b->hasReturn = true;
+        return 1;
+    });
+
+    bbl.defn("nrepl-exec", [](BblState* b) -> int {
+        const char* code = b->getStringArg(0);
+        const char* file = b->argCount() > 1 ? b->getStringArg(1) : nullptr;
+
+        BblTable* savedEnv = b->currentEnv;
+        if (file && strlen(file) > 0) {
+            namespace fs = std::filesystem;
+            fs::path base = b->scriptDir.empty() ? fs::current_path() : fs::path(b->scriptDir);
+            std::string key = fs::weakly_canonical(base / file).string();
+            auto it = b->moduleCache.find(key);
+            if (it != b->moduleCache.end())
+                b->currentEnv = it->second;
+            else
+                throw BBL::Error{"nrepl-exec: module not loaded: " + std::string(file)};
+        }
+
+        std::string output;
+        std::string* savedCapture = b->printCapture;
+        b->printCapture = &output;
+        BblTable* tbl = b->allocTable();
+        try {
+            BblValue result = b->execExpr(code);
+            b->currentEnv = savedEnv;
+            b->printCapture = savedCapture;
+            tbl->set(BblValue::makeString(b->intern("value")),
+                     BblValue::makeString(b->allocString(valueToString(result))));
+            if (!output.empty())
+                tbl->set(BblValue::makeString(b->intern("output")),
+                         BblValue::makeString(b->allocString(std::move(output))));
+        } catch (const BBL::Error& e) {
+            b->currentEnv = savedEnv;
+            b->printCapture = savedCapture;
+            tbl->set(BblValue::makeString(b->intern("error")),
+                     BblValue::makeString(b->allocString(e.what)));
+        }
+        b->pushTable(tbl);
+        return 1;
+    });
+
+    bbl.defn("nrepl-poll", [](BblState* b) -> int {
+        auto& handleVal = b->callArgs[0];
+        if (handleVal.type() != BBL::Type::UserData) { b->pushNull(); return 1; }
+        auto* handle = static_cast<BblStateHandle*>(handleVal.userdataVal()->data);
+        if (!handle) { b->pushNull(); return 1; }
+        auto msg = handle->toParent.tryPop();
+        if (!msg) { b->pushNull(); return 1; }
+        BblValue reqTable = deserializeMessage(b, *msg);
+        if (reqTable.type() != BBL::Type::Table) { b->pushNull(); return 1; }
+        auto codeVal = reqTable.tableVal()->get(BblValue::makeString(b->intern("code")));
+        if (!codeVal) { b->pushNull(); return 1; }
+        const char* code = codeVal->stringVal()->data.c_str();
+        auto fileVal = reqTable.tableVal()->get(BblValue::makeString(b->intern("file")));
+        const char* file = (fileVal && fileVal->type() == BBL::Type::String && !fileVal->stringVal()->data.empty())
+                           ? fileVal->stringVal()->data.c_str() : nullptr;
+
+        BblTable* savedEnv = b->currentEnv;
+        if (file) {
+            namespace fs = std::filesystem;
+            fs::path base = b->scriptDir.empty() ? fs::current_path() : fs::path(b->scriptDir);
+            std::string key = fs::weakly_canonical(base / file).string();
+            auto it = b->moduleCache.find(key);
+            if (it != b->moduleCache.end()) b->currentEnv = it->second;
+        }
+
+        std::string output;
+        std::string* savedCapture = b->printCapture;
+        b->printCapture = &output;
+        BblTable* resultTbl = b->allocTable();
+        try {
+            BblValue result = b->execExpr(code);
+            b->currentEnv = savedEnv;
+            b->printCapture = savedCapture;
+            resultTbl->set(BblValue::makeString(b->intern("value")),
+                           BblValue::makeString(b->allocString(valueToString(result))));
+            if (!output.empty())
+                resultTbl->set(BblValue::makeString(b->intern("output")),
+                               BblValue::makeString(b->allocString(std::move(output))));
+        } catch (const BBL::Error& e) {
+            b->currentEnv = savedEnv;
+            b->printCapture = savedCapture;
+            resultTbl->set(BblValue::makeString(b->intern("error")),
+                           BblValue::makeString(b->allocString(e.what)));
+        }
+
+        auto idVal = reqTable.tableVal()->get(BblValue::makeString(b->intern("id")));
+        if (idVal) resultTbl->set(BblValue::makeString(b->intern("id")), *idVal);
+
+        BblMessage resp;
+        resultTbl->ensureOrder();
+        if (resultTbl->order) {
+            for (auto& k : *resultTbl->order) {
+                auto v = resultTbl->get(k).value_or(BblValue::makeNull());
+                MessageValue mv;
+                mv.type = v.type();
+                if (v.type() == BBL::Type::String) mv.stringVal = v.stringVal()->data;
+                else if (v.type() == BBL::Type::Int) mv.intVal = v.intVal();
+                resp.entries.emplace_back(k.stringVal()->data, std::move(mv));
+            }
+        }
+        handle->toChild.push(std::move(resp));
+        b->pushTable(resultTbl);
         return 1;
     });
 }
