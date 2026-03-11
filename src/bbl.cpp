@@ -3400,6 +3400,9 @@ static void addSandbox(BblState& bbl) {
 }
 
 static BblValue deserializeMessage(BblState* bbl, BblMessage& msg);
+static int bblChildPost(BblState* bbl);
+static int bblChildRecv(BblState* bbl);
+static int bblChildRecvVec(BblState* bbl);
 
 void BBL::addStdLib(BblState& bbl) {
     BBL::addPrint(bbl);
@@ -3562,6 +3565,101 @@ void BBL::addStdLib(BblState& bbl) {
         }
         handle->toChild.push(std::move(resp));
         b->pushTable(resultTbl);
+        return 1;
+    });
+
+    static const char* nreplServerCode = R"_(
+        (= config (recv))
+        (= server (tcp-listen "0.0.0.0" config.port))
+        (loop true
+            (= conn (server:accept))
+            (= header (conn:read-line))
+            (= blank (conn:read-line))
+            (if (header:starts-with "Content-Length:")
+                (do
+                    (= len (int (str:trim (header:slice 15))))
+                    (= body (conn:read-bytes len))
+                    (= req (json:decode body))
+                    (if (== req.method "eval")
+                        (do
+                            (= file (if req.params.file req.params.file ""))
+                            (post (table "id" req.id "code" req.params.code "file" file))
+                            (= resp (recv))
+                            (= json-resp (json:encode (table "jsonrpc" "2.0" "id" resp.id "result" resp)))
+                            (= out (str "Content-Length: " (json-resp:length) "\r\n\r\n" json-resp))
+                            (conn:write out)))))
+            (conn:close))
+    )_";
+
+    bbl.defn("nrepl-start", [](BblState* b) -> int {
+        int64_t port = b->getIntArg(0);
+        auto* child = new BblState();
+        child->parentState = b;
+        child->structDescsPtr = &b->structDescs();
+        child->userDataDescsPtr = &b->userDataDescs();
+        child->internTable.clear();
+        child->m = b->m;
+        child->allowOpenFilesystem = true;
+        BBL::addStdLib(*child);
+        child->defn("post", bblChildPost);
+        child->defn("recv", bblChildRecv);
+        child->defn("recv-vec", bblChildRecvVec);
+        auto* handle = new BblStateHandle();
+        handle->child = child;
+        child->handle = handle;
+
+        std::string portFileDir = b->scriptDir.empty() ? "." : b->scriptDir;
+        std::string portFilePath = portFileDir + "/.bbl-nrepl-port";
+        { std::ofstream pf(portFilePath); pf << port; }
+
+        handle->thread = std::thread([handle, portFilePath] {
+            BblState* child = handle->child;
+            try {
+                child->exec(nreplServerCode);
+            } catch (const BblTerminated&) {
+            } catch (const BBL::Error& e) {
+                handle->childError = e.what;
+            } catch (...) {
+                handle->childError = "nrepl server error";
+            }
+            std::remove(portFilePath.c_str());
+            handle->done.store(true, std::memory_order_release);
+            { std::lock_guard lk(handle->toParent.mtx); }
+            handle->toParent.cv.notify_one();
+        });
+
+        BblMessage cfg;
+        cfg.entries.emplace_back("port", MessageValue{BBL::Type::Int, port});
+        handle->toChild.push(std::move(cfg));
+
+        BblUserData* ud = b->allocUserData("State", handle);
+        b->returnValue = BblValue::makeUserData(ud);
+        b->hasReturn = true;
+        return 1;
+    });
+
+    bbl.defn("nrepl", [](BblState* b) -> int {
+        b->callArgs = {BblValue::makeInt(b->getIntArg(0))};
+        b->hasReturn = false;
+        // Call nrepl-start to get the handle
+        auto startFn = b->vm->globals.find(b->resolveSymbol("nrepl-start"));
+        if (startFn == b->vm->globals.end()) throw BBL::Error{"nrepl: nrepl-start not found"};
+        startFn->second.cfnVal()(b);
+        BblValue handleVal = b->returnValue;
+
+        auto pollFn = b->vm->globals.find(b->resolveSymbol("nrepl-poll"));
+        if (pollFn == b->vm->globals.end()) throw BBL::Error{"nrepl: nrepl-poll not found"};
+
+        auto* handle = static_cast<BblStateHandle*>(handleVal.userdataVal()->data);
+        while (!b->terminated.load(std::memory_order_relaxed)) {
+            b->callArgs = {handleVal};
+            b->hasReturn = false;
+            pollFn->second.cfnVal()(b);
+            if (handle->done.load(std::memory_order_acquire)) break;
+            std::unique_lock lock(handle->toParent.mtx);
+            handle->toParent.cv.wait_for(lock, std::chrono::milliseconds(100));
+        }
+        b->pushNull();
         return 1;
     });
 }
