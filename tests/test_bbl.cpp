@@ -5340,6 +5340,61 @@ TEST(test_atomic_buffer_swap) {
     ASSERT_NEAR(result.floatVal(), 42.0, 0.001);
 }
 
+// ========== Lock-Free Ring Buffer Tests ==========
+
+TEST(test_ring_push_pop) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= ring (lock-free-ring 4))
+        (ring:push 42)
+        (= v (ring:pop))
+    )");
+    ASSERT_EQ(bbl.execExpr("v").intVal(), (int64_t)42);
+}
+
+TEST(test_ring_empty_pop) {
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"(
+        (= ring (lock-free-ring 4))
+        (ring:pop)
+    )");
+    ASSERT_EQ(result.type(), BBL::Type::Null);
+}
+
+TEST(test_ring_full_push) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= ring (lock-free-ring 4))
+        (ring:push 1) (ring:push 2) (ring:push 3)
+        (= full-result (ring:push 4))
+    )");
+    ASSERT_FALSE(bbl.execExpr("full-result").boolVal());
+}
+
+TEST(test_ring_ordering) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= ring (lock-free-ring 16))
+        (= i 1) (loop (<= i 10) (ring:push i) (= i (+ i 1)))
+        (= results (vector int))
+        (= v (ring:pop))
+        (loop v (results:push v) (= v (ring:pop)))
+    )");
+    ASSERT_EQ(bbl.execExpr("(results:length)").intVal(), (int64_t)10);
+    ASSERT_EQ(bbl.execExpr("(results:at 0)").intVal(), (int64_t)1);
+    ASSERT_EQ(bbl.execExpr("(results:at 9)").intVal(), (int64_t)10);
+}
+
+TEST(test_ring_length) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= ring (lock-free-ring 8))
+        (ring:push 1) (ring:push 2) (ring:push 3)
+        (= len (ring:length))
+    )");
+    ASSERT_EQ(bbl.execExpr("len").intVal(), (int64_t)3);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -6104,6 +6159,13 @@ int main() {
     std::cout << "--- Atomic Buffer ---" << std::endl;
     RUN(test_atomic_buffer_basic);
     RUN(test_atomic_buffer_swap);
+
+    std::cout << "--- Lock-Free Ring ---" << std::endl;
+    RUN(test_ring_push_pop);
+    RUN(test_ring_empty_pop);
+    RUN(test_ring_full_push);
+    RUN(test_ring_ordering);
+    RUN(test_ring_length);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

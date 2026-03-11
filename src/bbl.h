@@ -512,9 +512,11 @@ struct MessageQueue {
     std::mutex mtx;
     std::condition_variable cv;
     std::deque<BblMessage> messages;
+    std::condition_variable* selectCv = nullptr;
 
     void push(BblMessage msg);
     BblMessage pop(std::atomic<bool>& terminated);
+    std::optional<BblMessage> tryPop();
     bool empty();
 };
 

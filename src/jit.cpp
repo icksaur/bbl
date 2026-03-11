@@ -536,6 +536,17 @@ void jitLength(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg)
     else if (obj.type() == BBL::Type::String) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.stringVal()->data.size()));
     else if (obj.type() == BBL::Type::Binary) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.binaryVal()->length()));
     else if (obj.type() == BBL::Type::Table) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.tableVal()->length()));
+    else if (obj.type() == BBL::Type::UserData) {
+        auto it = obj.userdataVal()->desc->methods.find("length");
+        if (it != obj.userdataVal()->desc->methods.end()) {
+            state->callArgs.clear();
+            state->callArgs.push_back(obj);
+            state->hasReturn = false; state->returnValue = BblValue::makeNull();
+            state->returnValues.clear();
+            it->second(state);
+            regs[destReg] = state->hasReturn ? state->returnValue : BblValue::makeNull();
+        } else JIT_ERROR(state, "cannot get length");
+    }
     else JIT_ERROR(state, "cannot get length");
     JIT_CATCH
 }

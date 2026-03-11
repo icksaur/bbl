@@ -2968,6 +2968,13 @@ struct AtomicDoubleBuffer {
     std::atomic<int> readIdx{0};
 };
 
+struct LockFreeRing {
+    std::vector<BblValue> buf;
+    std::atomic<size_t> head{0};
+    std::atomic<size_t> tail{0};
+    size_t mask;
+};
+
 void BBL::addCore(BblState& bbl) {
     bbl.defn("compress", [](BblState* b) -> int {
         BblBinary* bin = b->getBinaryArg(0);
@@ -3274,6 +3281,54 @@ static void addSandbox(BblState& bbl) {
     });
     ab.destructor([](void* p) { delete static_cast<AtomicDoubleBuffer*>(p); });
     bbl.registerType(ab);
+
+    bbl.defn("lock-free-ring", [](BblState* b) -> int {
+        int64_t cap = b->getIntArg(0);
+        if (cap <= 0 || (cap & (cap - 1)) != 0)
+            throw BBL::Error{"lock-free-ring: capacity must be a power of 2"};
+        auto* ring = new LockFreeRing();
+        ring->buf.resize(static_cast<size_t>(cap));
+        ring->mask = static_cast<size_t>(cap) - 1;
+        b->pushUserData("LockFreeRing", ring);
+        return 1;
+    });
+
+    BBL::TypeBuilder rb("LockFreeRing");
+    rb.method("push", [](BblState* b) -> int {
+        auto* ring = static_cast<LockFreeRing*>(b->callArgs[0].userdataVal()->data);
+        size_t h = ring->head.load(std::memory_order_relaxed);
+        size_t next = (h + 1) & ring->mask;
+        if (next == ring->tail.load(std::memory_order_acquire)) {
+            b->pushBool(false);
+            return 1;
+        }
+        ring->buf[h] = b->callArgs[1];
+        ring->head.store(next, std::memory_order_release);
+        b->pushBool(true);
+        return 1;
+    });
+    rb.method("pop", [](BblState* b) -> int {
+        auto* ring = static_cast<LockFreeRing*>(b->callArgs[0].userdataVal()->data);
+        size_t t = ring->tail.load(std::memory_order_relaxed);
+        if (t == ring->head.load(std::memory_order_acquire)) {
+            b->pushNull();
+            return 1;
+        }
+        BblValue val = ring->buf[t];
+        ring->tail.store((t + 1) & ring->mask, std::memory_order_release);
+        b->returnValue = val;
+        b->hasReturn = true;
+        return 1;
+    });
+    rb.method("length", [](BblState* b) -> int {
+        auto* ring = static_cast<LockFreeRing*>(b->callArgs[0].userdataVal()->data);
+        size_t h = ring->head.load(std::memory_order_acquire);
+        size_t t = ring->tail.load(std::memory_order_acquire);
+        b->pushInt(static_cast<int64_t>((h - t) & ring->mask));
+        return 1;
+    });
+    rb.destructor([](void* p) { delete static_cast<LockFreeRing*>(p); });
+    bbl.registerType(rb);
 }
 
 void BBL::addStdLib(BblState& bbl) {
@@ -3340,9 +3395,14 @@ void BBL::addStdLib(BblState& bbl) {
 // ---------- Child States ----------
 
 void MessageQueue::push(BblMessage msg) {
-    std::lock_guard lock(mtx);
-    messages.push_back(std::move(msg));
+    std::condition_variable* notify = nullptr;
+    {
+        std::lock_guard lock(mtx);
+        messages.push_back(std::move(msg));
+        notify = selectCv;
+    }
     cv.notify_one();
+    if (notify) notify->notify_one();
 }
 
 BblMessage MessageQueue::pop(std::atomic<bool>& terminated) {
@@ -3357,6 +3417,14 @@ BblMessage MessageQueue::pop(std::atomic<bool>& terminated) {
 bool MessageQueue::empty() {
     std::lock_guard lock(mtx);
     return messages.empty();
+}
+
+std::optional<BblMessage> MessageQueue::tryPop() {
+    std::lock_guard lock(mtx);
+    if (messages.empty()) return std::nullopt;
+    BblMessage msg = std::move(messages.front());
+    messages.pop_front();
+    return msg;
 }
 
 static void stateDestructor(void* data) {
@@ -3614,12 +3682,146 @@ static int bblChildRecvVec(BblState* bbl) {
     return 0;
 }
 
+static int stateTryRecv(BblState* bbl) {
+    auto* handle = getHandle(bbl);
+    auto msg = handle->toParent.tryPop();
+    if (!msg) { bbl->pushNull(); return 1; }
+    BblValue table = deserializeMessage(bbl, *msg);
+    bbl->returnValue = table;
+    bbl->hasReturn = true;
+    return 1;
+}
+
+static int bblTrySelect(BblState* bbl) {
+    int n = bbl->argCount();
+    for (int i = 0; i < n; i++) {
+        auto arg = bbl->getArg(i);
+        if (arg.type() != BBL::Type::UserData) continue;
+        auto* handle = static_cast<BblStateHandle*>(arg.userdataVal()->data);
+        if (!handle) continue;
+        if (!handle->toParent.empty()) {
+            bbl->pushInt(i);
+            return 1;
+        }
+    }
+    bbl->pushNull();
+    return 1;
+}
+
+static int bblSelect(BblState* bbl) {
+    int n = bbl->argCount();
+    std::vector<BblStateHandle*> handles(n, nullptr);
+    for (int i = 0; i < n; i++) {
+        auto arg = bbl->getArg(i);
+        if (arg.type() == BBL::Type::UserData)
+            handles[i] = static_cast<BblStateHandle*>(arg.userdataVal()->data);
+    }
+
+    for (int i = 0; i < n; i++) {
+        if (handles[i] && !handles[i]->toParent.empty()) {
+            bbl->pushInt(i);
+            return 1;
+        }
+    }
+
+    std::mutex selectMtx;
+    std::condition_variable selectCv;
+
+    for (int i = 0; i < n; i++) {
+        if (handles[i]) {
+            std::lock_guard lock(handles[i]->toParent.mtx);
+            handles[i]->toParent.selectCv = &selectCv;
+        }
+    }
+
+    {
+        std::unique_lock lock(selectMtx);
+        selectCv.wait(lock, [&] {
+            for (int i = 0; i < n; i++)
+                if (handles[i] && !handles[i]->toParent.empty()) return true;
+            return bbl->terminated.load(std::memory_order_relaxed);
+        });
+    }
+
+    for (int i = 0; i < n; i++) {
+        if (handles[i]) {
+            std::lock_guard lock(handles[i]->toParent.mtx);
+            handles[i]->toParent.selectCv = nullptr;
+        }
+    }
+
+    if (bbl->terminated.load()) throw BblTerminated{};
+
+    for (int i = 0; i < n; i++) {
+        if (handles[i] && !handles[i]->toParent.empty()) {
+            bbl->pushInt(i);
+            return 1;
+        }
+    }
+    bbl->pushNull();
+    return 1;
+}
+
+static int bblSelectTimeout(BblState* bbl) {
+    int64_t timeoutMs = bbl->getIntArg(0);
+    int n = bbl->argCount() - 1;
+    std::vector<BblStateHandle*> handles(n, nullptr);
+    for (int i = 0; i < n; i++) {
+        auto arg = bbl->getArg(i + 1);
+        if (arg.type() == BBL::Type::UserData)
+            handles[i] = static_cast<BblStateHandle*>(arg.userdataVal()->data);
+    }
+
+    for (int i = 0; i < n; i++) {
+        if (handles[i] && !handles[i]->toParent.empty()) {
+            bbl->pushInt(i);
+            return 1;
+        }
+    }
+
+    std::mutex selectMtx;
+    std::condition_variable selectCv;
+
+    for (int i = 0; i < n; i++) {
+        if (handles[i]) {
+            std::lock_guard lock(handles[i]->toParent.mtx);
+            handles[i]->toParent.selectCv = &selectCv;
+        }
+    }
+
+    {
+        std::unique_lock lock(selectMtx);
+        selectCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&] {
+            for (int i = 0; i < n; i++)
+                if (handles[i] && !handles[i]->toParent.empty()) return true;
+            return false;
+        });
+    }
+
+    for (int i = 0; i < n; i++) {
+        if (handles[i]) {
+            std::lock_guard lock(handles[i]->toParent.mtx);
+            handles[i]->toParent.selectCv = nullptr;
+        }
+    }
+
+    for (int i = 0; i < n; i++) {
+        if (handles[i] && !handles[i]->toParent.empty()) {
+            bbl->pushInt(i);
+            return 1;
+        }
+    }
+    bbl->pushNull();
+    return 1;
+}
+
 // --- Registration ---
 
 void BBL::addChildStates(BblState& bbl, bool) {
     BBL::TypeBuilder sb("State");
     sb.method("post", statePost)
       .method("recv", stateRecv)
+      .method("try-recv", stateTryRecv)
       .method("recv-vec", stateRecvVec)
       .method("join", stateJoin)
       .method("is-done", stateIsDone)
@@ -3629,4 +3831,7 @@ void BBL::addChildStates(BblState& bbl, bool) {
     bbl.registerType(sb);
     bbl.defn("state-new", bblStateNew);
     bbl.defn("state-destroy", stateDestroy);
+    bbl.defn("try-select", bblTrySelect);
+    bbl.defn("select", bblSelect);
+    bbl.defn("select-timeout", bblSelectTimeout);
 }
