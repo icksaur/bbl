@@ -5395,6 +5395,61 @@ TEST(test_ring_length) {
     ASSERT_EQ(bbl.execExpr("len").intVal(), (int64_t)3);
 }
 
+// ========== Channel Tests ==========
+
+TEST(test_channel_send_recv) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= ch (channel))
+        (ch:send 42)
+        (ch:send "hello")
+        (= v1 (ch:recv))
+        (= v2 (ch:recv))
+    )");
+    ASSERT_EQ(bbl.execExpr("v1").intVal(), (int64_t)42);
+    ASSERT_EQ(std::string(bbl.execExpr("v2").stringVal()->data), "hello");
+}
+
+TEST(test_channel_try_recv_empty) {
+    BblState bbl; BBL::addStdLib(bbl);
+    auto result = bbl.execExpr(R"(
+        (= ch (channel))
+        (ch:try-recv)
+    )");
+    ASSERT_EQ(result.type(), BBL::Type::Null);
+}
+
+TEST(test_channel_try_recv_has_data) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= ch (channel))
+        (ch:send 99)
+        (= v (ch:try-recv))
+    )");
+    ASSERT_EQ(bbl.execExpr("v").intVal(), (int64_t)99);
+}
+
+TEST(test_channel_close) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= ch (channel))
+        (ch:send 1)
+        (ch:close)
+        (= v (ch:recv))
+    )");
+    ASSERT_EQ(bbl.execExpr("v").intVal(), (int64_t)1);
+}
+
+TEST(test_channel_length) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"(
+        (= ch (channel))
+        (ch:send 1) (ch:send 2) (ch:send 3)
+        (= len (ch:length))
+    )");
+    ASSERT_EQ(bbl.execExpr("len").intVal(), (int64_t)3);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -6166,6 +6221,13 @@ int main() {
     RUN(test_ring_full_push);
     RUN(test_ring_ordering);
     RUN(test_ring_length);
+
+    std::cout << "--- Channels ---" << std::endl;
+    RUN(test_channel_send_recv);
+    RUN(test_channel_try_recv_empty);
+    RUN(test_channel_try_recv_has_data);
+    RUN(test_channel_close);
+    RUN(test_channel_length);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

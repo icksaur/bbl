@@ -568,6 +568,7 @@ struct SlabAllocator {
 };
 
 struct BblState {
+    BblState* parentState = nullptr;
     std::unordered_map<std::string, BblString*> internTable;
     GcObj* nurseryHead = nullptr;
     GcObj* tenuredHead = nullptr;
@@ -575,9 +576,18 @@ struct BblState {
     SlabAllocator<BblClosure> closureSlab;
     std::unique_ptr<VmState> vm;
 
-    // Type descriptors
-    std::unordered_map<std::string, StructDesc> structDescs;
-    std::unordered_map<std::string, UserDataDesc> userDataDescs;
+    // Type descriptors (may point to parent's)
+    std::unordered_map<std::string, StructDesc>* structDescsPtr = nullptr;
+    std::unordered_map<std::string, UserDataDesc>* userDataDescsPtr = nullptr;
+    std::unordered_map<std::string, StructDesc> structDescsOwned;
+    std::unordered_map<std::string, UserDataDesc> userDataDescsOwned;
+
+    std::unordered_map<std::string, StructDesc>& structDescs() {
+        return structDescsPtr ? *structDescsPtr : structDescsOwned;
+    }
+    std::unordered_map<std::string, UserDataDesc>& userDataDescs() {
+        return userDataDescsPtr ? *userDataDescsPtr : userDataDescsOwned;
+    }
 
     // GC
     size_t allocCount = 0;

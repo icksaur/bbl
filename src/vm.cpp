@@ -398,8 +398,8 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
             std::string elemType = K(C).stringVal()->data;
             BBL::Type elemTypeTag = BBL::Type::Null;
             size_t elemSize = 0;
-            auto dit = state.structDescs.find(elemType);
-            if (dit != state.structDescs.end()) { elemTypeTag = BBL::Type::Struct; elemSize = dit->second.totalSize; }
+            auto dit = state.structDescs().find(elemType);
+            if (dit != state.structDescs().end()) { elemTypeTag = BBL::Type::Struct; elemSize = dit->second.totalSize; }
             else if (elemType == "int" || elemType == "int64") { elemTypeTag = BBL::Type::Int; elemSize = 8; }
             else if (elemType == "float" || elemType == "float64") { elemTypeTag = BBL::Type::Float; elemSize = 8; }
             else if (elemType == "float32") { elemTypeTag = BBL::Type::Float; elemSize = 4; }
@@ -424,8 +424,8 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
         case OP_STRUCT: {
             // A=dest, B=argc, C=typeNameConstIdx
             std::string tname = K(C).stringVal()->data;
-            auto dit = state.structDescs.find(tname);
-            if (dit == state.structDescs.end()) throw BBL::Error{"unknown struct type: " + tname};
+            auto dit = state.structDescs().find(tname);
+            if (dit == state.structDescs().end()) throw BBL::Error{"unknown struct type: " + tname};
             std::vector<BblValue> args(B);
             for (int i = 0; i < B; i++) args[i] = R(A + 1 + i);
             int line = frame->chunk->lines[frame->ip - frame->chunk->code.data() - 1];
@@ -649,8 +649,8 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
 
         case OP_SIZEOF: {
             std::string tname = K(B).stringVal()->data;
-            auto dit = state.structDescs.find(tname);
-            if (dit == state.structDescs.end()) throw BBL::Error{"unknown struct type: " + tname};
+            auto dit = state.structDescs().find(tname);
+            if (dit == state.structDescs().end()) throw BBL::Error{"unknown struct type: " + tname};
             R(A) = BblValue::makeInt(static_cast<int64_t>(dit->second.totalSize));
             break;
         }

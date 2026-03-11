@@ -201,8 +201,8 @@ static bool resolveTypeName(BblState* state, const std::string& name,
     };
     auto it = types.find(name);
     if (it != types.end()) { ctype = it->second.first; size = it->second.second; structName.clear(); return true; }
-    auto sit = state->structDescs.find(name);
-    if (sit != state->structDescs.end()) { ctype = CType::Struct; size = sit->second.totalSize; structName = name; return true; }
+    auto sit = state->structDescs().find(name);
+    if (sit != state->structDescs().end()) { ctype = CType::Struct; size = sit->second.totalSize; structName = name; return true; }
     return false;
 }
 
@@ -440,7 +440,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             if (static_cast<size_t>(off) + sz > bin->data.size()) JIT_ERROR(state, "binary.as: out of bounds");
             const uint8_t* p = bin->data.data() + off;
             if (ct == CType::Struct) {
-                auto& desc = state->structDescs[sn];
+                auto& desc = state->structDescs()[sn];
                 BblStruct* s = state->allocStruct(&desc);
                 std::memcpy(s->data.data(), p, sz);
                 regs[base] = BblValue::makeStruct(s);
@@ -498,8 +498,8 @@ void jitVector(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, u
     std::string elemType = chunk->constants[typeIdx].stringVal()->data;
     BBL::Type elemTypeTag = BBL::Type::Null;
     size_t elemSize = 0;
-    auto dit = state->structDescs.find(elemType);
-    if (dit != state->structDescs.end()) { elemTypeTag = BBL::Type::Struct; elemSize = dit->second.totalSize; }
+    auto dit = state->structDescs().find(elemType);
+    if (dit != state->structDescs().end()) { elemTypeTag = BBL::Type::Struct; elemSize = dit->second.totalSize; }
     else if (elemType == "int" || elemType == "int64") { elemTypeTag = BBL::Type::Int; elemSize = 8; }
     else if (elemType == "float" || elemType == "float64") { elemTypeTag = BBL::Type::Float; elemSize = 8; }
     else if (elemType == "float32") { elemTypeTag = BBL::Type::Float; elemSize = 4; }
@@ -628,8 +628,8 @@ void jitStruct(BblValue* regs, BblState* state, Chunk* chunk, uint8_t A, uint32_
     uint8_t argc = (packed >> 8) & 0xFF;
     uint8_t typeIdx = packed & 0xFF;
     std::string tname = chunk->constants[typeIdx].stringVal()->data;
-    auto dit = state->structDescs.find(tname);
-    if (dit == state->structDescs.end()) JIT_ERROR(state, "unknown struct type: " + tname);
+    auto dit = state->structDescs().find(tname);
+    if (dit == state->structDescs().end()) JIT_ERROR(state, "unknown struct type: " + tname);
     std::vector<BblValue> args(argc);
     for (int i = 0; i < argc; i++) args[i] = regs[A + 1 + i];
     regs[A] = state->constructStruct(&dit->second, args, 0);
@@ -639,8 +639,8 @@ void jitStruct(BblValue* regs, BblState* state, Chunk* chunk, uint8_t A, uint32_
 void jitSizeof(BblValue* regs, BblState* state, Chunk* chunk, uint8_t A, uint8_t constIdx) {
     JIT_TRY
     std::string tname = chunk->constants[constIdx].stringVal()->data;
-    auto dit = state->structDescs.find(tname);
-    if (dit != state->structDescs.end()) {
+    auto dit = state->structDescs().find(tname);
+    if (dit != state->structDescs().end()) {
         regs[A] = BblValue::makeInt(static_cast<int64_t>(dit->second.totalSize));
         return;
     }

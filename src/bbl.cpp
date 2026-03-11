@@ -701,6 +701,10 @@ BblString* BblState::intern(const std::string& s) {
     if (it != internTable.end()) {
         return it->second;
     }
+    if (parentState) {
+        auto pit = parentState->internTable.find(s);
+        if (pit != parentState->internTable.end()) return pit->second;
+    }
     auto* str = new BblString{s, false, true};
     str->gcNext = nurseryHead; nurseryHead = str;
     internTable[str->data] = str;
@@ -794,8 +798,8 @@ BblTable* BblState::allocTable() {
 }
 
 BblUserData* BblState::allocUserData(const std::string& typeName, void* data) {
-    auto it = userDataDescs.find(typeName);
-    if (it == userDataDescs.end()) {
+    auto it = userDataDescs().find(typeName);
+    if (it == userDataDescs().end()) {
         throw BBL::Error{"unknown userdata type: " + typeName};
     }
     auto* u = new BblUserData();
@@ -1595,8 +1599,8 @@ BBL::StructBuilder& BBL::StructBuilder::structField(const std::string& fname, si
 }
 
 void BblState::registerStruct(const BBL::StructBuilder& builder) {
-    auto it = structDescs.find(builder.name());
-    if (it != structDescs.end()) {
+    auto it = structDescs().find(builder.name());
+    if (it != structDescs().end()) {
         return; // silent no-op on re-registration
     }
     StructDesc desc;
@@ -1605,27 +1609,27 @@ void BblState::registerStruct(const BBL::StructBuilder& builder) {
     for (auto& f : builder.fields()) {
         FieldDesc fd = f;
         if (fd.ctype == CType::Struct) {
-            auto sit = structDescs.find(fd.structType);
-            if (sit == structDescs.end()) {
+            auto sit = structDescs().find(fd.structType);
+            if (sit == structDescs().end()) {
                 throw BBL::Error{"struct " + desc.name + ": field " + fd.name + " references unknown struct " + fd.structType};
             }
             fd.size = sit->second.totalSize;
         }
         desc.fields.push_back(fd);
     }
-    structDescs[desc.name] = std::move(desc);
+    structDescs()[desc.name] = std::move(desc);
 }
 
 void BblState::registerType(const BBL::TypeBuilder& builder) {
-    auto it = userDataDescs.find(builder.name());
-    if (it != userDataDescs.end()) {
+    auto it = userDataDescs().find(builder.name());
+    if (it != userDataDescs().end()) {
         return;
     }
     UserDataDesc desc;
     desc.name = builder.name();
     desc.methods = builder.methods();
     desc.destructor = builder.getDestructor();
-    userDataDescs[desc.name] = std::move(desc);
+    userDataDescs()[desc.name] = std::move(desc);
 }
 
 // ---------- Struct field read/write ----------
@@ -1687,8 +1691,8 @@ BblValue BblState::readField(BblStruct* s, const FieldDesc& fd) {
             return BblValue::makeBool(*p != 0);
         }
         case CType::Struct: {
-            auto sit = structDescs.find(fd.structType);
-            if (sit == structDescs.end()) {
+            auto sit = structDescs().find(fd.structType);
+            if (sit == structDescs().end()) {
                 throw BBL::Error{"unknown struct type: " + fd.structType};
             }
             BblStruct* inner = allocStruct(&sit->second);
@@ -1849,8 +1853,8 @@ BblValue BblState::readVecElem(BblVec* vec, size_t i) {
             return BblValue::makeBool(*p != 0);
         }
         case BBL::Type::Struct: {
-            auto sit = structDescs.find(vec->elemType);
-            if (sit == structDescs.end()) {
+            auto sit = structDescs().find(vec->elemType);
+            if (sit == structDescs().end()) {
                 throw BBL::Error{"unknown struct type: " + vec->elemType};
             }
             BblStruct* s = allocStruct(&sit->second);
@@ -2975,6 +2979,14 @@ struct LockFreeRing {
     size_t mask;
 };
 
+struct BblChannel {
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::deque<BblValue> messages;
+    bool closed = false;
+    std::condition_variable* selectCv = nullptr;
+};
+
 void BBL::addCore(BblState& bbl) {
     bbl.defn("compress", [](BblState* b) -> int {
         BblBinary* bin = b->getBinaryArg(0);
@@ -3329,6 +3341,62 @@ static void addSandbox(BblState& bbl) {
     });
     rb.destructor([](void* p) { delete static_cast<LockFreeRing*>(p); });
     bbl.registerType(rb);
+
+    bbl.defn("channel", [](BblState* b) -> int {
+        b->pushUserData("Channel", new BblChannel());
+        return 1;
+    });
+
+    BBL::TypeBuilder cb("Channel");
+    cb.method("send", [](BblState* b) -> int {
+        auto* ch = static_cast<BblChannel*>(b->callArgs[0].userdataVal()->data);
+        if (ch->closed) throw BBL::Error{"send on closed channel"};
+        std::condition_variable* notify = nullptr;
+        {
+            std::lock_guard lock(ch->mtx);
+            ch->messages.push_back(b->callArgs[1]);
+            notify = ch->selectCv;
+        }
+        ch->cv.notify_one();
+        if (notify) notify->notify_one();
+        return 0;
+    });
+    cb.method("recv", [](BblState* b) -> int {
+        auto* ch = static_cast<BblChannel*>(b->callArgs[0].userdataVal()->data);
+        std::unique_lock lock(ch->mtx);
+        ch->cv.wait(lock, [&] { return !ch->messages.empty() || ch->closed; });
+        if (ch->messages.empty()) { b->pushNull(); return 1; }
+        b->returnValue = ch->messages.front();
+        b->hasReturn = true;
+        ch->messages.pop_front();
+        return 1;
+    });
+    cb.method("try-recv", [](BblState* b) -> int {
+        auto* ch = static_cast<BblChannel*>(b->callArgs[0].userdataVal()->data);
+        std::lock_guard lock(ch->mtx);
+        if (ch->messages.empty()) { b->pushNull(); return 1; }
+        b->returnValue = ch->messages.front();
+        b->hasReturn = true;
+        ch->messages.pop_front();
+        return 1;
+    });
+    cb.method("close", [](BblState* b) -> int {
+        auto* ch = static_cast<BblChannel*>(b->callArgs[0].userdataVal()->data);
+        {
+            std::lock_guard lock(ch->mtx);
+            ch->closed = true;
+        }
+        ch->cv.notify_all();
+        return 0;
+    });
+    cb.method("length", [](BblState* b) -> int {
+        auto* ch = static_cast<BblChannel*>(b->callArgs[0].userdataVal()->data);
+        std::lock_guard lock(ch->mtx);
+        b->pushInt(static_cast<int64_t>(ch->messages.size()));
+        return 1;
+    });
+    cb.destructor([](void* p) { delete static_cast<BblChannel*>(p); });
+    bbl.registerType(cb);
 }
 
 void BBL::addStdLib(BblState& bbl) {
@@ -3518,6 +3586,11 @@ static BblValue deserializeMessage(BblState* bbl, BblMessage& msg) {
 static int bblStateNew(BblState* bbl) {
     std::string path = bbl->getStringArg(0);
     auto* child = new BblState();
+    child->parentState = bbl;
+    child->structDescsPtr = &bbl->structDescs();
+    child->userDataDescsPtr = &bbl->userDataDescs();
+    child->internTable.clear();
+    child->m = bbl->m;
     child->allowOpenFilesystem = true;
     BBL::addStdLib(*child);
     // addStdLib already registered State type + state-new/state-destroy.

@@ -709,7 +709,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
         if (node.children[1].type != NodeType::Symbol)
             throw BBL::Error{"struct: name must be a symbol at line " + std::to_string(node.line)};
         auto& sname = node.children[1].stringVal;
-        if (state.structDescs.find(sname) != state.structDescs.end())
+        if (state.structDescs().find(sname) != state.structDescs().end())
             throw BBL::Error{"struct " + sname + " already defined at line " + std::to_string(node.line)};
 
         static const std::unordered_map<std::string, std::pair<CType, size_t>> typeTable = {
@@ -734,15 +734,15 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
                 desc.fields.push_back(FieldDesc{fieldName, offset, tit->second.second, tit->second.first, ""});
                 offset += tit->second.second;
             } else {
-                auto sit = state.structDescs.find(typeSym);
-                if (sit != state.structDescs.end()) {
+                auto sit = state.structDescs().find(typeSym);
+                if (sit != state.structDescs().end()) {
                     desc.fields.push_back(FieldDesc{fieldName, offset, sit->second.totalSize, CType::Struct, typeSym});
                     offset += sit->second.totalSize;
                 } else throw BBL::Error{"struct " + sname + ": unknown type " + typeSym};
             }
         }
         desc.totalSize = offset;
-        state.structDescs[sname] = desc;
+        state.structDescs()[sname] = desc;
         cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
         return dest;
     }
@@ -784,8 +784,8 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     // Struct constructor
-    auto it = state.structDescs.find(op);
-    if (it != state.structDescs.end()) {
+    auto it = state.structDescs().find(op);
+    if (it != state.structDescs().end()) {
         uint8_t savedNext = cs.nextReg;
         uint8_t base = cs.allocReg(); // reserve base register
         uint8_t nameIdx = addStrConst(state, cs, op);
