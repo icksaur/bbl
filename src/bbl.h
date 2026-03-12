@@ -481,6 +481,12 @@ std::string typeName(BBL::Type t);
 
 // ---------- BblState ----------
 
+struct TraceFrame {
+    const char* name;
+    const char* file;
+    int line;
+};
+
 struct Frame {
     std::string file;
     int line = 0;
@@ -615,6 +621,9 @@ struct BblState {
 
     // Backtrace
     std::vector<Frame> callStack;
+    static constexpr int MAX_TRACE_DEPTH = 64;
+    TraceFrame traceStack[MAX_TRACE_DEPTH];
+    int traceTop = 0;
     size_t maxSteps = 0;  // 0 = unlimited
     size_t stepCount = 0;
     BblFn* currentFn = nullptr;

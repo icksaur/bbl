@@ -112,6 +112,14 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
         }
     } else if (callee.type() == BBL::Type::Fn && callee.isClosure()) {
         BblClosure* closure = callee.closureVal();
+        int savedTrace = state->traceTop;
+        if (state->traceTop < BblState::MAX_TRACE_DEPTH) {
+            state->traceStack[state->traceTop++] = {
+                closure->name.empty() ? "<anonymous>" : closure->name.c_str(),
+                state->currentFile.c_str(),
+                state->runtimeLine
+            };
+        }
 
         if (!closure->jitCache) {
             BblClosure* proto = closure->jitProto ? closure->jitProto : closure;
@@ -127,6 +135,7 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
         JitFn fn = reinterpret_cast<JitFn>(closure->jitCache->buf);
         regs[base] = fn(&regs[base], state, &closure->chunk);
         if (g_jitError) return;
+        state->traceTop = savedTrace;
     } else if (callee.type() == BBL::Type::Fn) {
         JIT_ERROR(state, "raw BblFn calls not supported in JIT mode");
     } else {
@@ -668,6 +677,7 @@ void jitStoreError(BblValue* regs, BblState* state, uint8_t destReg, uint8_t unu
     regs[destReg] = BblValue::makeString(state->intern(g_jitErrorMsg));
     g_jitError = false;
     g_jitErrorMsg.clear();
+    state->traceTop = 0;
 }
 
 void jitWithCleanup(BblValue* regs, BblState* state, uint8_t varReg, uint8_t unused) {

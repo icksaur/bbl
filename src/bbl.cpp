@@ -1957,10 +1957,18 @@ void BblState::printBacktrace(const std::string& what) {
         fprintf(stderr, "line %d: %s\n", runtimeLine, what.c_str());
     else
         fprintf(stderr, "error: %s\n", what.c_str());
-    for (int i = static_cast<int>(callStack.size()) - 1; i >= 0; i--) {
-        auto& f = callStack[i];
-        fprintf(stderr, "  at %s  %s:%d\n", f.expr.c_str(), f.file.c_str(), f.line);
+    int depth = std::min(traceTop, MAX_TRACE_DEPTH);
+    int shown = 0;
+    for (int i = depth - 1; i >= 0 && shown < 20; i--, shown++) {
+        auto& f = traceStack[i];
+        if (f.file && f.file[0])
+            fprintf(stderr, "  in %-20s %s:%d\n", f.name, f.file, f.line);
+        else
+            fprintf(stderr, "  in %s\n", f.name);
     }
+    if (depth > 20)
+        fprintf(stderr, "  ... %d more frames\n", depth - 20);
+    traceTop = 0;
 }
 
 // ---------- addPrint / addStdLib ----------
