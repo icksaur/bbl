@@ -2897,6 +2897,20 @@ void BBL::addNet(BblState& bbl) {
     sb.method("read", socketRead)
       .method("read-line", socketReadLine)
       .method("read-bytes", socketReadBytes)
+      .method("read-string", [](BblState* bbl) -> int {
+          auto* s = static_cast<BblSocket*>(bbl->callArgs[0].userdataVal()->data);
+          checkSocketOpen(s);
+          size_t want = static_cast<size_t>(bbl->getIntArg(1));
+          std::string data(want, '\0');
+          size_t got = 0;
+          while (got < want) {
+              auto n = recv(s->fd, data.data() + got, static_cast<int>(want - got), 0);
+              if (n <= 0) throw BBL::Error{"socket read-string: connection closed"};
+              got += static_cast<size_t>(n);
+          }
+          bbl->pushString(data.c_str());
+          return 1;
+      })
       .method("write", socketWrite)
       .method("write-bytes", socketWriteBytes)
       .method("close", socketCloseMethod)
@@ -3577,16 +3591,17 @@ void BBL::addStdLib(BblState& bbl) {
             (= blank (conn:read-line))
             (if (header:starts-with "Content-Length:")
                 (do
-                    (= len (int (str:trim (header:slice 15))))
-                    (= body (conn:read-bytes len))
-                    (= req (json:decode body))
+                    (= numpart (header:slice 15))
+                    (= len (int (numpart:trim)))
+                    (= body (conn:read-string len))
+                    (= req (json-parse body))
                     (if (== req.method "eval")
                         (do
                             (= file (if req.params.file req.params.file ""))
                             (post (table "id" req.id "code" req.params.code "file" file))
                             (= resp (recv))
-                            (= json-resp (json:encode (table "jsonrpc" "2.0" "id" resp.id "result" resp)))
-                            (= out (str "Content-Length: " (json-resp:length) "\r\n\r\n" json-resp))
+                            (= json-resp (json-encode (table "jsonrpc" "2.0" "id" resp.id "result" resp)))
+                            (= out (+ "Content-Length: " (str (json-resp:length)) "\r\n\r\n" json-resp))
                             (conn:write out)))))
             (conn:close))
     )_";
