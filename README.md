@@ -69,6 +69,8 @@ makepkg -si
 ## full documentation
 
 - [bbl language](bbl.md)
+- [standard library](stdlib.md)
+- [concurrency](concurrency.md)
 - [C++ API](api.md)
 - [implementation notes](implementation.md)
 

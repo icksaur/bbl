@@ -35,7 +35,7 @@ Copied on assignment.  No heap allocation, no GC involvement.
 
 ### GC-Managed Types
 
-Shared on assignment.  Managed by mark-and-sweep garbage collector.
+Shared on assignment.  Managed by generational garbage collector.
 
 | Type       | Literal / Construction                       | Notes                                       |
 |------------|----------------------------------------------|---------------------------------------------|
@@ -971,6 +971,7 @@ TCP and UDP sockets with RAII cleanup via `with`.
 | `(sock:read)` | Read until EOF (max 16MB) |
 | `(sock:read-line)` | Read one line (max 64KB) |
 | `(sock:read-bytes n)` | Read exactly n bytes as binary |
+| `(sock:read-string n)` | Read exactly n bytes as string |
 | `(sock:write str)` | Write string, return bytes sent |
 | `(sock:write-bytes bin)` | Write binary data |
 | `(sock:close)` | Close the socket |
@@ -978,6 +979,23 @@ TCP and UDP sockets with RAII cleanup via `with`.
 | `(sock:bind addr port)` | Bind UDP socket |
 | `(sock:send-to addr port data)` | Send UDP datagram |
 | `(sock:recv-from max)` | Receive UDP, returns `{data, addr, port}` |
+
+### Random
+
+```bbl
+(random)                // float in [0, 1)
+(random-int 1 6)        // int in [1, 6]
+(random-seed 42)        // set seed for reproducibility
+```
+
+### Concurrency
+
+Channels, select, lock-free ring buffers, atomic double-buffers, and nREPL
+are documented in [concurrency.md](concurrency.md).
+
+### Full Stdlib Reference
+
+All functions, methods, and types are documented in [stdlib.md](stdlib.md).
 
 ---
 
