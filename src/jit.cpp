@@ -1642,6 +1642,8 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     memset(knownTypes, 0, sizeof(knownTypes));
     std::vector<size_t> selfCallPatches;
     std::vector<size_t> errorExitPatches;
+    std::vector<size_t> debugStubPatches;
+    bool hasDebugChecks = false;
 
     struct TryInfo { int catchTarget; std::vector<size_t> outerPatches; uint8_t destReg; };
     std::vector<TryInfo> tryStack;
@@ -1760,17 +1762,17 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         if (lineNum != lastEmittedLine && !currentLoop) {
             emitLineStore(jit.buf, jit.size, runtimeLineOff, lineNum);
             lastEmittedLine = lineNum;
-            // Debug check: test debugEnabled flag, call jitDebugPause if set
+            hasDebugChecks = true;
             uint8_t testDbg[] = { 0x41, 0xf6, 0x84, 0x24 };
             emit(jit.buf, jit.size, testDbg, 4);
             emit32(jit.buf, jit.size, static_cast<uint32_t>(debugEnabledOff));
             emit8(jit.buf, jit.size, 0x01);
-            uint8_t jzDbg[] = { 0x74 };
-            emit(jit.buf, jit.size, jzDbg, 1);
-            size_t dbgSkipPatch = jit.size;
-            emit8(jit.buf, jit.size, 0);
-            emitCallHelper2(jit.buf, jit.size, (void*)jitDebugPause, 0, 0, &errorExitPatches);
-            jit.buf[dbgSkipPatch] = static_cast<uint8_t>(jit.size - dbgSkipPatch - 1);
+            uint8_t jzSkip[] = { 0x74, 0x05 };
+            emit(jit.buf, jit.size, jzSkip, 2);
+            uint8_t callRel32[] = { 0xe8 };
+            emit(jit.buf, jit.size, callRel32, 1);
+            debugStubPatches.push_back(jit.size);
+            emit32(jit.buf, jit.size, 0);
         }
 
         if (op != OP_GETGLOBAL && op != OP_CLOSURE && op != OP_CALL) {
@@ -3150,6 +3152,15 @@ done_compile:
             patchRel32(jit.buf, jmpPos, nativeOffsets[tc.catchInst]);
         }
         patchRel32(jit.buf, tc.patchOffset, catchStub);
+    }
+
+    // Shared debug stub (out-of-line, reached via call from debug checks)
+    if (!debugStubPatches.empty()) {
+        size_t debugStub = jit.size;
+        emitCallHelper2(jit.buf, jit.size, (void*)jitDebugPause, 0, 0, &errorExitPatches);
+        emit8(jit.buf, jit.size, 0xc3); // ret to caller
+        for (size_t p : debugStubPatches)
+            patchRel32(jit.buf, p, debugStub);
     }
 
     // Error exit: load NaN-boxed null into rax, marker-aware epilogue
