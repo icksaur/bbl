@@ -10,7 +10,7 @@ add_library(lz4 STATIC vendor/lz4/lz4.c vendor/lz4/lz4frame.c vendor/lz4/lz4hc.c
 set_target_properties(lz4 PROPERTIES C_STANDARD 99)
 target_include_directories(lz4 PUBLIC vendor/lz4)
 
-add_library(bbl_lib STATIC src/bbl.cpp src/compiler.cpp src/vm.cpp src/disasm.cpp src/jit.cpp)
+add_library(bbl_lib STATIC src/bbl.cpp src/compiler.cpp src/disasm.cpp src/jit.cpp)
 target_include_directories(bbl_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(bbl_lib PUBLIC Threads::Threads lz4 yyjson)
 set_source_files_properties(src/jit.cpp PROPERTIES COMPILE_OPTIONS "-fomit-frame-pointer")

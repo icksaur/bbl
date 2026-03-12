@@ -151,7 +151,10 @@ struct Chunk {
         lines.push_back(line);
     }
 
-    size_t addConstant(const BblValue& val);
+    size_t addConstant(const BblValue& val) {
+        constants.push_back(val);
+        return constants.size() - 1;
+    }
 
     void patchsBx(size_t offset, int sBx) {
         uint8_t op = decodeOP(code[offset]);
