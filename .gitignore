@@ -9,6 +9,8 @@ doc/
 
 *.pkg.tar.zst
 luac.out
+test_cmp.s
+.bbl-nrepl-port
 
 # Session/planning files
 plan.md
