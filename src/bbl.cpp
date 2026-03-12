@@ -1272,48 +1272,11 @@ std::filesystem::path BblState::resolveSandboxPath(const std::string& path, cons
 }
 
 void BblState::execfile(const std::string& path) {
-    if (++execDepth > MAX_EXEC_DEPTH)
+    if (++execDepth > MAX_EXEC_DEPTH) {
+        execDepth--;
         throw BBL::Error{"execfile: recursion depth exceeded (max " + std::to_string(MAX_EXEC_DEPTH) + ")"};
-    namespace fs = std::filesystem;
-    fs::path resolved = resolveSandboxPath(path, "exec-file");
-    if (!fs::exists(resolved)) {
-        // Try BBL_PATH directories
-        const char* bblPath = std::getenv("BBL_PATH");
-        if (bblPath) {
-            std::string pathStr(bblPath);
-            size_t pos = 0;
-            while (pos < pathStr.size()) {
-                size_t sep = pathStr.find(':', pos);
-                if (sep == std::string::npos) sep = pathStr.size();
-                std::string dir = pathStr.substr(pos, sep - pos);
-                if (!dir.empty()) {
-                    fs::path candidate = fs::path(dir) / path;
-                    if (fs::exists(candidate)) {
-                        resolved = candidate;
-                        break;
-                    }
-                }
-                pos = sep + 1;
-            }
-        }
     }
-    std::ifstream file(resolved, std::ios::binary);
-    if (!file.is_open()) {
-        throw BBL::Error{"file read failed: " + resolved.string()};
-    }
-    std::ostringstream ss;
-    ss << file.rdbuf();
-    std::string savedFile = currentFile;
-    std::string savedDir = scriptDir;
-    currentFile = resolved.string();
-    scriptDir = resolved.parent_path().string();
-    exec(ss.str());
-    currentFile = savedFile;
-    scriptDir = savedDir;
-    execDepth--;
-}
-
-BblValue BblState::execfileExpr(const std::string& path) {
+    struct DepthGuard { size_t& d; ~DepthGuard() { d--; } } guard{execDepth};
     namespace fs = std::filesystem;
     fs::path resolved = resolveSandboxPath(path, "exec-file");
     if (!fs::exists(resolved)) {
@@ -1333,8 +1296,44 @@ BblValue BblState::execfileExpr(const std::string& path) {
             }
         }
     }
-    if (++execDepth > MAX_EXEC_DEPTH)
+    std::ifstream file(resolved, std::ios::binary);
+    if (!file.is_open()) throw BBL::Error{"file read failed: " + resolved.string()};
+    std::ostringstream ss;
+    ss << file.rdbuf();
+    std::string savedFile = currentFile;
+    std::string savedDir = scriptDir;
+    currentFile = resolved.string();
+    scriptDir = resolved.parent_path().string();
+    exec(ss.str());
+    currentFile = savedFile;
+    scriptDir = savedDir;
+}
+
+BblValue BblState::execfileExpr(const std::string& path) {
+    if (++execDepth > MAX_EXEC_DEPTH) {
+        execDepth--;
         throw BBL::Error{"execfile: recursion depth exceeded"};
+    }
+    struct DepthGuard { size_t& d; ~DepthGuard() { d--; } } guard{execDepth};
+    namespace fs = std::filesystem;
+    fs::path resolved = resolveSandboxPath(path, "exec-file");
+    if (!fs::exists(resolved)) {
+        const char* bblPath = std::getenv("BBL_PATH");
+        if (bblPath) {
+            std::string pathStr(bblPath);
+            size_t pos = 0;
+            while (pos < pathStr.size()) {
+                size_t sep = pathStr.find(':', pos);
+                if (sep == std::string::npos) sep = pathStr.size();
+                std::string dir = pathStr.substr(pos, sep - pos);
+                if (!dir.empty()) {
+                    fs::path candidate = fs::path(dir) / path;
+                    if (fs::exists(candidate)) { resolved = candidate; break; }
+                }
+                pos = sep + 1;
+            }
+        }
+    }
     std::ifstream file(resolved, std::ios::binary);
     if (!file.is_open()) throw BBL::Error{"file read failed: " + resolved.string()};
     std::ostringstream ss;
@@ -1346,7 +1345,6 @@ BblValue BblState::execfileExpr(const std::string& path) {
     BblValue result = execExpr(ss.str());
     currentFile = savedFile;
     scriptDir = savedDir;
-    execDepth--;
     return result;
 }
 

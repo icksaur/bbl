@@ -136,6 +136,8 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
         }
         case OP_MOD: {
             BblValue& rb = R(B); BblValue& rc = R(C);
+            if (rb.type() != BBL::Type::Int || rc.type() != BBL::Type::Int)
+                throw BBL::Error{"modulo requires integer operands"};
             if (rc.intVal() == 0) throw BBL::Error{"modulo by zero"};
             R(A) = BblValue::makeInt(rb.intVal() % rc.intVal());
             break;
@@ -657,8 +659,6 @@ InterpretResult vmExecute(BblState& state, Chunk& chunk) {
 
         case OP_EXEC: {
             if (R(B).type() != BBL::Type::String) throw BBL::Error{"exec: argument must be string"};
-            BblLexer lexer(R(B).stringVal()->data.c_str());
-            auto nodes = parse(lexer);
             R(A) = state.execExpr(R(B).stringVal()->data);
             break;
         }

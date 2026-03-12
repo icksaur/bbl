@@ -240,6 +240,7 @@ struct BblValue {
 
     static constexpr uint64_t QNAN        = 0xFFF8000000000000ULL;
     static constexpr uint64_t TAG_NULL     = QNAN | (0ULL << 48);
+    static_assert(TAG_NULL != 0, "BblValue zero bits must not be a valid null (table sentinel)");
     static constexpr uint64_t TAG_BOOL     = QNAN | (1ULL << 48);
     static constexpr uint64_t TAG_INT      = QNAN | (2ULL << 48);
     static constexpr uint64_t TAG_CLOSURE  = QNAN | (3ULL << 48);
@@ -563,14 +564,7 @@ struct SlabAllocator {
         freeList.push_back(p);
     }
 
-    ~SlabAllocator() {
-        for (auto& slab : slabs) {
-            for (size_t i = 0; i < slab->used; i++) {
-                auto* p = reinterpret_cast<T*>(slab->storage + sizeof(T) * i);
-                (void)p;
-            }
-        }
-    }
+    ~SlabAllocator() = default;
 };
 
 struct BblState {
