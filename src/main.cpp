@@ -1,4 +1,5 @@
 #include "bbl.h"
+#include "dap.h"
 #include "lsp.h"
 #include <cstdio>
 #include <cstring>
@@ -17,6 +18,7 @@ static void printUsage() {
     fputs("usage: bbl [options] [script.bbl] [args...]\n"
           "  -e <code>     evaluate code string (may be repeated)\n"
           "  --compress    compress binary literals in stdin to stdout\n"
+          "  --dap <port>  run as DAP debug server on given port\n"
           "  -v            print version\n"
           "  -h            print this help\n", stdout);
 }
@@ -152,6 +154,46 @@ int main(int argc, char* argv[]) {
         }
         if (strcmp(argv[i], "--lsp") == 0) {
             lspMain();
+            return 0;
+        }
+        if (strcmp(argv[i], "--dap") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "bbl: --dap requires a port number\n");
+                return 2;
+            }
+            int dapPort = std::atoi(argv[++i]);
+            if (i + 1 >= argc) {
+                fprintf(stderr, "bbl: --dap requires a script file\n");
+                return 2;
+            }
+            const char* script = argv[++i];
+            try {
+                namespace fs = std::filesystem;
+                fs::path scriptPath = fs::absolute(script);
+                bbl.currentFile = scriptPath.string();
+                bbl.scriptDir = scriptPath.parent_path().string();
+                bbl.allowOpenFilesystem = true;
+                auto* dap = new DapServer();
+                dap->state = &bbl;
+                bbl.dapServer = dap;
+                dap->start(dapPort);
+                fprintf(stderr, "DAP server listening on port %d, waiting for debugger...\n", dapPort);
+                std::ifstream file(scriptPath, std::ios::binary);
+                if (!file.is_open()) {
+                    fprintf(stderr, "bbl: cannot open %s\n", script);
+                    return 1;
+                }
+                std::ostringstream ss;
+                ss << file.rdbuf();
+                bbl.exec(ss.str());
+                if (bbl.debug) {
+                    bbl.debug->scriptDone.store(true, std::memory_order_release);
+                    bbl.debug->cv.notify_all();
+                }
+            } catch (const BBL::Error& e) {
+                bbl.printBacktrace(e.what);
+                return 1;
+            }
             return 0;
         }
         if (strcmp(argv[i], "--compress") == 0) {

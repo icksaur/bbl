@@ -19,6 +19,7 @@
 #include "compiler.h"
 #include "vm.h"
 #include "jit.h"
+#include "dap.h"
 
 static thread_local BblState* g_currentBblState = nullptr;
 
@@ -661,6 +662,8 @@ BblState::BblState() {
 }
 
 BblState::~BblState() {
+    if (dapServer) { dapServer->stop(); delete dapServer; }
+    delete debug;
     auto freeList = [this](GcObj* obj) {
         while (obj) {
             GcObj* next = obj->gcNext;
@@ -3763,6 +3766,14 @@ void BBL::addStdLib(BblState& bbl) {
         if (!b->debug || !b->debug->paused.load()) { b->pushNull(); return 1; }
         b->pushString(b->debug->pausedFile ? b->debug->pausedFile : "");
         return 1;
+    });
+
+    bbl.defn("debug-server", [](BblState* b) -> int {
+        int64_t port = b->getIntArg(0);
+        if (!b->dapServer) b->dapServer = new DapServer();
+        b->dapServer->state = b;
+        b->dapServer->start(static_cast<int>(port));
+        return 0;
     });
 }
 

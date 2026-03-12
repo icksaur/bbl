@@ -495,6 +495,8 @@ struct Frame {
     std::string expr;
 };
 
+struct Chunk;
+
 struct DebugState {
     std::atomic<bool> paused{false};
     std::atomic<int> stepMode{0};
@@ -506,6 +508,14 @@ struct DebugState {
     int pausedLine = 0;
     const char* pausedFile = nullptr;
     int pausedTraceTop = 0;
+    Chunk* pausedChunk = nullptr;
+
+    std::string evalRequest;
+    std::string evalResult;
+    bool evalError = false;
+    std::atomic<bool> hasEvalRequest{false};
+    std::atomic<bool> hasEvalResult{false};
+    std::atomic<bool> scriptDone{false};
 };
 
 struct BblTerminated {};
@@ -639,6 +649,7 @@ struct BblState {
     int runtimeLine = 0;
     std::atomic<bool> debugEnabled{false};
     DebugState* debug = nullptr;
+    struct DapServer* dapServer = nullptr;
     std::mt19937_64 rng{std::random_device{}()};
     std::string scriptDir;
     bool allowOpenFilesystem = false;

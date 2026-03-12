@@ -1,10 +1,15 @@
 #include "bbl.h"
+#include "dap.h"
 #include <iostream>
 #include <cstring>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 
 int passed = 0, failed = 0;
 
@@ -5550,6 +5555,120 @@ TEST(test_debug_disabled_no_overhead) {
     ASSERT_EQ(bbl.execExpr("sum").intVal(), (int64_t)4999950000LL);
 }
 
+TEST(test_dap_server_start_stop) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(debug-server 0)");
+    ASSERT_TRUE(bbl.dapServer != nullptr);
+    ASSERT_TRUE(bbl.dapServer->running.load());
+    bbl.dapServer->stop();
+    ASSERT_TRUE(!bbl.dapServer->running.load());
+}
+
+TEST(test_dap_breakpoint_variables) {
+    BblState bbl; BBL::addStdLib(bbl);
+
+    if (!bbl.debug) bbl.debug = new DebugState();
+    bbl.debugEnabled.store(true);
+    bbl.currentFile = "test.bbl";
+    bbl.debug->breakpoints["test.bbl"].insert(3);
+
+    auto* dap = new DapServer();
+    dap->state = &bbl;
+    bbl.dapServer = dap;
+    dap->start(0);
+
+    int port = 0;
+    {
+        sockaddr_in addr{};
+        socklen_t len = sizeof(addr);
+        getsockname(dap->serverFd, reinterpret_cast<sockaddr*>(&addr), &len);
+        port = ntohs(addr.sin_port);
+    }
+    ASSERT_TRUE(port > 0);
+
+    std::thread runner([&bbl]() {
+        try {
+            bbl.exec("(= x 10)\n(= y 20)\n(= z (+ x y))");
+        } catch (...) {}
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in saddr{};
+    saddr.sin_family = AF_INET;
+    saddr.sin_port = htons(static_cast<uint16_t>(port));
+    inet_pton(AF_INET, "127.0.0.1", &saddr.sin_addr);
+    int rc = connect(sock, reinterpret_cast<sockaddr*>(&saddr), sizeof(saddr));
+    ASSERT_EQ(rc, 0);
+
+    auto sendDap = [&](const std::string& json) {
+        std::string msg = "Content-Length: " + std::to_string(json.size()) + "\r\n\r\n" + json;
+        write(sock, msg.c_str(), msg.size());
+    };
+
+    auto recvDap = [&]() -> std::string {
+        std::string header;
+        while (true) {
+            char c;
+            if (read(sock, &c, 1) != 1) return {};
+            header += c;
+            if (header.size() >= 4 && header.substr(header.size()-4) == "\r\n\r\n") break;
+        }
+        auto pos = header.find("Content-Length: ");
+        int len = std::atoi(header.c_str() + pos + 16);
+        std::string body(len, '\0');
+        size_t got = 0;
+        while (got < (size_t)len) {
+            ssize_t r = read(sock, body.data() + got, len - got);
+            if (r <= 0) break;
+            got += r;
+        }
+        return body;
+    };
+
+    sendDap(R"({"seq":1,"type":"request","command":"initialize","arguments":{}})");
+    auto initResp = recvDap();
+    ASSERT_TRUE(initResp.find("\"success\":true") != std::string::npos);
+    recvDap();
+
+    sendDap(R"({"seq":2,"type":"request","command":"attach","arguments":{}})");
+    recvDap();
+
+    sendDap(R"({"seq":3,"type":"request","command":"configurationDone","arguments":{}})");
+    auto cfgResp = recvDap();
+    ASSERT_TRUE(cfgResp.find("\"success\":true") != std::string::npos);
+
+    auto stoppedEvt = recvDap();
+    ASSERT_TRUE(stoppedEvt.find("\"event\":\"stopped\"") != std::string::npos);
+
+    sendDap(R"({"seq":4,"type":"request","command":"threads","arguments":{}})");
+    auto threadsResp = recvDap();
+    ASSERT_TRUE(threadsResp.find("\"name\":\"main\"") != std::string::npos);
+
+    sendDap(R"({"seq":5,"type":"request","command":"stackTrace","arguments":{"threadId":1}})");
+    auto stackResp = recvDap();
+    ASSERT_TRUE(stackResp.find("\"stackFrames\"") != std::string::npos);
+
+    sendDap(R"({"seq":6,"type":"request","command":"scopes","arguments":{"frameId":0}})");
+    auto scopesResp = recvDap();
+    ASSERT_TRUE(scopesResp.find("\"Locals\"") != std::string::npos);
+
+    sendDap(R"({"seq":7,"type":"request","command":"variables","arguments":{"variablesReference":1}})");
+    auto varsResp = recvDap();
+    ASSERT_TRUE(varsResp.find("\"x\"") != std::string::npos);
+    ASSERT_TRUE(varsResp.find("\"y\"") != std::string::npos);
+
+    sendDap(R"_({"seq":8,"type":"request","command":"evaluate","arguments":{"expression":"(+ 1 2)"}})_");    auto evalResp = recvDap();
+    ASSERT_TRUE(evalResp.find("\"result\":\"3\"") != std::string::npos);
+
+    sendDap(R"({"seq":9,"type":"request","command":"disconnect","arguments":{}})");
+    recvDap();
+
+    close(sock);
+    runner.join();
+}
+
 // ========== Main ==========
 
 int main() {
@@ -6339,6 +6458,9 @@ int main() {
     RUN(test_debug_breakpoint_pauses);
     RUN(test_debug_step);
     RUN(test_debug_disabled_no_overhead);
+    std::cout << "--- DAP Server ---" << std::endl;
+    RUN(test_dap_server_start_stop);
+    RUN(test_dap_breakpoint_variables);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

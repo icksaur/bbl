@@ -1,6 +1,7 @@
 #include "jit.h"
 #include "bbl.h"
 #include "vm.h"
+#include <cinttypes>
 #include <cmath>
 #include <cstring>
 #include <set>
@@ -45,7 +46,7 @@ extern "C" {
     void jitWithCleanup(BblValue* regs, BblState* state, uint8_t varReg, uint8_t unused);
     void jitInt(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
     void jitStepLimitExceeded(BblValue* regs, BblState* state, uint32_t unused1, uint32_t unused2);
-    void jitDebugPause(BblValue* regs, BblState* state, uint32_t unused1, uint32_t unused2);
+    void jitDebugPause(BblValue* regs, BblState* state, Chunk* chunk, uint32_t unused);
     void jitEnvGet(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg);
     void jitEnvSet(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg);
     int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loopPc);
@@ -712,7 +713,7 @@ void jitStepLimitExceeded(BblValue*, BblState* state, uint32_t, uint32_t) {
     JIT_ERROR(state, "step limit exceeded: " + std::to_string(state->maxSteps) + " steps");
 }
 
-void jitDebugPause(BblValue* regs, BblState* state, uint32_t, uint32_t) {
+void jitDebugPause(BblValue* regs, BblState* state, Chunk* chunk, uint32_t) {
     auto* dbg = state->debug;
     if (!dbg) return;
     int line = state->runtimeLine;
@@ -734,12 +735,51 @@ void jitDebugPause(BblValue* regs, BblState* state, uint32_t, uint32_t) {
     dbg->pausedLine = line;
     dbg->pausedFile = state->currentFile.c_str();
     dbg->pausedTraceTop = state->traceTop;
+    dbg->pausedChunk = chunk;
     dbg->stepMode.store(0, std::memory_order_relaxed);
     dbg->paused.store(true, std::memory_order_release);
     dbg->cv.notify_all();
 
     std::unique_lock lock(dbg->mtx);
-    dbg->cv.wait(lock, [&] { return !dbg->paused.load(std::memory_order_acquire); });
+    while (true) {
+        dbg->cv.wait(lock, [&] {
+            return !dbg->paused.load(std::memory_order_acquire) ||
+                   dbg->hasEvalRequest.load(std::memory_order_acquire);
+        });
+        if (dbg->hasEvalRequest.load(std::memory_order_acquire)) {
+            std::string code = dbg->evalRequest;
+            lock.unlock();
+            auto savedStack = std::move(state->vm->stack);
+            int savedTraceTop = state->traceTop;
+            try {
+                BblValue result = state->execExpr(code);
+                char buf[64];
+                switch (result.type()) {
+                    case BBL::Type::String: dbg->evalResult = result.stringVal()->data; break;
+                    case BBL::Type::Int: snprintf(buf, sizeof(buf), "%" PRId64, result.intVal()); dbg->evalResult = buf; break;
+                    case BBL::Type::Float: snprintf(buf, sizeof(buf), "%g", result.floatVal()); dbg->evalResult = buf; break;
+                    case BBL::Type::Bool: dbg->evalResult = result.boolVal() ? "true" : "false"; break;
+                    case BBL::Type::Null: dbg->evalResult = "null"; break;
+                    default: dbg->evalResult = "<object>"; break;
+                }
+                dbg->evalError = false;
+            } catch (const BBL::Error& e) {
+                dbg->evalResult = e.what;
+                dbg->evalError = true;
+            } catch (...) {
+                dbg->evalResult = "evaluation failed";
+                dbg->evalError = true;
+            }
+            state->vm->stack = std::move(savedStack);
+            state->traceTop = savedTraceTop;
+            lock.lock();
+            dbg->hasEvalRequest.store(false, std::memory_order_release);
+            dbg->hasEvalResult.store(true, std::memory_order_release);
+            dbg->cv.notify_all();
+            continue;
+        }
+        break;
+    }
 }
 
 void jitEnvGet(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg) {
@@ -3157,7 +3197,13 @@ done_compile:
     // Shared debug stub (out-of-line, reached via call from debug checks)
     if (!debugStubPatches.empty()) {
         size_t debugStub = jit.size;
-        emitCallHelper2(jit.buf, jit.size, (void*)jitDebugPause, 0, 0, &errorExitPatches);
+        // sub rsp, 8 to realign after the incoming `call debugStub`
+        uint8_t subRsp[] = { 0x48, 0x83, 0xec, 0x08 };
+        emit(jit.buf, jit.size, subRsp, 4);
+        emitCallHelper3(jit.buf, jit.size, (void*)jitDebugPause, 0, 0, 0, &errorExitPatches);
+        // add rsp, 8
+        uint8_t addRsp[] = { 0x48, 0x83, 0xc4, 0x08 };
+        emit(jit.buf, jit.size, addRsp, 4);
         emit8(jit.buf, jit.size, 0xc3); // ret to caller
         for (size_t p : debugStubPatches)
             patchRel32(jit.buf, p, debugStub);
