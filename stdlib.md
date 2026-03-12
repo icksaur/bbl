@@ -68,7 +68,8 @@ Constants: `pi` (3.14159...), `e` (2.71828...)
 (s:trim-right)                 // strip trailing whitespace
 (s:replace "world" "bbl")      // "hello bbl"
 (s:split " ")                  // table {0:"hello", 1:"world"}
-(s:join ", " items)            // join table values with separator
+(s:join items)                 // join table values with s as separator
+// e.g. (",":join (table 0 "a" 1 "b"))  → "a,b"
 (s:pad-left 15)                // pad with spaces to width 15
 (s:pad-right 15 ".")           // pad with dots
 ```
@@ -105,8 +106,8 @@ Constants: `pi` (3.14159...), `e` (2.71828...)
 (v:reserve 1000)              // pre-allocate capacity
 ```
 
-Element types: `int`, `float32`, `bool`, `uint8`, `int8`, `int16`, `uint16`,
-`int32`, `uint32`, and any registered struct type.
+Element types: `int`, `float32`, `float64`, `bool`, `uint8`, `int8`, `int16`,
+`int32`, and any registered struct type.
 
 ---
 
