@@ -3683,6 +3683,87 @@ void BBL::addStdLib(BblState& bbl) {
         b->pushNull();
         return 1;
     });
+
+    bbl.defn("debug-enable", [](BblState* b) -> int {
+        if (!b->debug) b->debug = new DebugState();
+        b->debugEnabled.store(true, std::memory_order_release);
+        return 0;
+    });
+
+    bbl.defn("debug-disable", [](BblState* b) -> int {
+        b->debugEnabled.store(false, std::memory_order_release);
+        return 0;
+    });
+
+    bbl.defn("debug-set-breakpoint", [](BblState* b) -> int {
+        const char* file = b->getStringArg(0);
+        int64_t line = b->getIntArg(1);
+        if (!b->debug) b->debug = new DebugState();
+        std::lock_guard lock(b->debug->mtx);
+        b->debug->breakpoints[file].insert(static_cast<int>(line));
+        return 0;
+    });
+
+    bbl.defn("debug-clear-breakpoint", [](BblState* b) -> int {
+        const char* file = b->getStringArg(0);
+        int64_t line = b->getIntArg(1);
+        if (!b->debug) return 0;
+        std::lock_guard lock(b->debug->mtx);
+        auto it = b->debug->breakpoints.find(file);
+        if (it != b->debug->breakpoints.end()) it->second.erase(static_cast<int>(line));
+        return 0;
+    });
+
+    bbl.defn("debug-continue", [](BblState* b) -> int {
+        if (!b->debug) return 0;
+        b->debug->stepMode.store(0);
+        b->debug->paused.store(false, std::memory_order_release);
+        b->debug->cv.notify_all();
+        return 0;
+    });
+
+    bbl.defn("debug-step", [](BblState* b) -> int {
+        if (!b->debug) return 0;
+        b->debug->stepMode.store(1);
+        b->debug->paused.store(false, std::memory_order_release);
+        b->debug->cv.notify_all();
+        return 0;
+    });
+
+    bbl.defn("debug-step-over", [](BblState* b) -> int {
+        if (!b->debug) return 0;
+        b->debug->stepDepth = b->debug->pausedTraceTop;
+        b->debug->stepMode.store(2);
+        b->debug->paused.store(false, std::memory_order_release);
+        b->debug->cv.notify_all();
+        return 0;
+    });
+
+    bbl.defn("debug-step-out", [](BblState* b) -> int {
+        if (!b->debug) return 0;
+        b->debug->stepDepth = b->debug->pausedTraceTop;
+        b->debug->stepMode.store(3);
+        b->debug->paused.store(false, std::memory_order_release);
+        b->debug->cv.notify_all();
+        return 0;
+    });
+
+    bbl.defn("debug-is-paused", [](BblState* b) -> int {
+        b->pushBool(b->debug && b->debug->paused.load(std::memory_order_acquire));
+        return 1;
+    });
+
+    bbl.defn("debug-line", [](BblState* b) -> int {
+        if (!b->debug || !b->debug->paused.load()) { b->pushNull(); return 1; }
+        b->pushInt(b->debug->pausedLine);
+        return 1;
+    });
+
+    bbl.defn("debug-file", [](BblState* b) -> int {
+        if (!b->debug || !b->debug->paused.load()) { b->pushNull(); return 1; }
+        b->pushString(b->debug->pausedFile ? b->debug->pausedFile : "");
+        return 1;
+    });
 }
 
 // ---------- Child States ----------

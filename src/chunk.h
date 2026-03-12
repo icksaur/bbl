@@ -135,6 +135,7 @@ struct Chunk {
         std::vector<SunkAllocation>* sunkAllocs = nullptr;
     };
     std::unordered_map<uint32_t, LoopTrace> loopTraces;
+    std::unordered_map<uint8_t, std::string> debugRegNames;
 
     void emitABC(uint8_t op, uint8_t A, uint8_t B, uint8_t C, int line) {
         code.push_back(encodeABC(op, A, B, C));

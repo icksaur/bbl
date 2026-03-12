@@ -5484,6 +5484,72 @@ TEST(test_nrepl_exec_unknown_module) {
     ASSERT_THROW(bbl.exec(R"_((nrepl-exec "(+ 1 2)" "nonexistent.bbl"))_"));
 }
 
+// ========== Debug Tests ==========
+
+TEST(test_debug_breakpoint_pauses) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(debug-enable)");
+    bbl.exec(R"_((debug-set-breakpoint "" 3))_");
+
+    std::atomic<bool> started{false};
+    std::atomic<bool> finished{false};
+    std::thread runner([&] {
+        started.store(true);
+        bbl.exec(R"_(
+            (= x 1)
+            (= x 2)
+            (= x 3)
+        )_");
+        finished.store(true);
+    });
+
+    while (!started.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    ASSERT_TRUE(bbl.debug && bbl.debug->paused.load());
+    ASSERT_EQ(bbl.debug->pausedLine, 3);
+
+    bbl.exec("(debug-continue)");
+    runner.join();
+    ASSERT_TRUE(finished.load());
+}
+
+TEST(test_debug_step) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec("(debug-enable)");
+    bbl.exec(R"_((debug-set-breakpoint "" 2))_");
+
+    std::thread runner([&] {
+        bbl.exec("(= x 1)\n(= x 2)\n(= x 3)\n(= x 4)");
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_TRUE(bbl.debug && bbl.debug->paused.load());
+    ASSERT_EQ(bbl.debug->pausedLine, 2);
+
+    bbl.debug->stepMode.store(1);
+    bbl.debug->paused.store(false);
+    bbl.debug->cv.notify_all();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    ASSERT_TRUE(bbl.debug->paused.load());
+    ASSERT_EQ(bbl.debug->pausedLine, 3);
+
+    bbl.exec("(debug-continue)");
+    runner.join();
+}
+
+TEST(test_debug_disabled_no_overhead) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"_(
+        (= sum 0) (= i 0)
+        (loop (< i 100000)
+            (= sum (+ sum i))
+            (= i (+ i 1)))
+    )_");
+    ASSERT_EQ(bbl.execExpr("sum").intVal(), (int64_t)4999950000LL);
+}
+
 // ========== Main ==========
 
 int main() {
@@ -6268,6 +6334,11 @@ int main() {
     RUN(test_nrepl_exec_print_capture);
     RUN(test_nrepl_exec_error);
     RUN(test_nrepl_exec_unknown_module);
+
+    std::cout << "--- Debugger ---" << std::endl;
+    RUN(test_debug_breakpoint_pauses);
+    RUN(test_debug_step);
+    RUN(test_debug_disabled_no_overhead);
 
     std::cout << "\nPassed: " << passed << "  Failed: " << failed << std::endl;
     return failed > 0 ? 1 : 0;

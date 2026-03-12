@@ -18,6 +18,7 @@
 #include <ostream>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <functional>
 
@@ -494,6 +495,19 @@ struct Frame {
     std::string expr;
 };
 
+struct DebugState {
+    std::atomic<bool> paused{false};
+    std::atomic<int> stepMode{0};
+    int stepDepth = 0;
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::unordered_map<std::string, std::unordered_set<int>> breakpoints;
+    BblValue* pausedRegs = nullptr;
+    int pausedLine = 0;
+    const char* pausedFile = nullptr;
+    int pausedTraceTop = 0;
+};
+
 struct BblTerminated {};
 
 // ---------- Child-states messaging ----------
@@ -623,6 +637,8 @@ struct BblState {
     BblFn* currentFn = nullptr;
     std::string currentFile;
     int runtimeLine = 0;
+    std::atomic<bool> debugEnabled{false};
+    DebugState* debug = nullptr;
     std::mt19937_64 rng{std::random_device{}()};
     std::string scriptDir;
     bool allowOpenFilesystem = false;

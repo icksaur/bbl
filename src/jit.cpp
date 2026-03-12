@@ -45,6 +45,7 @@ extern "C" {
     void jitWithCleanup(BblValue* regs, BblState* state, uint8_t varReg, uint8_t unused);
     void jitInt(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg);
     void jitStepLimitExceeded(BblValue* regs, BblState* state, uint32_t unused1, uint32_t unused2);
+    void jitDebugPause(BblValue* regs, BblState* state, uint32_t unused1, uint32_t unused2);
     void jitEnvGet(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg);
     void jitEnvSet(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg);
     int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loopPc);
@@ -711,6 +712,36 @@ void jitStepLimitExceeded(BblValue*, BblState* state, uint32_t, uint32_t) {
     JIT_ERROR(state, "step limit exceeded: " + std::to_string(state->maxSteps) + " steps");
 }
 
+void jitDebugPause(BblValue* regs, BblState* state, uint32_t, uint32_t) {
+    auto* dbg = state->debug;
+    if (!dbg) return;
+    int line = state->runtimeLine;
+
+    bool shouldPause = false;
+    int mode = dbg->stepMode.load(std::memory_order_relaxed);
+    if (mode == 1) shouldPause = true;
+    else if (mode == 2 && state->traceTop <= dbg->stepDepth) shouldPause = true;
+    else if (mode == 3 && state->traceTop < dbg->stepDepth) shouldPause = true;
+    else {
+        std::lock_guard lock(dbg->mtx);
+        auto it = dbg->breakpoints.find(state->currentFile);
+        if (it != dbg->breakpoints.end() && it->second.count(line))
+            shouldPause = true;
+    }
+    if (!shouldPause) return;
+
+    dbg->pausedRegs = regs;
+    dbg->pausedLine = line;
+    dbg->pausedFile = state->currentFile.c_str();
+    dbg->pausedTraceTop = state->traceTop;
+    dbg->stepMode.store(0, std::memory_order_relaxed);
+    dbg->paused.store(true, std::memory_order_release);
+    dbg->cv.notify_all();
+
+    std::unique_lock lock(dbg->mtx);
+    dbg->cv.wait(lock, [&] { return !dbg->paused.load(std::memory_order_acquire); });
+}
+
 void jitEnvGet(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg) {
     BblTable* env = nullptr;
     if (regs[0].type() == BBL::Type::Fn && regs[0].isClosure())
@@ -757,6 +788,7 @@ int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loo
     auto& lt = chunk->loopTraces[loopPc];
     if (lt.blacklisted) return -1;
     if (state->maxSteps > 0) return -1;
+    if (state->debugEnabled.load(std::memory_order_relaxed)) return -1;
 
     if (!lt.compiled) {
         lt.hotCount++;
@@ -1618,6 +1650,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
 
     BblState dummy;
     size_t runtimeLineOff = reinterpret_cast<char*>(&dummy.runtimeLine) - reinterpret_cast<char*>(&dummy);
+    size_t debugEnabledOff = reinterpret_cast<char*>(&dummy.debugEnabled) - reinterpret_cast<char*>(&dummy);
     size_t stepCountOff = reinterpret_cast<char*>(&dummy.stepCount) - reinterpret_cast<char*>(&dummy);
     size_t maxStepsOff = reinterpret_cast<char*>(&dummy.maxSteps) - reinterpret_cast<char*>(&dummy);
     size_t vmOff = reinterpret_cast<char*>(&dummy.vm) - reinterpret_cast<char*>(&dummy);
@@ -1674,6 +1707,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
 
     // Pre-scan: identify eligible arithmetic loops for register allocation
     std::unordered_map<size_t, LoopAlloc> loopAllocMap;
+    if (!state.debugEnabled.load(std::memory_order_relaxed))
     for (size_t li = 0; li < chunk.code.size(); li++) {
         if (decodeOP(chunk.code[li]) != OP_LOOP) continue;
         int loopsBx = decodesBx(chunk.code[li]);
@@ -1726,6 +1760,17 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         if (lineNum != lastEmittedLine && !currentLoop) {
             emitLineStore(jit.buf, jit.size, runtimeLineOff, lineNum);
             lastEmittedLine = lineNum;
+            // Debug check: test debugEnabled flag, call jitDebugPause if set
+            uint8_t testDbg[] = { 0x41, 0xf6, 0x84, 0x24 };
+            emit(jit.buf, jit.size, testDbg, 4);
+            emit32(jit.buf, jit.size, static_cast<uint32_t>(debugEnabledOff));
+            emit8(jit.buf, jit.size, 0x01);
+            uint8_t jzDbg[] = { 0x74 };
+            emit(jit.buf, jit.size, jzDbg, 1);
+            size_t dbgSkipPatch = jit.size;
+            emit8(jit.buf, jit.size, 0);
+            emitCallHelper2(jit.buf, jit.size, (void*)jitDebugPause, 0, 0, &errorExitPatches);
+            jit.buf[dbgSkipPatch] = static_cast<uint8_t>(jit.size - dbgSkipPatch - 1);
         }
 
         if (op != OP_GETGLOBAL && op != OP_CLOSURE && op != OP_CALL) {
@@ -2243,7 +2288,8 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             } else {
             // Try to inline: check if base register holds a known closure
             auto cit = closureRegs.find(A);
-            if (cit != closureRegs.end() && B == cit->second->arity) {
+            if (!state.debugEnabled.load(std::memory_order_relaxed) &&
+                cit != closureRegs.end() && B == cit->second->arity) {
                 BblClosure* callee = cit->second;
                 
                 // Guard: verify callee pointer matches at runtime

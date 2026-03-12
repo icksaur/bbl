@@ -904,6 +904,11 @@ static void compileFn(BblState& state, CompilerState& cs, const AstNode& node, c
 
     fnCs.chunk.emitABC(OP_RETURN, resultReg, 0, 0, node.line);
     fnCs.chunk.numRegs = fnCs.maxRegs;
+    for (auto& [symId, reg] : fnCs.localRegs) {
+        auto nit = state.symbolNames.find(symId);
+        if (nit != state.symbolNames.end())
+            fnCs.chunk.debugRegNames[reg] = nit->second->data;
+    }
 
     BblClosure* proto = new BblClosure();
     proto->chunk = std::move(fnCs.chunk);
@@ -935,6 +940,11 @@ Chunk compile(BblState& state, const std::vector<AstNode>& nodes) {
         cs.chunk.emitABC(OP_MOVE, resultReg, lastReg, 0, nodes.empty() ? 0 : nodes.back().line);
     cs.chunk.emitABC(OP_RETURN, resultReg, 0, 0, nodes.empty() ? 0 : nodes.back().line);
     cs.chunk.numRegs = cs.maxRegs;
+    for (auto& [symId, reg] : cs.localRegs) {
+        auto nit = state.symbolNames.find(symId);
+        if (nit != state.symbolNames.end())
+            cs.chunk.debugRegNames[reg] = nit->second->data;
+    }
 
     return std::move(cs.chunk);
 }
