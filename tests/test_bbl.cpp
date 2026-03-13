@@ -5009,6 +5009,25 @@ TEST(test_import_recursive_fn) {
     ASSERT_EQ(result.intVal(), (int64_t)55);
 }
 
+TEST(test_import_circular) {
+    {
+        std::ofstream f("/tmp/bbl_circ_a.bbl");
+        f << "(= b (import \"/tmp/bbl_circ_b.bbl\"))\n(= x 10)\n";
+        f.close();
+    }
+    {
+        std::ofstream f("/tmp/bbl_circ_b.bbl");
+        f << "(= a (import \"/tmp/bbl_circ_a.bbl\"))\n(= y 20)\n";
+        f.close();
+    }
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.allowOpenFilesystem = true;
+    auto result = bbl.execExpr(R"_((= m (import "/tmp/bbl_circ_a.bbl")) (+ m.x 1))_");
+    ASSERT_EQ(result.intVal(), (int64_t)11);
+    std::remove("/tmp/bbl_circ_a.bbl");
+    std::remove("/tmp/bbl_circ_b.bbl");
+}
+
 TEST(test_execfile_unchanged) {
     BblState bbl; BBL::addStdLib(bbl);
     ASSERT_EQ(bbl.execExpr("(= x 10) (+ x 1)").intVal(), (int64_t)11);
@@ -6381,6 +6400,7 @@ int main() {
     RUN(test_import_stdlib_access);
     RUN(test_import_inter_module_calls);
     RUN(test_import_recursive_fn);
+    RUN(test_import_circular);
     RUN(test_execfile_unchanged);
     RUN(test_dot_call);
     RUN(test_dot_call_multi_arg);

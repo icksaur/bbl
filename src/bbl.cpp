@@ -3460,6 +3460,7 @@ void BBL::addStdLib(BblState& bbl) {
         ss << file.rdbuf();
 
         BblTable* env = b->allocTable();
+        b->moduleCache[key] = env;
 
         auto savedEnv = b->currentEnv;
         auto savedFile = b->currentFile;
@@ -3479,8 +3480,6 @@ void BBL::addStdLib(BblState& bbl) {
         b->currentEnv = savedEnv;
         b->currentFile = savedFile;
         b->scriptDir = savedDir;
-
-        b->moduleCache[key] = env;
 
         b->returnValue = BblValue::makeTable(env);
         b->hasReturn = true;
