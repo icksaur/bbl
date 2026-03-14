@@ -3451,13 +3451,22 @@ void BBL::addStdLib(BblState& bbl) {
             return 1;
         }
 
-        if (!fs::exists(resolved))
-            throw BBL::Error{"import: file not found: " + key};
-        std::ifstream file(resolved, std::ios::binary);
-        if (!file.is_open())
-            throw BBL::Error{"import: cannot open: " + key};
-        std::ostringstream ss;
-        ss << file.rdbuf();
+        auto vit = b->virtualModules.find(pathArg);
+        if (vit == b->virtualModules.end()) vit = b->virtualModules.find(key);
+
+        std::string source;
+        if (vit != b->virtualModules.end()) {
+            source = vit->second;
+        } else {
+            if (!fs::exists(resolved))
+                throw BBL::Error{"import: file not found: " + key};
+            std::ifstream file(resolved, std::ios::binary);
+            if (!file.is_open())
+                throw BBL::Error{"import: cannot open: " + key};
+            std::ostringstream ss;
+            ss << file.rdbuf();
+            source = ss.str();
+        }
 
         BblTable* env = b->allocTable();
         b->moduleCache[key] = env;
@@ -3470,7 +3479,7 @@ void BBL::addStdLib(BblState& bbl) {
         b->scriptDir = resolved.parent_path().string();
 
         try {
-            b->execExpr(ss.str());
+            b->execExpr(source);
         } catch (...) {
             b->currentEnv = savedEnv;
             b->currentFile = savedFile;
@@ -3484,6 +3493,32 @@ void BBL::addStdLib(BblState& bbl) {
         b->returnValue = BblValue::makeTable(env);
         b->hasReturn = true;
         return 1;
+    });
+
+    bbl.defn("register-modules", [](BblState* b) -> int {
+        BblValue arg = b->getArg(0);
+        if (arg.type() != BBL::Type::Table)
+            throw BBL::Error{"register-modules: expected table"};
+        auto* tbl = arg.tableVal();
+        tbl->ensureOrder();
+        if (!tbl->order) return 0;
+        for (auto& key : *tbl->order) {
+            if (key.type() != BBL::Type::String) continue;
+            const std::string& name = key.stringVal()->data;
+            auto val = tbl->get(key);
+            if (!val) continue;
+            if (val->type() == BBL::Type::String) {
+                b->virtualModules[name] = val->stringVal()->data;
+            } else if (val->type() == BBL::Type::Binary) {
+                auto* bin = val->binaryVal();
+                bin->materialize();
+                b->virtualModules[name] = std::string(
+                    reinterpret_cast<const char*>(bin->data.data()), bin->data.size());
+            } else {
+                throw BBL::Error{"register-modules: values must be string or binary"};
+            }
+        }
+        return 0;
     });
 
     bbl.defn("nrepl-exec", [](BblState* b) -> int {

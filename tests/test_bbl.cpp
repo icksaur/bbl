@@ -5028,6 +5028,38 @@ TEST(test_import_circular) {
     std::remove("/tmp/bbl_circ_b.bbl");
 }
 
+TEST(test_register_modules_string) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"_(
+        (register-modules (table "util.bbl" "(= add (fn (a b) (+ a b)))"))
+    )_");
+    auto result = bbl.execExpr(R"_((= u (import "util.bbl")) (u.add 3 4))_");
+    ASSERT_EQ(result.intVal(), (int64_t)7);
+}
+
+TEST(test_register_modules_binary) {
+    BblState bbl; BBL::addStdLib(bbl);
+    std::string src = "(= mul (fn (a b) (* a b)))";
+    auto* bin = bbl.allocBinary(std::vector<uint8_t>(src.begin(), src.end()));
+    bbl.set("src", BblValue::makeBinary(bin));
+    bbl.exec(R"_(
+        (register-modules (table "math.bbl" src))
+    )_");
+    auto result = bbl.execExpr(R"_((= m (import "math.bbl")) (m.mul 5 6))_");
+    ASSERT_EQ(result.intVal(), (int64_t)30);
+}
+
+TEST(test_register_modules_import_chain) {
+    BblState bbl; BBL::addStdLib(bbl);
+    bbl.exec(R"_(
+        (register-modules (table
+            "a.bbl" "(= b (import \"b.bbl\")) (= val (+ b.x 100))"
+            "b.bbl" "(= x 42)"))
+    )_");
+    auto result = bbl.execExpr(R"_((= a (import "a.bbl")) a.val)_");
+    ASSERT_EQ(result.intVal(), (int64_t)142);
+}
+
 TEST(test_execfile_unchanged) {
     BblState bbl; BBL::addStdLib(bbl);
     ASSERT_EQ(bbl.execExpr("(= x 10) (+ x 1)").intVal(), (int64_t)11);
@@ -6401,6 +6433,9 @@ int main() {
     RUN(test_import_inter_module_calls);
     RUN(test_import_recursive_fn);
     RUN(test_import_circular);
+    RUN(test_register_modules_string);
+    RUN(test_register_modules_binary);
+    RUN(test_register_modules_import_chain);
     RUN(test_execfile_unchanged);
     RUN(test_dot_call);
     RUN(test_dot_call_multi_arg);

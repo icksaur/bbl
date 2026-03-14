@@ -657,6 +657,7 @@ struct BblState {
     static constexpr size_t MAX_EXEC_DEPTH = 64;
     BblTable* currentEnv = nullptr;
     std::unordered_map<std::string, BblTable*> moduleCache;
+    std::unordered_map<std::string, std::string> virtualModules;
 
     // Pre-interned method name cache for O(1) dispatch
     struct MethodNames {
