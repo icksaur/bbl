@@ -33,7 +33,7 @@ static bool bblValueKeyEqual(const BblValue& a, const BblValue& b) {
     if (a.type() == Type::Int) return a.intVal() == b.intVal();
     if (a.type() == Type::Float) return a.floatVal() == b.floatVal();
     if (a.type() == Type::Bool) return a.boolVal() == b.boolVal();
-    return false;
+    return a.bits == b.bits;
 }
 
 // ---------- BblTable ----------
