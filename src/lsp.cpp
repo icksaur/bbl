@@ -11,6 +11,9 @@
 #include <memory>
 #include <filesystem>
 
+namespace bbl {
+
+
 static std::string readMessage() {
     char buf[256];
     int contentLength = -1;
@@ -60,8 +63,8 @@ static int lspReturnZero(BblState* b) { b->pushFloat(0); return 1; }
 static int lspReturnEmptyStr(BblState* b) { b->pushString(""); return 1; }
 
 static void addLspStdLib(BblState& bbl) {
-    BBL::addMath(bbl);
-    BBL::addPrint(bbl);
+    addMath(bbl);
+    addPrint(bbl);
     bbl.defn("print", lspNoOp);
 
     bbl.defn("fopen", lspReturnNull);
@@ -129,7 +132,7 @@ static std::string publishDiagnostics(const std::string& uri, const std::string&
     try {
         BblLexer lexer(text.c_str(), text.size());
         parse(lexer);
-    } catch (const BBL::Error& e) {
+    } catch (const Error& e) {
         errMsg = e.what;
         if (auto pos = errMsg.find("line "); pos != std::string::npos)
             errLine = std::max(0, atoi(errMsg.c_str() + pos + 5) - 1);
@@ -258,12 +261,12 @@ static std::string handleCompletion(int id, yyjson_val* params) {
             if (val) {
                 specialized = true;
                 switch (val->type()) {
-                case BBL::Type::Table: {
+                case Type::Table: {
                     BblTable* tbl = val->tableVal();
                     if (trigger == '.') {
                         if (tbl->order) {
                             for (auto& k : *tbl->order) {
-                                if (k.type() == BBL::Type::String) {
+                                if (k.type() == Type::String) {
                                     yyjson_mut_val* item = yyjson_mut_obj(doc);
                                     yyjson_mut_obj_add_strcpy(doc, item, "label", k.stringVal()->data.c_str());
                                     yyjson_mut_obj_add_int(doc, item, "kind", 10);
@@ -274,9 +277,9 @@ static std::string handleCompletion(int id, yyjson_val* params) {
                     } else {
                         if (tbl->order) {
                             for (auto& k : *tbl->order) {
-                                if (k.type() == BBL::Type::String) {
+                                if (k.type() == Type::String) {
                                     auto v = tbl->get(k);
-                                    if (v && v->type() == BBL::Type::Fn) {
+                                    if (v && v->type() == Type::Fn) {
                                         yyjson_mut_val* item = yyjson_mut_obj(doc);
                                         yyjson_mut_obj_add_strcpy(doc, item, "label", k.stringVal()->data.c_str());
                                         yyjson_mut_obj_add_int(doc, item, "kind", 2);
@@ -289,10 +292,10 @@ static std::string handleCompletion(int id, yyjson_val* params) {
                     }
                     break;
                 }
-                case BBL::Type::String: addMethodCompletions(doc, items, STRING_METHODS); break;
-                case BBL::Type::Vector: addMethodCompletions(doc, items, VECTOR_METHODS); break;
-                case BBL::Type::Binary: addMethodCompletions(doc, items, BINARY_METHODS); break;
-                case BBL::Type::Struct: {
+                case Type::String: addMethodCompletions(doc, items, STRING_METHODS); break;
+                case Type::Vector: addMethodCompletions(doc, items, VECTOR_METHODS); break;
+                case Type::Binary: addMethodCompletions(doc, items, BINARY_METHODS); break;
+                case Type::Struct: {
                     BblStruct* s = val->structVal();
                     if (s->desc) {
                         for (auto& f : s->desc->fields) {
@@ -324,7 +327,7 @@ static std::string handleCompletion(int id, yyjson_val* params) {
         }
         if (dit != documents.end() && dit->second.analysis && dit->second.analysis->vm) {
             for (auto& [symId, val] : dit->second.analysis->vm->globals) {
-                if (val.type() == BBL::Type::Fn && val.isClosure()) {
+                if (val.type() == Type::Fn && val.isClosure()) {
                     for (auto& [name, id] : dit->second.analysis->symbolIds) {
                         if (id == symId && name[0] != '_') {
                             yyjson_mut_val* item = yyjson_mut_obj(doc);
@@ -472,11 +475,11 @@ static std::string handleHover(int id, yyjson_val* params) {
         if (val) {
             std::string info;
             switch (val->type()) {
-            case BBL::Type::Int: info = "int = " + std::to_string(val->intVal()); break;
-            case BBL::Type::Float: info = "float = " + std::to_string(val->floatVal()); break;
-            case BBL::Type::String: info = "string = \"" + val->stringVal()->data.substr(0, 50) + "\""; break;
-            case BBL::Type::Bool: info = val->boolVal() ? "bool = true" : "bool = false"; break;
-            case BBL::Type::Table: {
+            case Type::Int: info = "int = " + std::to_string(val->intVal()); break;
+            case Type::Float: info = "float = " + std::to_string(val->floatVal()); break;
+            case Type::String: info = "string = \"" + val->stringVal()->data.substr(0, 50) + "\""; break;
+            case Type::Bool: info = val->boolVal() ? "bool = true" : "bool = false"; break;
+            case Type::Table: {
                 BblTable* tbl = val->tableVal();
                 info = "table (" + std::to_string(tbl->count) + " entries)";
                 if (tbl->order) {
@@ -485,16 +488,16 @@ static std::string handleHover(int id, yyjson_val* params) {
                     for (auto& k : *tbl->order) {
                         if (n++ > 5) { info += "..."; break; }
                         if (n > 1) info += ", ";
-                        if (k.type() == BBL::Type::String) info += k.stringVal()->data;
+                        if (k.type() == Type::String) info += k.stringVal()->data;
                         else info += std::to_string(k.intVal());
                     }
                 }
                 break;
             }
-            case BBL::Type::Vector: info = "vector<" + val->vectorVal()->elemType + "> length=" + std::to_string(val->vectorVal()->length()); break;
-            case BBL::Type::Binary: info = "binary length=" + std::to_string(val->binaryVal()->length()); break;
-            case BBL::Type::Struct: info = "struct " + val->structVal()->desc->name; break;
-            case BBL::Type::Fn:
+            case Type::Vector: info = "vector<" + val->vectorVal()->elemType + "> length=" + std::to_string(val->vectorVal()->length()); break;
+            case Type::Binary: info = "binary length=" + std::to_string(val->binaryVal()->length()); break;
+            case Type::Struct: info = "struct " + val->structVal()->desc->name; break;
+            case Type::Fn:
                 if (val->isClosure()) info = "fn(" + std::to_string(val->closureVal()->arity) + " args)";
                 else if (val->isCFn()) info = "builtin function";
                 else info = "function";
@@ -572,8 +575,8 @@ void lspMain() {
                 bool hasUserGlobals = false;
                 if (analysis && analysis->vm) {
                     for (auto& [id, v] : analysis->vm->globals) {
-                        if (v.type() == BBL::Type::Table || v.type() == BBL::Type::Struct ||
-                            (v.type() == BBL::Type::Fn && v.isClosure())) {
+                        if (v.type() == Type::Table || v.type() == Type::Struct ||
+                            (v.type() == Type::Fn && v.isClosure())) {
                             hasUserGlobals = true; break;
                         }
                     }
@@ -607,3 +610,5 @@ void lspMain() {
         yyjson_doc_free(jdoc);
     }
 }
+
+} // namespace bbl

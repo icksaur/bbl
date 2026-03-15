@@ -10,30 +10,33 @@
 #include <cstring>
 #include <cinttypes>
 
+namespace bbl {
+
+
 static std::string dapValueToString(const BblValue& val) {
     char buf[64];
     switch (val.type()) {
-        case BBL::Type::String: return "\"" + val.stringVal()->data + "\"";
-        case BBL::Type::Int: snprintf(buf, sizeof(buf), "%" PRId64, val.intVal()); return buf;
-        case BBL::Type::Float: snprintf(buf, sizeof(buf), "%g", val.floatVal()); return buf;
-        case BBL::Type::Bool: return val.boolVal() ? "true" : "false";
-        case BBL::Type::Null: return "null";
-        case BBL::Type::Table: snprintf(buf, sizeof(buf), "table (%zu entries)", val.tableVal()->length()); return buf;
-        case BBL::Type::Vector: snprintf(buf, sizeof(buf), "vector (%zu elements)", val.vectorVal()->length()); return buf;
+        case Type::String: return "\"" + val.stringVal()->data + "\"";
+        case Type::Int: snprintf(buf, sizeof(buf), "%" PRId64, val.intVal()); return buf;
+        case Type::Float: snprintf(buf, sizeof(buf), "%g", val.floatVal()); return buf;
+        case Type::Bool: return val.boolVal() ? "true" : "false";
+        case Type::Null: return "null";
+        case Type::Table: snprintf(buf, sizeof(buf), "table (%zu entries)", val.tableVal()->length()); return buf;
+        case Type::Vector: snprintf(buf, sizeof(buf), "vector (%zu elements)", val.vectorVal()->length()); return buf;
         default: return "<object>";
     }
 }
 
 static const char* dapTypeName(const BblValue& val) {
     switch (val.type()) {
-        case BBL::Type::String: return "string";
-        case BBL::Type::Int: return "int";
-        case BBL::Type::Float: return "float";
-        case BBL::Type::Bool: return "bool";
-        case BBL::Type::Null: return "null";
-        case BBL::Type::Table: return "table";
-        case BBL::Type::Vector: return "vector";
-        case BBL::Type::Fn: return "function";
+        case Type::String: return "string";
+        case Type::Int: return "int";
+        case Type::Float: return "float";
+        case Type::Bool: return "bool";
+        case Type::Null: return "null";
+        case Type::Table: return "table";
+        case Type::Vector: return "vector";
+        case Type::Fn: return "function";
         default: return "object";
     }
 }
@@ -289,7 +292,7 @@ static void handleDapClient(DapServer* dap) {
                         yyjson_mut_obj_add_str(doc, v, "type", dapTypeName(val));
 
                         int childRef = 0;
-                        if (val.type() == BBL::Type::Table || val.type() == BBL::Type::Vector) {
+                        if (val.type() == Type::Table || val.type() == Type::Vector) {
                             childRef = ++dap->nextVarRef;
                             dap->varRefs[childRef] = val.bits;
                         }
@@ -310,7 +313,7 @@ static void handleDapClient(DapServer* dap) {
                     yyjson_mut_obj_add_strcpy(doc, v, "value", valStr.c_str());
                     yyjson_mut_obj_add_str(doc, v, "type", dapTypeName(val));
                     int childRef = 0;
-                    if (val.type() == BBL::Type::Table || val.type() == BBL::Type::Vector) {
+                    if (val.type() == Type::Table || val.type() == Type::Vector) {
                         childRef = ++dap->nextVarRef;
                         dap->varRefs[childRef] = val.bits;
                     }
@@ -322,7 +325,7 @@ static void handleDapClient(DapServer* dap) {
                 if (it != dap->varRefs.end()) {
                     BblValue container;
                     container.bits = it->second;
-                    if (container.type() == BBL::Type::Table) {
+                    if (container.type() == Type::Table) {
                         auto* tbl = container.tableVal();
                         tbl->ensureOrder();
                         if (tbl->order) {
@@ -336,7 +339,7 @@ static void handleDapClient(DapServer* dap) {
                                 yyjson_mut_obj_add_strcpy(doc, v, "value", valStr.c_str());
                                 yyjson_mut_obj_add_str(doc, v, "type", dapTypeName(*val));
                                 int childRef = 0;
-                                if (val->type() == BBL::Type::Table || val->type() == BBL::Type::Vector) {
+                                if (val->type() == Type::Table || val->type() == Type::Vector) {
                                     childRef = ++dap->nextVarRef;
                                     dap->varRefs[childRef] = val->bits;
                                 }
@@ -344,7 +347,7 @@ static void handleDapClient(DapServer* dap) {
                                 yyjson_mut_arr_append(vars, v);
                             }
                         }
-                    } else if (container.type() == BBL::Type::Vector) {
+                    } else if (container.type() == Type::Vector) {
                         auto* vec = container.vectorVal();
                         for (size_t i = 0; i < vec->length(); ++i) {
                             BblValue elem = state->readVecElem(vec, i);
@@ -521,3 +524,5 @@ void DapServer::stop() {
     }
     if (serverThread.joinable()) serverThread.join();
 }
+
+} // namespace bbl

@@ -5,6 +5,8 @@
 #include <thread>
 #include <unordered_map>
 
+namespace bbl {
+
 struct BblState;
 struct BblValue;
 
@@ -22,3 +24,6 @@ struct DapServer {
     void start(int port);
     void stop();
 };
+
+
+} // namespace bbl

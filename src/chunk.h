@@ -5,6 +5,8 @@
 #include <string>
 #include <unordered_map>
 
+namespace bbl {
+
 struct BblValue;
 struct Snapshot;
 struct SunkAllocation;
@@ -169,3 +171,6 @@ struct Chunk {
         code[offset] = encodeABx(op, A, Bx);
     }
 };
+
+
+} // namespace bbl

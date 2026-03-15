@@ -22,10 +22,12 @@
 #include <vector>
 #include <functional>
 
+namespace bbl {
+
+
 struct BblClosure;
 struct VmState;
 
-namespace BBL {
 
 enum class Type {
     Null,
@@ -47,21 +49,20 @@ struct Error {
 
 enum class GetError { NotFound, TypeMismatch };
 
-} // namespace BBL
 
-inline std::ostream& operator<<(std::ostream& os, BBL::Type t) {
+inline std::ostream& operator<<(std::ostream& os, Type t) {
     switch (t) {
-        case BBL::Type::Null:     return os << "Null";
-        case BBL::Type::Bool:     return os << "Bool";
-        case BBL::Type::Int:      return os << "Int";
-        case BBL::Type::Float:    return os << "Float";
-        case BBL::Type::String:   return os << "String";
-        case BBL::Type::Binary:   return os << "Binary";
-        case BBL::Type::Fn:       return os << "Fn";
-        case BBL::Type::Vector:   return os << "Vector";
-        case BBL::Type::Table:    return os << "Table";
-        case BBL::Type::Struct:   return os << "Struct";
-        case BBL::Type::UserData: return os << "UserData";
+        case Type::Null:     return os << "Null";
+        case Type::Bool:     return os << "Bool";
+        case Type::Int:      return os << "Int";
+        case Type::Float:    return os << "Float";
+        case Type::String:   return os << "String";
+        case Type::Binary:   return os << "Binary";
+        case Type::Fn:       return os << "Fn";
+        case Type::Vector:   return os << "Vector";
+        case Type::Table:    return os << "Table";
+        case Type::Struct:   return os << "Struct";
+        case Type::UserData: return os << "UserData";
     }
     return os << "Unknown";
 }
@@ -140,7 +141,7 @@ struct BblStruct : GcObj {
 
 struct BblVec : GcObj {
     std::string elemType;
-    BBL::Type elemTypeTag;
+    Type elemTypeTag;
     size_t elemSize;
     std::vector<uint8_t> data;
 
@@ -166,7 +167,6 @@ struct BblUserData : GcObj {
     BblUserData() { gcType = GcType::UserData; }
 };
 
-namespace BBL {
 
 class StructBuilder {
     std::string name_;
@@ -234,7 +234,6 @@ public:
     BblUserDataDestructor getDestructor() const { return destructor_; }
 };
 
-} // namespace BBL
 
 struct BblValue {
     uint64_t bits = TAG_NULL;
@@ -254,26 +253,26 @@ struct BblValue {
 
     bool isDouble()  const { return (bits & QNAN) != QNAN; }
 
-    BBL::Type type() const {
-        if (isDouble()) return BBL::Type::Float;
+    Type type() const {
+        if (isDouble()) return Type::Float;
         uint64_t tag = bits & TAG_MASK;
-        if (tag == TAG_NULL)    return BBL::Type::Null;
-        if (tag == TAG_BOOL)    return BBL::Type::Bool;
-        if (tag == TAG_INT)     return BBL::Type::Int;
-        if (tag == TAG_CLOSURE || tag == TAG_CFN || tag == TAG_FN) return BBL::Type::Fn;
-        if (tag == TAG_STRING)  return BBL::Type::String;
+        if (tag == TAG_NULL)    return Type::Null;
+        if (tag == TAG_BOOL)    return Type::Bool;
+        if (tag == TAG_INT)     return Type::Int;
+        if (tag == TAG_CLOSURE || tag == TAG_CFN || tag == TAG_FN) return Type::Fn;
+        if (tag == TAG_STRING)  return Type::String;
         if (tag == TAG_OBJECT) {
             GcType gt = reinterpret_cast<GcObj*>(bits & PAYLOAD_MASK)->gcType;
             switch (gt) {
-                case GcType::Table:    return BBL::Type::Table;
-                case GcType::Vec:      return BBL::Type::Vector;
-                case GcType::Struct:   return BBL::Type::Struct;
-                case GcType::Binary:   return BBL::Type::Binary;
-                case GcType::UserData: return BBL::Type::UserData;
-                default:               return BBL::Type::Null;
+                case GcType::Table:    return Type::Table;
+                case GcType::Vec:      return Type::Vector;
+                case GcType::Struct:   return Type::Struct;
+                case GcType::Binary:   return Type::Binary;
+                case GcType::UserData: return Type::UserData;
+                default:               return Type::Null;
             }
         }
-        return BBL::Type::Null;
+        return Type::Null;
     }
 
     template<typename T> T* asPtr() const { return reinterpret_cast<T*>(bits & PAYLOAD_MASK); }
@@ -346,7 +345,7 @@ struct BblTable : GcObj {
     BblTable& operator=(const BblTable&) = delete;
 
     size_t length() const { return count; }
-    std::expected<BblValue, BBL::GetError> get(const BblValue& key) const;
+    std::expected<BblValue, GetError> get(const BblValue& key) const;
     void set(const BblValue& key, const BblValue& val);
     bool has(const BblValue& key) const;
     bool del(const BblValue& key);
@@ -479,7 +478,7 @@ struct AstNode {
 
 std::vector<AstNode> parse(BblLexer& lexer);
 
-std::string typeName(BBL::Type t);
+std::string typeName(Type t);
 
 // ---------- BblState ----------
 
@@ -523,7 +522,7 @@ struct BblTerminated {};
 // ---------- Child-states messaging ----------
 
 struct MessageValue {
-    BBL::Type type = BBL::Type::Null;
+    Type type = Type::Null;
     int64_t intVal = 0;
     double floatVal = 0;
     bool boolVal = false;
@@ -535,7 +534,7 @@ struct BblMessage {
     bool hasPayload = false;
     std::vector<uint8_t> payloadData;
     std::string payloadElemType;
-    BBL::Type payloadElemTypeTag = BBL::Type::Null;
+    Type payloadElemTypeTag = Type::Null;
     size_t payloadElemSize = 0;
 };
 
@@ -703,7 +702,7 @@ struct BblState {
     void checkTerminated() { if (terminated.load(std::memory_order_relaxed)) throw BblTerminated{}; }
     void checkStepLimit() {
         if (maxSteps && ++stepCount > maxSteps)
-            throw BBL::Error{"step limit exceeded: " + std::to_string(maxSteps) + " steps"};
+            throw Error{"step limit exceeded: " + std::to_string(maxSteps) + " steps"};
     }
 
     // Symbol ID table
@@ -724,7 +723,7 @@ struct BblState {
     BblBinary* allocLazyBinary(const char* src, size_t size, bool compressed = false);
     BblFn* allocFn();
     BblStruct* allocStruct(StructDesc* desc);
-    BblVec* allocVector(const std::string& elemType, BBL::Type elemTypeTag, size_t elemSize);
+    BblVec* allocVector(const std::string& elemType, Type elemTypeTag, size_t elemSize);
     BblTable* allocTable();
     BblUserData* allocUserData(const std::string& typeName, void* data);
 
@@ -756,8 +755,8 @@ struct BblState {
     BblValue execfileExpr(const std::string& path);
     std::filesystem::path resolveSandboxPath(const std::string& path, const char* context);
     void defn(const std::string& name, BblCFunction fn);
-    void registerStruct(const BBL::StructBuilder& builder);
-    void registerType(const BBL::TypeBuilder& builder);
+    void registerStruct(const StructBuilder& builder);
+    void registerType(const TypeBuilder& builder);
 
     BblValue call(BblValue callable, std::initializer_list<BblValue> args);
     BblValue call(BblValue callable, std::span<const BblValue> args);
@@ -778,9 +777,9 @@ struct BblState {
     template<typename T>
     T* getVectorData(const std::string& name) {
         auto v = get(name);
-        if (!v) throw BBL::Error{"undefined symbol: " + name};
-        if (v->type() != BBL::Type::Vector) {
-            throw BBL::Error{"type mismatch: expected vector, got " + std::string(typeName(v->type()))};
+        if (!v) throw Error{"undefined symbol: " + name};
+        if (v->type() != Type::Vector) {
+            throw Error{"type mismatch: expected vector, got " + std::string(typeName(v->type()))};
         }
         return reinterpret_cast<T*>(v->vectorVal()->data.data());
     }
@@ -788,9 +787,9 @@ struct BblState {
     template<typename T>
     size_t getVectorLength(const std::string& name) {
         auto v = get(name);
-        if (!v) throw BBL::Error{"undefined symbol: " + name};
-        if (v->type() != BBL::Type::Vector) {
-            throw BBL::Error{"type mismatch: expected vector"};
+        if (!v) throw Error{"undefined symbol: " + name};
+        if (v->type() != Type::Vector) {
+            throw Error{"type mismatch: expected vector"};
         }
         return v->vectorVal()->length();
     }
@@ -798,7 +797,7 @@ struct BblState {
     // C function arg access
     int argCount() const;
     bool hasArg(int i) const;
-    BBL::Type getArgType(int i) const;
+    Type getArgType(int i) const;
     int64_t getIntArg(int i) const;
     double getFloatArg(int i) const;
     bool getBoolArg(int i) const;
@@ -817,14 +816,14 @@ struct BblState {
 
     // Introspection
     bool has(const std::string& name) const;
-    std::expected<BBL::Type, BBL::GetError> getType(const std::string& name) const;
-    std::expected<BblValue, BBL::GetError> get(const std::string& name) const;
-    std::expected<int64_t, BBL::GetError> getInt(const std::string& name) const;
-    std::expected<double, BBL::GetError> getFloat(const std::string& name) const;
-    std::expected<bool, BBL::GetError> getBool(const std::string& name) const;
-    std::expected<const char*, BBL::GetError> getString(const std::string& name) const;
-    std::expected<BblTable*, BBL::GetError> getTable(const std::string& name) const;
-    std::expected<BblBinary*, BBL::GetError> getBinary(const std::string& name) const;
+    std::expected<Type, GetError> getType(const std::string& name) const;
+    std::expected<BblValue, GetError> get(const std::string& name) const;
+    std::expected<int64_t, GetError> getInt(const std::string& name) const;
+    std::expected<double, GetError> getFloat(const std::string& name) const;
+    std::expected<bool, GetError> getBool(const std::string& name) const;
+    std::expected<const char*, GetError> getString(const std::string& name) const;
+    std::expected<BblTable*, GetError> getTable(const std::string& name) const;
+    std::expected<BblBinary*, GetError> getBinary(const std::string& name) const;
 
     // Setters
     void setInt(const std::string& name, int64_t val);
@@ -843,7 +842,6 @@ struct GcPauseGuard {
     ~GcPauseGuard() { bbl->resumeGC(); }
 };
 
-namespace BBL {
     void addPrint(BblState& bbl);
     void addMath(BblState& bbl);
     void addFileIo(BblState& bbl);
@@ -855,4 +853,6 @@ namespace BBL {
 
     std::vector<uint8_t> lz4Compress(const uint8_t* data, size_t size);
     std::vector<uint8_t> lz4Decompress(const uint8_t* data, size_t size);
-}
+
+
+} // namespace bbl

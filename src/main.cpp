@@ -10,6 +10,9 @@
 #include <iostream>
 #include <string>
 
+namespace bbl {
+
+
 static void printVersion() {
     fputs("bbl 0.1.0\n", stdout);
 }
@@ -26,41 +29,41 @@ static void printUsage() {
 static void printValue(const BblValue& v) {
     char buf[64];
     switch (v.type()) {
-        case BBL::Type::Null: break; // silent
-        case BBL::Type::Int:
+        case Type::Null: break; // silent
+        case Type::Int:
             snprintf(buf, sizeof(buf), "%" PRId64, v.intVal());
             fputs(buf, stdout);
             fputc('\n', stdout);
             break;
-        case BBL::Type::Float:
+        case Type::Float:
             snprintf(buf, sizeof(buf), "%g", v.floatVal());
             fputs(buf, stdout);
             fputc('\n', stdout);
             break;
-        case BBL::Type::Bool:
+        case Type::Bool:
             fputs(v.boolVal() ? "true" : "false", stdout);
             fputc('\n', stdout);
             break;
-        case BBL::Type::String:
+        case Type::String:
             fprintf(stdout, "\"%s\"\n", v.stringVal()->data.c_str());
             break;
-        case BBL::Type::Fn:
+        case Type::Fn:
             fputs("<fn>\n", stdout);
             break;
-        case BBL::Type::Binary:
+        case Type::Binary:
             fprintf(stdout, "<binary %zu bytes>\n", v.binaryVal()->length());
             break;
-        case BBL::Type::Table:
+        case Type::Table:
             fprintf(stdout, "<table length=%zu>\n", v.tableVal()->length());
             break;
-        case BBL::Type::Vector:
+        case Type::Vector:
             fprintf(stdout, "<vector %s length=%zu>\n",
                     v.vectorVal()->elemType.c_str(), v.vectorVal()->length());
             break;
-        case BBL::Type::Struct:
+        case Type::Struct:
             fprintf(stdout, "<struct %s>\n", v.structVal()->desc->name.c_str());
             break;
-        case BBL::Type::UserData:
+        case Type::UserData:
             fprintf(stdout, "<userdata %s>\n", v.userdataVal()->desc->name.c_str());
             break;
         default: break;
@@ -114,7 +117,7 @@ static void repl(BblState& bbl) {
                     try {
                         BblValue result = bbl.execExpr(trimmed);
                         printValue(result);
-                    } catch (const BBL::Error& e) {
+                    } catch (const Error& e) {
                         bbl.printBacktrace(e.what);
                     }
                 }
@@ -132,9 +135,15 @@ static void repl(BblState& bbl) {
     }
 }
 
+
+
+} // namespace bbl
+
+using namespace bbl;
+
 int main(int argc, char* argv[]) {
     BblState bbl;
-    BBL::addStdLib(bbl);
+    addStdLib(bbl);
     bbl.allowOpenFilesystem = true;
 
     if (argc < 2) {
@@ -190,7 +199,7 @@ int main(int argc, char* argv[]) {
                     bbl.debug->scriptDone.store(true, std::memory_order_release);
                     bbl.debug->cv.notify_all();
                 }
-            } catch (const BBL::Error& e) {
+            } catch (const Error& e) {
                 bbl.printBacktrace(e.what);
                 return 1;
             }
@@ -206,7 +215,7 @@ int main(int argc, char* argv[]) {
                 while (tok.type != TokenType::Eof) {
                     if (tok.type == TokenType::Binary && !tok.isCompressed && tok.binarySource) {
                         fwrite(source.c_str() + prevEnd, 1, tok.sourceStart - prevEnd, stdout);
-                        auto comp = BBL::lz4Compress(
+                        auto comp = lz4Compress(
                             reinterpret_cast<const uint8_t*>(tok.binarySource), tok.binarySize);
                         fprintf(stdout, "0z%zu:", comp.size());
                         fwrite(comp.data(), 1, comp.size(), stdout);
@@ -239,7 +248,7 @@ int main(int argc, char* argv[]) {
                 i++;
                 try {
                     bbl.exec(argv[i]);
-                } catch (const BBL::Error& e) {
+                } catch (const Error& e) {
                     bbl.printBacktrace(e.what);
                     return 1;
                 }
@@ -281,7 +290,7 @@ int main(int argc, char* argv[]) {
         std::ostringstream ss;
         ss << file.rdbuf();
         bbl.exec(ss.str());
-    } catch (const BBL::Error& e) {
+    } catch (const Error& e) {
         bbl.printBacktrace(e.what);
         return 1;
     }

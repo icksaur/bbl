@@ -3,6 +3,9 @@
 #include "vm.h"
 #include <unordered_set>
 
+namespace bbl {
+
+
 int CompilerState::resolveCapture(uint32_t symbolId) {
     if (!enclosing) return -1;
     int local = enclosing->resolveLocal(symbolId);
@@ -10,7 +13,7 @@ int CompilerState::resolveCapture(uint32_t symbolId) {
         for (size_t i = 0; i < captures.size(); i++)
             if (captures[i].srcType == 0 && captures[i].srcIdx == static_cast<uint8_t>(local))
                 return static_cast<int>(i);
-        if (captures.size() >= 255) throw BBL::Error{"too many captures (limit 255)"};
+        if (captures.size() >= 255) throw Error{"too many captures (limit 255)"};
         captures.push_back({0, static_cast<uint8_t>(local)});
         return static_cast<int>(captures.size() - 1);
     }
@@ -19,7 +22,7 @@ int CompilerState::resolveCapture(uint32_t symbolId) {
         for (size_t i = 0; i < captures.size(); i++)
             if (captures[i].srcType == 1 && captures[i].srcIdx == static_cast<uint8_t>(cap))
                 return static_cast<int>(i);
-        if (captures.size() >= 255) throw BBL::Error{"too many captures (limit 255)"};
+        if (captures.size() >= 255) throw Error{"too many captures (limit 255)"};
         captures.push_back({1, static_cast<uint8_t>(cap)});
         return static_cast<int>(captures.size() - 1);
     }
@@ -36,13 +39,13 @@ static void compileFn(BblState& state, CompilerState& cs, const AstNode& node, c
 
 static uint8_t addSymConst(BblState& state, CompilerState& cs, uint32_t symId) {
     size_t idx = cs.chunk.addConstant(BblValue::makeInt(static_cast<int64_t>(symId)));
-    if (idx > 255) throw BBL::Error{"too many field/symbol constants (limit 256 per function)"};
+    if (idx > 255) throw Error{"too many field/symbol constants (limit 256 per function)"};
     return static_cast<uint8_t>(idx);
 }
 
 static uint8_t addStrConst(BblState& state, CompilerState& cs, const std::string& s) {
     size_t idx = cs.chunk.addConstant(BblValue::makeString(state.intern(s)));
-    if (idx > 255) throw BBL::Error{"too many string constants (limit 256 per function)"};
+    if (idx > 255) throw Error{"too many string constants (limit 256 per function)"};
     return static_cast<uint8_t>(idx);
 }
 
@@ -54,24 +57,24 @@ static int emitJump(CompilerState& cs, uint8_t op, uint8_t A, int line) {
 
 static uint16_t addConstIdx(CompilerState& cs, const BblValue& val) {
     size_t idx = cs.chunk.addConstant(val);
-    if (idx > 65535) throw BBL::Error{"too many constants (limit 65536 per function)"};
+    if (idx > 65535) throw Error{"too many constants (limit 65536 per function)"};
     return static_cast<uint16_t>(idx);
 }
 
 static uint8_t checkArgc(size_t count, int line) {
-    if (count > 255) throw BBL::Error{"too many arguments (limit 255) at line " + std::to_string(line)};
+    if (count > 255) throw Error{"too many arguments (limit 255) at line " + std::to_string(line)};
     return static_cast<uint8_t>(count);
 }
 
 static void patchJump(CompilerState& cs, int offset) {
     int jump = static_cast<int>(cs.chunk.code.size()) - offset - 1;
     if (jump < -32767 || jump > 32767)
-        throw BBL::Error{"function too large (jump distance exceeds limit)"};
+        throw Error{"function too large (jump distance exceeds limit)"};
     cs.chunk.patchsBx(offset, jump);
 }
 
 static uint8_t compileExpr(BblState& state, CompilerState& cs, const AstNode& node, uint8_t dest) {
-    if (++cs.compileDepth > 512) throw BBL::Error{"compilation error: nesting too deep (limit 512)"};
+    if (++cs.compileDepth > 512) throw Error{"compilation error: nesting too deep (limit 512)"};
     struct DepthGuard { int& d; ~DepthGuard() { --d; } } guard{cs.compileDepth};
     switch (node.type) {
         case NodeType::IntLiteral: {
@@ -141,7 +144,7 @@ static uint8_t compileExpr(BblState& state, CompilerState& cs, const AstNode& no
             return dest;
         }
         case NodeType::ColonAccess:
-            throw BBL::Error{"colon access must be called as a method at line " + std::to_string(node.line)};
+            throw Error{"colon access must be called as a method at line " + std::to_string(node.line)};
     }
     return dest;
 }
@@ -222,7 +225,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     // Arithmetic: chained binary ops
     OpCode aop = arithOp(op);
     if (aop != OP_LOADNULL) {
-        if (node.children.size() < 3) throw BBL::Error{"'" + op + "' requires at least 2 arguments at line " + std::to_string(node.line)};
+        if (node.children.size() < 3) throw Error{"'" + op + "' requires at least 2 arguments at line " + std::to_string(node.line)};
         uint8_t savedNext = cs.nextReg;
         uint8_t regA = compileExpr(state, cs, node.children[1], dest);
         for (size_t i = 2; i < node.children.size(); i++) {
@@ -253,7 +256,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     // Comparisons
     OpCode cop = cmpOp(op);
     if (cop != OP_LOADNULL) {
-        if (node.children.size() != 3) throw BBL::Error{"'" + op + "' requires exactly 2 arguments at line " + std::to_string(node.line)};
+        if (node.children.size() != 3) throw Error{"'" + op + "' requires exactly 2 arguments at line " + std::to_string(node.line)};
         uint8_t savedNext = cs.nextReg;
         uint8_t regA = compileExpr(state, cs, node.children[1], cs.allocReg());
         uint8_t regB = compileExpr(state, cs, node.children[2], cs.allocReg());
@@ -263,7 +266,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "shl" || op == "shr") {
-        if (node.children.size() != 3) throw BBL::Error{"'" + op + "' requires exactly 2 arguments at line " + std::to_string(node.line)};
+        if (node.children.size() != 3) throw Error{"'" + op + "' requires exactly 2 arguments at line " + std::to_string(node.line)};
         uint8_t savedNext = cs.nextReg;
         uint8_t regA = compileExpr(state, cs, node.children[1], cs.allocReg());
         uint8_t regB = compileExpr(state, cs, node.children[2], cs.allocReg());
@@ -273,14 +276,14 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "bnot") {
-        if (node.children.size() < 2) throw BBL::Error{"'bnot' requires an argument at line " + std::to_string(node.line)};
+        if (node.children.size() < 2) throw Error{"'bnot' requires an argument at line " + std::to_string(node.line)};
         uint8_t regA = compileExpr(state, cs, node.children[1], dest);
         cs.chunk.emitABC(OP_BNOT, dest, regA, 0, node.line);
         return dest;
     }
 
     if (op == "not") {
-        if (node.children.size() < 2) throw BBL::Error{"'not' requires an argument at line " + std::to_string(node.line)};
+        if (node.children.size() < 2) throw Error{"'not' requires an argument at line " + std::to_string(node.line)};
         uint8_t regA = compileExpr(state, cs, node.children[1], dest);
         cs.chunk.emitABC(OP_NOT, dest, regA, 0, node.line);
         return dest;
@@ -288,7 +291,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
 
     // Assignment
     if (op == "=") {
-        if (node.children.size() < 3) throw BBL::Error{"'=' requires at least 2 arguments at line " + std::to_string(node.line)};
+        if (node.children.size() < 3) throw Error{"'=' requires at least 2 arguments at line " + std::to_string(node.line)};
         auto& target = node.children[1];
 
         if (target.type == NodeType::Symbol) {
@@ -352,15 +355,15 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
             cs.freeRegsTo(savedNext);
             return dest;
         } else {
-            throw BBL::Error{"invalid assignment target at line " + std::to_string(node.line)};
+            throw Error{"invalid assignment target at line " + std::to_string(node.line)};
         }
     }
 
     // (defn name (args) body) → compile as (= name (fn (args) body))
     if (op == "defn") {
-        if (node.children.size() < 4) throw BBL::Error{"'defn' requires name, params, and body at line " + std::to_string(node.line)};
+        if (node.children.size() < 4) throw Error{"'defn' requires name, params, and body at line " + std::to_string(node.line)};
         auto& target = node.children[1];
-        if (target.type != NodeType::Symbol) throw BBL::Error{"'defn' name must be a symbol at line " + std::to_string(node.line)};
+        if (target.type != NodeType::Symbol) throw Error{"'defn' name must be a symbol at line " + std::to_string(node.line)};
         uint32_t symId = state.resolveSymbol(target.stringVal);
 
         AstNode fnNode;
@@ -389,7 +392,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
 
     // Control flow
     if (op == "if") {
-        if (node.children.size() < 3) throw BBL::Error{"'if' requires condition and body at line " + std::to_string(node.line)};
+        if (node.children.size() < 3) throw Error{"'if' requires condition and body at line " + std::to_string(node.line)};
         auto& cond = node.children[1];
         bool fusedCmp = false;
         if (cond.type == NodeType::List && cond.children.size() == 3 &&
@@ -443,7 +446,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "loop") {
-        if (node.children.size() < 2) throw BBL::Error{"'loop' requires a condition at line " + std::to_string(node.line)};
+        if (node.children.size() < 2) throw Error{"'loop' requires a condition at line " + std::to_string(node.line)};
         CompilerState::LoopInfo loopInfo;
         loopInfo.start = static_cast<int>(cs.chunk.code.size());
         cs.loops.push_back(loopInfo);
@@ -499,9 +502,9 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "each") {
-        if (node.children.size() < 4) throw BBL::Error{"'each' requires variable, container, and body at line " + std::to_string(node.line)};
+        if (node.children.size() < 4) throw Error{"'each' requires variable, container, and body at line " + std::to_string(node.line)};
         if (node.children[1].type != NodeType::Symbol)
-            throw BBL::Error{"'each' variable must be a symbol at line " + std::to_string(node.line)};
+            throw Error{"'each' variable must be a symbol at line " + std::to_string(node.line)};
         uint32_t varSym = state.resolveSymbol(node.children[1].stringVal);
         uint8_t savedNext = cs.nextReg;
 
@@ -530,7 +533,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
 
         for (int c : cs.loops.back().continues) patchJump(cs, c);
         size_t oneIdx = cs.chunk.addConstant(BblValue::makeInt(1));
-        if (oneIdx > 255) throw BBL::Error{"too many constants (limit 256 for ADDK)"};
+        if (oneIdx > 255) throw Error{"too many constants (limit 256 for ADDK)"};
         cs.chunk.emitABC(OP_ADDK, idxReg, idxReg, static_cast<uint8_t>(oneIdx), node.line);
 
         int loopOffset = static_cast<int>(cs.chunk.code.size()) - cs.loops.back().start + 1;
@@ -555,7 +558,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "and") {
-        if (node.children.size() < 3) throw BBL::Error{"'and' requires 2 arguments at line " + std::to_string(node.line)};
+        if (node.children.size() < 3) throw Error{"'and' requires 2 arguments at line " + std::to_string(node.line)};
         compileExpr(state, cs, node.children[1], dest);
         int endJump = emitJump(cs, OP_AND, dest, node.line);
         compileExpr(state, cs, node.children[2], dest);
@@ -564,7 +567,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "or") {
-        if (node.children.size() < 3) throw BBL::Error{"'or' requires 2 arguments at line " + std::to_string(node.line)};
+        if (node.children.size() < 3) throw Error{"'or' requires 2 arguments at line " + std::to_string(node.line)};
         compileExpr(state, cs, node.children[1], dest);
         int endJump = emitJump(cs, OP_OR, dest, node.line);
         compileExpr(state, cs, node.children[2], dest);
@@ -578,7 +581,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "break") {
-        if (cs.loops.empty()) throw BBL::Error{"'break' outside of loop at line " + std::to_string(node.line)};
+        if (cs.loops.empty()) throw Error{"'break' outside of loop at line " + std::to_string(node.line)};
         int br = emitJump(cs, OP_JMP, 0, node.line);
         cs.loops.back().breaks.push_back(br);
         cs.chunk.emitABC(OP_LOADNULL, dest, 0, 0, node.line);
@@ -586,7 +589,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "continue") {
-        if (cs.loops.empty()) throw BBL::Error{"'continue' outside of loop at line " + std::to_string(node.line)};
+        if (cs.loops.empty()) throw Error{"'continue' outside of loop at line " + std::to_string(node.line)};
         if (cs.loops.back().isEach) {
             int jmp = emitJump(cs, OP_JMP, 0, node.line);
             cs.loops.back().continues.push_back(jmp);
@@ -598,8 +601,8 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "with") {
-        if (node.children.size() < 4) throw BBL::Error{"'with' requires name, initializer, and body at line " + std::to_string(node.line)};
-        if (node.children[1].type != NodeType::Symbol) throw BBL::Error{"with: first argument must be a symbol at line " + std::to_string(node.line)};
+        if (node.children.size() < 4) throw Error{"'with' requires name, initializer, and body at line " + std::to_string(node.line)};
+        if (node.children[1].type != NodeType::Symbol) throw Error{"with: first argument must be a symbol at line " + std::to_string(node.line)};
         uint32_t varSym = state.resolveSymbol(node.children[1].stringVal);
         uint8_t varReg = cs.allocReg();
         cs.localRegs[varSym] = varReg;
@@ -643,13 +646,13 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "try") {
-        if (node.children.size() < 3) throw BBL::Error{"'try' requires body and catch at line " + std::to_string(node.line)};
+        if (node.children.size() < 3) throw Error{"'try' requires body and catch at line " + std::to_string(node.line)};
         auto& catchNode = node.children.back();
         if (catchNode.type != NodeType::List || catchNode.children.empty() ||
             catchNode.children[0].type != NodeType::Symbol ||
             catchNode.children[0].stringVal != "catch" ||
             catchNode.children.size() < 3)
-            throw BBL::Error{"try: last argument must be (catch var handler) at line " + std::to_string(node.line)};
+            throw Error{"try: last argument must be (catch var handler) at line " + std::to_string(node.line)};
 
         int tryJump = emitJump(cs, OP_TRYBEGIN, dest, node.line);
         for (size_t i = 1; i < node.children.size() - 1; i++)
@@ -670,7 +673,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "vector") {
-        if (node.children.size() < 2) throw BBL::Error{"'vector' requires a type name at line " + std::to_string(node.line)};
+        if (node.children.size() < 2) throw Error{"'vector' requires a type name at line " + std::to_string(node.line)};
         uint8_t savedNext = cs.nextReg;
         uint8_t base = dest;
         if (base < cs.nextReg) { base = cs.allocReg(); cs.freeRegsTo(base); }
@@ -705,12 +708,12 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
 
     if (op == "struct") {
         if (node.children.size() < 4 || node.children.size() % 2 != 0)
-            throw BBL::Error{"struct: expected (struct Name type field ...) at line " + std::to_string(node.line)};
+            throw Error{"struct: expected (struct Name type field ...) at line " + std::to_string(node.line)};
         if (node.children[1].type != NodeType::Symbol)
-            throw BBL::Error{"struct: name must be a symbol at line " + std::to_string(node.line)};
+            throw Error{"struct: name must be a symbol at line " + std::to_string(node.line)};
         auto& sname = node.children[1].stringVal;
         if (state.structDescs().find(sname) != state.structDescs().end())
-            throw BBL::Error{"struct " + sname + " already defined at line " + std::to_string(node.line)};
+            throw Error{"struct " + sname + " already defined at line " + std::to_string(node.line)};
 
         static const std::unordered_map<std::string, std::pair<CType, size_t>> typeTable = {
             {"bool", {CType::Bool, 1}}, {"int8", {CType::Int8, 1}}, {"uint8", {CType::Uint8, 1}},
@@ -724,11 +727,11 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
         size_t offset = 0;
         for (size_t i = 2; i < node.children.size(); i += 2) {
             if (node.children[i].type != NodeType::Symbol || node.children[i+1].type != NodeType::Symbol)
-                throw BBL::Error{"struct " + sname + ": expected type and field name symbols at line " + std::to_string(node.line)};
+                throw Error{"struct " + sname + ": expected type and field name symbols at line " + std::to_string(node.line)};
             auto& typeSym = node.children[i].stringVal;
             auto& fieldName = node.children[i+1].stringVal;
             for (auto& f : desc.fields)
-                if (f.name == fieldName) throw BBL::Error{"struct " + sname + ": duplicate field name " + fieldName};
+                if (f.name == fieldName) throw Error{"struct " + sname + ": duplicate field name " + fieldName};
             auto tit = typeTable.find(typeSym);
             if (tit != typeTable.end()) {
                 desc.fields.push_back(FieldDesc{fieldName, offset, tit->second.second, tit->second.first, ""});
@@ -738,7 +741,7 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
                 if (sit != state.structDescs().end()) {
                     desc.fields.push_back(FieldDesc{fieldName, offset, sit->second.totalSize, CType::Struct, typeSym});
                     offset += sit->second.totalSize;
-                } else throw BBL::Error{"struct " + sname + ": unknown type " + typeSym};
+                } else throw Error{"struct " + sname + ": unknown type " + typeSym};
             }
         }
         desc.totalSize = offset;
@@ -748,36 +751,36 @@ static uint8_t compileList(BblState& state, CompilerState& cs, const AstNode& no
     }
 
     if (op == "binary") {
-        if (node.children.size() != 2) throw BBL::Error{"'binary' requires exactly 1 argument at line " + std::to_string(node.line)};
+        if (node.children.size() != 2) throw Error{"'binary' requires exactly 1 argument at line " + std::to_string(node.line)};
         uint8_t srcReg = compileExpr(state, cs, node.children[1], dest);
         cs.chunk.emitABC(OP_BINARY, dest, srcReg, 0, node.line);
         return dest;
     }
 
     if (op == "int") {
-        if (node.children.size() != 2) throw BBL::Error{"'int' requires 1 argument at line " + std::to_string(node.line)};
+        if (node.children.size() != 2) throw Error{"'int' requires 1 argument at line " + std::to_string(node.line)};
         uint8_t srcReg = compileExpr(state, cs, node.children[1], dest);
         cs.chunk.emitABC(OP_INT, dest, srcReg, 0, node.line);
         return dest;
     }
 
     if (op == "size-of") {
-        if (node.children.size() < 2) throw BBL::Error{"'size-of' requires a type name at line " + std::to_string(node.line)};
-        if (node.children[1].type != NodeType::Symbol) throw BBL::Error{"'size-of' argument must be a type name at line " + std::to_string(node.line)};
+        if (node.children.size() < 2) throw Error{"'size-of' requires a type name at line " + std::to_string(node.line)};
+        if (node.children[1].type != NodeType::Symbol) throw Error{"'size-of' argument must be a type name at line " + std::to_string(node.line)};
         uint8_t nameIdx = addStrConst(state, cs, node.children[1].stringVal);
         cs.chunk.emitABC(OP_SIZEOF, dest, nameIdx, 0, node.line);
         return dest;
     }
 
     if (op == "exec") {
-        if (node.children.size() < 2) throw BBL::Error{"'exec' requires an argument at line " + std::to_string(node.line)};
+        if (node.children.size() < 2) throw Error{"'exec' requires an argument at line " + std::to_string(node.line)};
         uint8_t srcReg = compileExpr(state, cs, node.children[1], dest);
         cs.chunk.emitABC(OP_EXEC, dest, srcReg, 0, node.line);
         return dest;
     }
 
     if (op == "exec-file") {
-        if (node.children.size() < 2) throw BBL::Error{"'exec-file' requires an argument at line " + std::to_string(node.line)};
+        if (node.children.size() < 2) throw Error{"'exec-file' requires an argument at line " + std::to_string(node.line)};
         uint8_t srcReg = compileExpr(state, cs, node.children[1], dest);
         cs.chunk.emitABC(OP_EXECFILE, dest, srcReg, 0, node.line);
         return dest;
@@ -877,13 +880,13 @@ static void compileFn(BblState& state, CompilerState& cs, const AstNode& node, c
     fnCs.fnName = assignName;
     fnCs.compileDepth = cs.compileDepth;
 
-    if (node.children.size() < 3) throw BBL::Error{"fn requires a parameter list and body at line " + std::to_string(node.line)};
+    if (node.children.size() < 3) throw Error{"fn requires a parameter list and body at line " + std::to_string(node.line)};
     auto& paramList = node.children[1];
-    if (paramList.type != NodeType::List) throw BBL::Error{"fn: first argument must be a parameter list at line " + std::to_string(node.line)};
+    if (paramList.type != NodeType::List) throw Error{"fn: first argument must be a parameter list at line " + std::to_string(node.line)};
 
     fnCs.allocReg(); // R[0] = callee
     for (auto& p : paramList.children) {
-        if (p.type != NodeType::Symbol) throw BBL::Error{"fn: parameter must be a symbol at line " + std::to_string(node.line)};
+        if (p.type != NodeType::Symbol) throw Error{"fn: parameter must be a symbol at line " + std::to_string(node.line)};
         uint32_t symId = state.resolveSymbol(p.stringVal);
         uint8_t reg = fnCs.allocReg();
         fnCs.localRegs[symId] = reg;
@@ -948,3 +951,5 @@ Chunk compile(BblState& state, const std::vector<AstNode>& nodes) {
 
     return std::move(cs.chunk);
 }
+
+} // namespace bbl

@@ -3,6 +3,9 @@
 #include <cstring>
 #include <string>
 
+using namespace bbl;
+
+
 int main(int argc, char** argv) {
     int iterations = 10000;
     if (argc > 1) iterations = atoi(argv[1]);
@@ -42,7 +45,7 @@ int main(int argc, char** argv) {
 
         try {
             BblState bbl;
-            BBL::addStdLib(bbl);
+            addStdLib(bbl);
             bbl.exec(code);
         } catch (...) {}
         pass++;

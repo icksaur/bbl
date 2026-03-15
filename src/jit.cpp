@@ -9,6 +9,9 @@
 #include <vector>
 #include "compat.h"
 
+namespace bbl {
+
+
 // BblValue layout: NaN-boxed uint64_t, sizeof=8
 // Register R[i] at byte offset i*8 from rbx
 
@@ -66,7 +69,7 @@ static std::string jitValToStr(BblState& state, const BblValue& v);
 } while(0)
 
 #define JIT_TRY try {
-#define JIT_CATCH } catch (const BBL::Error& _e) { \
+#define JIT_CATCH } catch (const Error& _e) { \
     g_jitError = true; \
     g_jitErrorMsg = _e.what; \
     return; \
@@ -98,7 +101,7 @@ void jitSetGlobal(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcRe
 void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
     try {
     BblValue callee = regs[base];
-    if (callee.type() == BBL::Type::Fn && callee.isCFn()) {
+    if (callee.type() == Type::Fn && callee.isCFn()) {
         state->callArgs.clear();
         for (int i = 0; i < argc; i++)
             state->callArgs.push_back(regs[base + 1 + i]);
@@ -112,7 +115,7 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
         } else {
             regs[base] = state->hasReturn ? state->returnValue : BblValue::makeNull();
         }
-    } else if (callee.type() == BBL::Type::Fn && callee.isClosure()) {
+    } else if (callee.type() == Type::Fn && callee.isClosure()) {
         BblClosure* closure = callee.closureVal();
         int savedTrace = state->traceTop;
         if (state->traceTop < BblState::MAX_TRACE_DEPTH) {
@@ -138,12 +141,12 @@ void jitCall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
         regs[base] = fn(&regs[base], state, &closure->chunk);
         if (g_jitError) return;
         state->traceTop = savedTrace;
-    } else if (callee.type() == BBL::Type::Fn) {
+    } else if (callee.type() == Type::Fn) {
         JIT_ERROR(state, "raw BblFn calls not supported in JIT mode");
     } else {
         JIT_ERROR(state, "not callable");
     }
-    } catch (const BBL::Error& e) {
+    } catch (const Error& e) {
         JIT_ERROR(state, e.what);
     } catch (const BblTerminated&) {
         JIT_ERROR(state, "terminated");
@@ -223,7 +226,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
     BblValue* args = &regs[base + 1];
 
     // Dispatch through the same method tables as the interpreter
-    if (receiver.type() == BBL::Type::Table) {
+    if (receiver.type() == Type::Table) {
         BblTable* tbl = receiver.tableVal();
         if (methodStr == state->m.get) regs[base] = tbl->get(args[0]).value_or(static_cast<size_t>(argc) > 1 ? args[1] : BblValue::makeNull());
         else if (methodStr == state->m.set) { tbl->set(args[0], args[1]); regs[base] = BblValue::makeNull(); }
@@ -243,7 +246,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             tbl->ensureOrder();
             if (tbl->order) {
                 for (auto it = tbl->order->rbegin(); it != tbl->order->rend(); ++it) {
-                    if (it->type() == BBL::Type::Int) {
+                    if (it->type() == Type::Int) {
                         regs[base] = tbl->get(*it).value_or(BblValue::makeNull());
                         tbl->del(*it);
                         found = true;
@@ -260,7 +263,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             regs[base] = tbl->get(key).value_or(BblValue::makeNull());
         } else {
             auto val = tbl->get(BblValue::makeString(const_cast<BblString*>(methodStr)));
-            if (val.has_value() && val->type() == BBL::Type::Fn) {
+            if (val.has_value() && val->type() == Type::Fn) {
                 regs[base + 1] = BblValue::makeTable(tbl);
                 for (int i = 0; i < argc; i++) regs[base + 2 + i] = args[i];
                 regs[base] = val.value();
@@ -269,7 +272,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
                 JIT_ERROR(state, "unknown table method: " + methodStr->data);
             }
         }
-    } else if (receiver.type() == BBL::Type::Vector) {
+    } else if (receiver.type() == Type::Vector) {
         BblVec* vec = receiver.vectorVal();
         if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(vec->length()));
         else if (methodStr == state->m.push) { for (int i=0;i<argc;i++) state->packValue(vec, args[i]); regs[base] = BblValue::makeNull(); }
@@ -281,7 +284,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         else if (methodStr == state->m.at) regs[base] = state->readVecElem(vec, static_cast<size_t>(args[0].intVal()));
         else if (methodStr == state->m.set) { state->writeVecElem(vec, static_cast<size_t>(args[0].intVal()), args[1]); regs[base] = BblValue::makeNull(); }
         else if (methodStr == state->m.resize) {
-            if (args[0].type() != BBL::Type::Int) JIT_ERROR(state, "vector.resize: argument must be an integer");
+            if (args[0].type() != Type::Int) JIT_ERROR(state, "vector.resize: argument must be an integer");
             int64_t n = args[0].intVal();
             if (n < 0) JIT_ERROR(state, "vector.resize: size must be non-negative");
             vec->data.resize(static_cast<size_t>(n) * vec->elemSize, 0); regs[base] = BblValue::makeNull();
@@ -292,7 +295,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             vec->data.reserve(static_cast<size_t>(cap) * vec->elemSize); regs[base] = BblValue::makeNull();
         }
         else JIT_ERROR(state, "unknown vector method: " + methodStr->data);
-    } else if (receiver.type() == BBL::Type::String) {
+    } else if (receiver.type() == Type::String) {
         BblString* str = receiver.stringVal();
         switch (methodStr->methodId) {
         case MID_LENGTH: regs[base] = BblValue::makeInt(static_cast<int64_t>(str->data.size())); break;
@@ -346,7 +349,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         case MID_JOIN: {
             BblValue container = args[0];
             std::string result;
-            if (container.type() == BBL::Type::Table) {
+            if (container.type() == Type::Table) {
                 BblTable* tbl = container.tableVal();
                 for (int64_t i = 0; i < tbl->nextIntKey; i++) {
                     if (i > 0) result += str->data;
@@ -400,7 +403,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         }
         default: JIT_ERROR(state, "unknown string method: " + methodStr->data);
         }
-    } else if (receiver.type() == BBL::Type::Binary) {
+    } else if (receiver.type() == Type::Binary) {
         BblBinary* bin = receiver.binaryVal();
         if (methodStr == state->m.length) regs[base] = BblValue::makeInt(static_cast<int64_t>(bin->length()));
         else if (methodStr == state->m.at) {
@@ -412,7 +415,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             bin->materialize();
             int64_t idx = args[0].intVal();
             if (idx < 0 || static_cast<size_t>(idx) >= bin->length()) JIT_ERROR(state, "binary index out of bounds");
-            if (args[1].type() != BBL::Type::Int) JIT_ERROR(state, "binary.set: value must be integer");
+            if (args[1].type() != Type::Int) JIT_ERROR(state, "binary.set: value must be integer");
             bin->data[static_cast<size_t>(idx)] = static_cast<uint8_t>(args[1].intVal());
             regs[base] = BblValue::makeNull();
         } else if (methodStr == state->m.slice) {
@@ -428,7 +431,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             regs[base] = BblValue::makeNull();
         } else if (methodStr == state->m.copy_from) {
             bin->materialize();
-            if (args[0].type() != BBL::Type::Binary) JIT_ERROR(state, "binary.copy-from: source must be binary");
+            if (args[0].type() != Type::Binary) JIT_ERROR(state, "binary.copy-from: source must be binary");
             BblBinary* src = args[0].binaryVal();
             src->materialize();
             int64_t dO = argc > 1 ? args[1].intVal() : 0;
@@ -442,7 +445,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         } else if (methodStr->methodId == MID_AS) {
             bin->materialize();
             if (argc < 2) JIT_ERROR(state, "binary.as: requires type and offset");
-            if (args[0].type() != BBL::Type::String) JIT_ERROR(state, "binary.as: type must be a string");
+            if (args[0].type() != Type::String) JIT_ERROR(state, "binary.as: type must be a string");
             int64_t off = args[1].intVal();
             if (off < 0) JIT_ERROR(state, "binary.as: negative offset");
             CType ct; size_t sz; std::string sn;
@@ -463,7 +466,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         } else if (methodStr->methodId == MID_SET_AS) {
             bin->materialize();
             if (argc < 3) JIT_ERROR(state, "binary.set-as: requires type, offset, and value");
-            if (args[0].type() != BBL::Type::String) JIT_ERROR(state, "binary.set-as: type must be a string");
+            if (args[0].type() != Type::String) JIT_ERROR(state, "binary.set-as: type must be a string");
             int64_t off = args[1].intVal();
             if (off < 0) JIT_ERROR(state, "binary.set-as: negative offset");
             CType ct; size_t sz; std::string sn;
@@ -472,7 +475,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             if (static_cast<size_t>(off) + sz > bin->data.size()) JIT_ERROR(state, "binary.set-as: out of bounds");
             uint8_t* p = bin->data.data() + off;
             if (ct == CType::Struct) {
-                if (args[2].type() != BBL::Type::Struct) JIT_ERROR(state, "binary.set-as: value must be a struct");
+                if (args[2].type() != Type::Struct) JIT_ERROR(state, "binary.set-as: value must be a struct");
                 std::memcpy(p, args[2].structVal()->data.data(), sz);
             } else {
                 FieldDesc fd{"", 0, sz, ct, ""};
@@ -482,7 +485,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
             }
             regs[base] = BblValue::makeNull();
         } else JIT_ERROR(state, "unknown binary method: " + methodStr->data);
-    } else if (receiver.type() == BBL::Type::UserData) {
+    } else if (receiver.type() == Type::UserData) {
         auto it = receiver.userdataVal()->desc->methods.find(methodStr->data);
         if (it == receiver.userdataVal()->desc->methods.end())
             JIT_ERROR(state, "unknown method '" + methodStr->data + "'");
@@ -493,7 +496,7 @@ void jitMcall(BblValue* regs, BblState* state, uint8_t base, uint8_t argc, BblSt
         it->second(state);
         regs[base] = state->hasReturn ? state->returnValue : BblValue::makeNull();
     } else JIT_ERROR(state, "cannot call method on " + std::string(typeName(receiver.type())));
-    } catch (const BBL::Error& e) {
+    } catch (const Error& e) {
         JIT_ERROR(state, e.what);
     } catch (const BblTerminated&) {
         JIT_ERROR(state, "terminated");
@@ -507,17 +510,17 @@ void jitVector(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, u
     uint8_t argc = (packed >> 8) & 0xFF;
     uint8_t typeIdx = packed & 0xFF;
     std::string elemType = chunk->constants[typeIdx].stringVal()->data;
-    BBL::Type elemTypeTag = BBL::Type::Null;
+    Type elemTypeTag = Type::Null;
     size_t elemSize = 0;
     auto dit = state->structDescs().find(elemType);
-    if (dit != state->structDescs().end()) { elemTypeTag = BBL::Type::Struct; elemSize = dit->second.totalSize; }
-    else if (elemType == "int" || elemType == "int64") { elemTypeTag = BBL::Type::Int; elemSize = 8; }
-    else if (elemType == "float" || elemType == "float64") { elemTypeTag = BBL::Type::Float; elemSize = 8; }
-    else if (elemType == "float32") { elemTypeTag = BBL::Type::Float; elemSize = 4; }
-    else if (elemType == "int32") { elemTypeTag = BBL::Type::Int; elemSize = 4; }
+    if (dit != state->structDescs().end()) { elemTypeTag = Type::Struct; elemSize = dit->second.totalSize; }
+    else if (elemType == "int" || elemType == "int64") { elemTypeTag = Type::Int; elemSize = 8; }
+    else if (elemType == "float" || elemType == "float64") { elemTypeTag = Type::Float; elemSize = 8; }
+    else if (elemType == "float32") { elemTypeTag = Type::Float; elemSize = 4; }
+    else if (elemType == "int32") { elemTypeTag = Type::Int; elemSize = 4; }
     else JIT_ERROR(state, "unknown vector element type: " + elemType);
     BblVec* vec = state->allocVector(elemType, elemTypeTag, elemSize);
-    if (argc == 1 && regs[destReg + 1].type() == BBL::Type::Binary) {
+    if (argc == 1 && regs[destReg + 1].type() == Type::Binary) {
         BblBinary* bin = regs[destReg + 1].binaryVal();
         if (elemSize == 0 || bin->data.size() % elemSize != 0)
             JIT_ERROR(state, "vector: binary size " + std::to_string(bin->data.size()) +
@@ -533,9 +536,9 @@ void jitVector(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg, u
 void jitBinary(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
     JIT_TRY
     BblValue& arg = regs[srcReg];
-    if (arg.type() == BBL::Type::Vector) regs[destReg] = BblValue::makeBinary(state->allocBinary(arg.vectorVal()->data));
-    else if (arg.type() == BBL::Type::Struct) regs[destReg] = BblValue::makeBinary(state->allocBinary(arg.structVal()->data));
-    else if (arg.type() == BBL::Type::Int) regs[destReg] = BblValue::makeBinary(state->allocBinary(std::vector<uint8_t>(static_cast<size_t>(arg.intVal()), 0)));
+    if (arg.type() == Type::Vector) regs[destReg] = BblValue::makeBinary(state->allocBinary(arg.vectorVal()->data));
+    else if (arg.type() == Type::Struct) regs[destReg] = BblValue::makeBinary(state->allocBinary(arg.structVal()->data));
+    else if (arg.type() == Type::Int) regs[destReg] = BblValue::makeBinary(state->allocBinary(std::vector<uint8_t>(static_cast<size_t>(arg.intVal()), 0)));
     else JIT_ERROR(state, "binary: invalid argument type");
     JIT_CATCH
 }
@@ -543,11 +546,11 @@ void jitBinary(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg)
 void jitLength(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
     JIT_TRY
     BblValue& obj = regs[srcReg];
-    if (obj.type() == BBL::Type::Vector) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.vectorVal()->length()));
-    else if (obj.type() == BBL::Type::String) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.stringVal()->data.size()));
-    else if (obj.type() == BBL::Type::Binary) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.binaryVal()->length()));
-    else if (obj.type() == BBL::Type::Table) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.tableVal()->length()));
-    else if (obj.type() == BBL::Type::UserData) {
+    if (obj.type() == Type::Vector) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.vectorVal()->length()));
+    else if (obj.type() == Type::String) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.stringVal()->data.size()));
+    else if (obj.type() == Type::Binary) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.binaryVal()->length()));
+    else if (obj.type() == Type::Table) regs[destReg] = BblValue::makeInt(static_cast<int64_t>(obj.tableVal()->length()));
+    else if (obj.type() == Type::UserData) {
         auto it = obj.userdataVal()->desc->methods.find("length");
         if (it != obj.userdataVal()->desc->methods.end()) {
             state->callArgs.clear();
@@ -568,11 +571,11 @@ void jitGetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t destReg,
     uint8_t nameIdx = packed & 0xFF;
     BblValue& obj = regs[objReg];
     std::string fieldName = chunk->constants[nameIdx].stringVal()->data;
-    if (obj.type() == BBL::Type::Struct) {
+    if (obj.type() == Type::Struct) {
         for (auto& fd : obj.structVal()->desc->fields)
             if (fd.name == fieldName) { regs[destReg] = state->readField(obj.structVal(), fd); return; }
         JIT_ERROR(state, "struct has no field '" + fieldName + "'");
-    } else if (obj.type() == BBL::Type::Table) {
+    } else if (obj.type() == Type::Table) {
         regs[destReg] = obj.tableVal()->get(BblValue::makeString(state->intern(fieldName))).value_or(BblValue::makeNull());
     } else JIT_ERROR(state, "cannot access field");
     JIT_CATCH
@@ -584,10 +587,10 @@ void jitSetField(BblValue* regs, BblState* state, Chunk* chunk, uint8_t valReg, 
     uint8_t nameIdx = packed & 0xFF;
     BblValue& obj = regs[objReg];
     std::string fieldName = chunk->constants[nameIdx].stringVal()->data;
-    if (obj.type() == BBL::Type::Struct) {
+    if (obj.type() == Type::Struct) {
         for (auto& fd : obj.structVal()->desc->fields)
             if (fd.name == fieldName) { state->writeField(obj.structVal(), fd, regs[valReg]); return; }
-    } else if (obj.type() == BBL::Type::Table) {
+    } else if (obj.type() == Type::Table) {
         obj.tableVal()->set(BblValue::makeString(state->intern(fieldName)), regs[valReg]);
     }
     JIT_CATCH
@@ -600,8 +603,8 @@ void jitGetIndex(BblValue* regs, BblState* state, uint32_t packed, uint32_t unus
     uint8_t objReg = (packed >> 8) & 0xFF;
     uint8_t idxReg = packed & 0xFF;
     BblValue& obj = regs[objReg]; BblValue& idx = regs[idxReg];
-    if (obj.type() == BBL::Type::Vector) regs[destReg] = state->readVecElem(obj.vectorVal(), static_cast<size_t>(idx.intVal()));
-    else if (obj.type() == BBL::Type::Table) regs[destReg] = obj.tableVal()->get(idx).value_or(BblValue::makeNull());
+    if (obj.type() == Type::Vector) regs[destReg] = state->readVecElem(obj.vectorVal(), static_cast<size_t>(idx.intVal()));
+    else if (obj.type() == Type::Table) regs[destReg] = obj.tableVal()->get(idx).value_or(BblValue::makeNull());
     else JIT_ERROR(state, "cannot index");
     JIT_CATCH
 }
@@ -613,14 +616,14 @@ void jitSetIndex(BblValue* regs, BblState* state, uint32_t packed, uint32_t unus
     uint8_t objReg = (packed >> 8) & 0xFF;
     uint8_t idxReg = packed & 0xFF;
     BblValue& obj = regs[objReg]; BblValue& idx = regs[idxReg];
-    if (obj.type() == BBL::Type::Vector) state->writeVecElem(obj.vectorVal(), static_cast<size_t>(idx.intVal()), regs[valReg]);
-    else if (obj.type() == BBL::Type::Table) obj.tableVal()->set(idx, regs[valReg]);
+    if (obj.type() == Type::Vector) state->writeVecElem(obj.vectorVal(), static_cast<size_t>(idx.intVal()), regs[valReg]);
+    else if (obj.type() == Type::Table) obj.tableVal()->set(idx, regs[valReg]);
     JIT_CATCH
 }
 
 void jitExec(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
     JIT_TRY
-    if (regs[srcReg].type() != BBL::Type::String) JIT_ERROR(state, "exec: argument must be string");
+    if (regs[srcReg].type() != Type::String) JIT_ERROR(state, "exec: argument must be string");
     regs[destReg] = state->execExpr(regs[srcReg].stringVal()->data);
     JIT_CATCH
 }
@@ -628,9 +631,9 @@ void jitExec(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
 void jitNot(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
     (void)state;
     BblValue& v = regs[srcReg];
-    bool falsy = (v.type() == BBL::Type::Null) ||
-                 (v.type() == BBL::Type::Bool && !v.boolVal()) ||
-                 (v.type() == BBL::Type::Int && v.intVal() == 0);
+    bool falsy = (v.type() == Type::Null) ||
+                 (v.type() == Type::Bool && !v.boolVal()) ||
+                 (v.type() == Type::Int && v.intVal() == 0);
     regs[destReg] = BblValue::makeBool(falsy);
 }
 
@@ -658,7 +661,7 @@ void jitSizeof(BblValue* regs, BblState* state, Chunk* chunk, uint8_t A, uint8_t
     uint32_t symId = state->resolveSymbol(tname);
     if (state->vm) {
         auto git = state->vm->globals.find(symId);
-        if (git != state->vm->globals.end() && git->second.type() == BBL::Type::Struct) {
+        if (git != state->vm->globals.end() && git->second.type() == Type::Struct) {
             regs[A] = BblValue::makeInt(static_cast<int64_t>(git->second.structVal()->desc->totalSize));
             return;
         }
@@ -669,7 +672,7 @@ void jitSizeof(BblValue* regs, BblState* state, Chunk* chunk, uint8_t A, uint8_t
 
 void jitExecFile(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
     JIT_TRY
-    if (regs[srcReg].type() != BBL::Type::String) JIT_ERROR(state, "exec-file: argument must be string");
+    if (regs[srcReg].type() != Type::String) JIT_ERROR(state, "exec-file: argument must be string");
     regs[destReg] = state->execfileExpr(regs[srcReg].stringVal()->data);
     JIT_CATCH
 }
@@ -685,7 +688,7 @@ void jitStoreError(BblValue* regs, BblState* state, uint8_t destReg, uint8_t unu
 void jitWithCleanup(BblValue* regs, BblState* state, uint8_t varReg, uint8_t unused) {
     (void)unused; (void)state;
     BblValue& val = regs[varReg];
-    if (val.type() == BBL::Type::UserData && val.userdataVal()->desc &&
+    if (val.type() == Type::UserData && val.userdataVal()->desc &&
         val.userdataVal()->desc->destructor && val.userdataVal()->data) {
         val.userdataVal()->desc->destructor(val.userdataVal()->data);
         val.userdataVal()->data = nullptr;
@@ -696,11 +699,11 @@ void jitWithCleanup(BblValue* regs, BblState* state, uint8_t varReg, uint8_t unu
 void jitInt(BblValue* regs, BblState* state, uint8_t destReg, uint8_t srcReg) {
     (void)state;
     BblValue& arg = regs[srcReg];
-    if (arg.type() == BBL::Type::Int) { regs[destReg] = arg; return; }
-    if (arg.type() == BBL::Type::Float) {
+    if (arg.type() == Type::Int) { regs[destReg] = arg; return; }
+    if (arg.type() == Type::Float) {
         regs[destReg] = BblValue::makeInt(static_cast<int64_t>(arg.floatVal())); return;
     }
-    if (arg.type() == BBL::Type::String) {
+    if (arg.type() == Type::String) {
         const char* s = arg.stringVal()->data.c_str();
         char* end = nullptr;
         int64_t val = strtoll(s, &end, 10);
@@ -755,15 +758,15 @@ void jitDebugPause(BblValue* regs, BblState* state, Chunk* chunk, uint32_t) {
                 BblValue result = state->execExpr(code);
                 char buf[64];
                 switch (result.type()) {
-                    case BBL::Type::String: dbg->evalResult = result.stringVal()->data; break;
-                    case BBL::Type::Int: snprintf(buf, sizeof(buf), "%" PRId64, result.intVal()); dbg->evalResult = buf; break;
-                    case BBL::Type::Float: snprintf(buf, sizeof(buf), "%g", result.floatVal()); dbg->evalResult = buf; break;
-                    case BBL::Type::Bool: dbg->evalResult = result.boolVal() ? "true" : "false"; break;
-                    case BBL::Type::Null: dbg->evalResult = "null"; break;
+                    case Type::String: dbg->evalResult = result.stringVal()->data; break;
+                    case Type::Int: snprintf(buf, sizeof(buf), "%" PRId64, result.intVal()); dbg->evalResult = buf; break;
+                    case Type::Float: snprintf(buf, sizeof(buf), "%g", result.floatVal()); dbg->evalResult = buf; break;
+                    case Type::Bool: dbg->evalResult = result.boolVal() ? "true" : "false"; break;
+                    case Type::Null: dbg->evalResult = "null"; break;
                     default: dbg->evalResult = "<object>"; break;
                 }
                 dbg->evalError = false;
-            } catch (const BBL::Error& e) {
+            } catch (const Error& e) {
                 dbg->evalResult = e.what;
                 dbg->evalError = true;
             } catch (...) {
@@ -784,7 +787,7 @@ void jitDebugPause(BblValue* regs, BblState* state, Chunk* chunk, uint32_t) {
 
 void jitEnvGet(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg) {
     BblTable* env = nullptr;
-    if (regs[0].type() == BBL::Type::Fn && regs[0].isClosure())
+    if (regs[0].type() == Type::Fn && regs[0].isClosure())
         env = regs[0].closureVal()->env;
     if (!env) env = state->currentEnv;
     if (env) {
@@ -806,7 +809,7 @@ void jitEnvGet(BblValue* regs, BblState* state, uint32_t symId, uint8_t destReg)
 
 void jitEnvSet(BblValue* regs, BblState* state, uint32_t symId, uint8_t srcReg) {
     BblTable* env = nullptr;
-    if (regs[0].type() == BBL::Type::Fn && regs[0].isClosure())
+    if (regs[0].type() == Type::Fn && regs[0].isClosure())
         env = regs[0].closureVal()->env;
     if (!env) env = state->currentEnv;
     if (env) {
@@ -868,7 +871,7 @@ int64_t jitLoopTrace(BblValue* regs, BblState* state, Chunk* chunk, uint32_t loo
 }
 
 void jitTableGet(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
-    if (regs[base].type() != BBL::Type::Table) {
+    if (regs[base].type() != Type::Table) {
         jitMcall(regs, state, base, argc, state->m.get);
         return;
     }
@@ -878,7 +881,7 @@ void jitTableGet(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
 }
 
 void jitTableSet(BblValue* regs, BblState* state, uint8_t base, uint8_t argc) {
-    if (regs[base].type() != BBL::Type::Table) {
+    if (regs[base].type() != Type::Table) {
         jitMcall(regs, state, base, argc, state->m.set);
         return;
     }
@@ -893,11 +896,11 @@ void jitWriteBarrier(GcObj* container, BblState* state, uint64_t valBits, uint64
 
 static std::string jitValToStr(BblState& state, const BblValue& v) {
     switch (v.type()) {
-        case BBL::Type::Null: return "null";
-        case BBL::Type::Bool: return v.boolVal() ? "true" : "false";
-        case BBL::Type::Int: return std::to_string(v.intVal());
-        case BBL::Type::Float: { char b[64]; snprintf(b, 64, "%g", v.floatVal()); return b; }
-        case BBL::Type::String: return v.stringVal()->data;
+        case Type::Null: return "null";
+        case Type::Bool: return v.boolVal() ? "true" : "false";
+        case Type::Int: return std::to_string(v.intVal());
+        case Type::Float: { char b[64]; snprintf(b, 64, "%g", v.floatVal()); return b; }
+        case Type::String: return v.stringVal()->data;
         default: return "<object>";
     }
 }
@@ -909,16 +912,16 @@ void jitArith(BblValue* regs, BblState* state, uint8_t A, uint32_t packed) {
     uint8_t C = packed & 0xFF;
     BblValue& rb = regs[B]; BblValue& rc = regs[C];
     auto toF = [](const BblValue& v) -> double {
-        if (v.type() == BBL::Type::Int) return static_cast<double>(v.intVal());
+        if (v.type() == Type::Int) return static_cast<double>(v.intVal());
         return v.floatVal();
     };
     auto isNum = [](const BblValue& v) -> bool {
-        return v.type() == BBL::Type::Int || v.type() == BBL::Type::Float || v.isDouble();
+        return v.type() == Type::Int || v.type() == Type::Float || v.isDouble();
     };
     if (op == 0) {
-        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
+        if (rb.type() == Type::Int && rc.type() == Type::Int)
             regs[A] = BblValue::makeInt(rb.intVal() + rc.intVal());
-        else if (rb.type() == BBL::Type::String) {
+        else if (rb.type() == Type::String) {
             if (A == B && !rb.stringVal()->interned) {
                 rb.stringVal()->data += jitValToStr(*state, rc);
             } else {
@@ -929,17 +932,17 @@ void jitArith(BblValue* regs, BblState* state, uint8_t A, uint32_t packed) {
         else
             JIT_ERROR(state, "type mismatch in addition");
     } else if (op == 1) {
-        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
+        if (rb.type() == Type::Int && rc.type() == Type::Int)
             regs[A] = BblValue::makeInt(rb.intVal() - rc.intVal());
         else
             regs[A] = BblValue::makeFloat(toF(rb) - toF(rc));
     } else if (op == 2) {
-        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int)
+        if (rb.type() == Type::Int && rc.type() == Type::Int)
             regs[A] = BblValue::makeInt(rb.intVal() * rc.intVal());
         else
             regs[A] = BblValue::makeFloat(toF(rb) * toF(rc));
     } else if (op == 3) {
-        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int) {
+        if (rb.type() == Type::Int && rc.type() == Type::Int) {
             if (rc.intVal() == 0) JIT_ERROR(state, "division by zero");
             regs[A] = BblValue::makeInt(rb.intVal() / rc.intVal());
         } else {
@@ -948,7 +951,7 @@ void jitArith(BblValue* regs, BblState* state, uint8_t A, uint32_t packed) {
             regs[A] = BblValue::makeFloat(toF(rb) / denom);
         }
     } else {
-        if (rb.type() == BBL::Type::Int && rc.type() == BBL::Type::Int) {
+        if (rb.type() == Type::Int && rc.type() == Type::Int) {
             if (rc.intVal() == 0) JIT_ERROR(state, "division by zero");
             regs[A] = BblValue::makeInt(rb.intVal() % rc.intVal());
         } else
@@ -960,8 +963,8 @@ void jitBitwise(BblValue* regs, BblState* state, uint8_t A, uint32_t packed) {
     uint8_t op = (packed >> 16) & 0xFF;
     uint8_t B = (packed >> 8) & 0xFF;
     uint8_t C = packed & 0xFF;
-    if (regs[B].type() != BBL::Type::Int) JIT_ERROR(state, "bitwise ops require integers");
-    if (op != 3 && regs[C].type() != BBL::Type::Int) JIT_ERROR(state, "bitwise ops require integers");
+    if (regs[B].type() != Type::Int) JIT_ERROR(state, "bitwise ops require integers");
+    if (op != 3 && regs[C].type() != Type::Int) JIT_ERROR(state, "bitwise ops require integers");
     int64_t a = regs[B].intVal();
     if (op == 0) regs[A] = BblValue::makeInt(a & regs[C].intVal());
     else if (op == 1) regs[A] = BblValue::makeInt(a | regs[C].intVal());
@@ -1736,7 +1739,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
     vecDataSizeOff += vecDataOff;
     uint8_t vecGcType = static_cast<uint8_t>(GcType::Vec);
     size_t vecElemTypeTagOff = reinterpret_cast<char*>(&vecDummy.elemTypeTag) - reinterpret_cast<char*>(&vecDummy);
-    uint8_t vecIntTypeTag = static_cast<uint8_t>(BBL::Type::Int);
+    uint8_t vecIntTypeTag = static_cast<uint8_t>(Type::Int);
 
     BblString strDummy("test");
     size_t strDataOff = reinterpret_cast<char*>(&strDummy.data) - reinterpret_cast<char*>(&strDummy);
@@ -1877,8 +1880,8 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
         switch (op) {
         case OP_LOADK:
             emitLoadK(jit.buf, jit.size, A, &chunk.constants[Bx]);
-            if (chunk.constants[Bx].type() == BBL::Type::Int) knownTypes[A] = KnownType::Int;
-            else if (chunk.constants[Bx].type() == BBL::Type::Float) knownTypes[A] = KnownType::Float;
+            if (chunk.constants[Bx].type() == Type::Int) knownTypes[A] = KnownType::Int;
+            else if (chunk.constants[Bx].type() == Type::Float) knownTypes[A] = KnownType::Float;
             break;
         case OP_LOADINT:
             if (currentLoop && currentLoop->regMap[A] >= 0) {
@@ -2184,7 +2187,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                     if (bop == OP_DIV) loopHasFloat = true;
                     if (bop == OP_LOADK) {
                         uint16_t kidx = decodeBx(chunk.code[bi]);
-                        if (kidx < chunk.constants.size() && chunk.constants[kidx].type() == BBL::Type::Float)
+                        if (kidx < chunk.constants.size() && chunk.constants[kidx].type() == Type::Float)
                             loopHasFloat = true;
                     }
                 }
@@ -2232,13 +2235,13 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
             uint32_t symId = static_cast<uint32_t>(chunk.constants[Bx].intVal());
             if (self && state.vm) {
                 BblValue* gv = state.vm->getGlobal(symId);
-                if (gv && gv->type() == BBL::Type::Fn &&
+                if (gv && gv->type() == Type::Fn &&
                     gv->isClosure() && gv->closureVal() == self) {
                     selfRefRegs.insert(A);
                     hasSelfCalls = true;
                     break;
                 }
-                if (gv && gv->type() == BBL::Type::Fn && gv->isClosure()) {
+                if (gv && gv->type() == Type::Fn && gv->isClosure()) {
                     closureRegs[A] = gv->closureVal();
                 }
             }
@@ -2290,12 +2293,12 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 auto nit = state.symbolNames.find(symId);
                 if (nit != state.symbolNames.end()) {
                     auto v = self->env->get(BblValue::makeString(nit->second));
-                    if (v && v->type() == BBL::Type::Fn && v->isClosure() && v->closureVal() == self) {
+                    if (v && v->type() == Type::Fn && v->isClosure() && v->closureVal() == self) {
                         selfRefRegs.insert(A);
                         hasSelfCalls = true;
                         break;
                     }
-                    if (v && v->type() == BBL::Type::Fn && v->isClosure()) {
+                    if (v && v->type() == Type::Fn && v->isClosure()) {
                         closureRegs[A] = v->closureVal();
                     }
                 }
@@ -2920,7 +2923,7 @@ JitCode jitCompile(BblState& state, Chunk& chunk, BblClosure* self) {
                 emit(jit.buf, jit.size, jne_v, 2);
                 size_t vecSlowPatch2 = jit.size;
                 emit32(jit.buf, jit.size, 0);
-                // rax = BblVec*. Check elemTypeTag == Int (BBL::Type is 4 bytes)
+                // rax = BblVec*. Check elemTypeTag == Int (Type is 4 bytes)
                 uint8_t cmpElemType[] = { 0x83, 0xb8 };
                 emit(jit.buf, jit.size, cmpElemType, 2);
                 emit32(jit.buf, jit.size, vecElemTypeTagOff);
@@ -3249,7 +3252,7 @@ BblValue jitExecute(BblState& state, Chunk& chunk) {
 
     if (g_jitError) {
         g_jitError = false;
-        throw BBL::Error{g_jitErrorMsg};
+        throw Error{g_jitErrorMsg};
     }
 
     return result;
@@ -3260,7 +3263,7 @@ BblValue jitCallChecked(BblValue* regs, BblState* state, uint8_t argc) {
     jitCall(regs, state, 0, argc);
     if (g_jitError) {
         g_jitError = false;
-        throw BBL::Error{g_jitErrorMsg};
+        throw Error{g_jitErrorMsg};
     }
     return regs[0];
 }
@@ -3316,7 +3319,7 @@ Trace recordTrace(BblState& state, Chunk& chunk, size_t loopPc, BblValue* regs) 
             uint8_t A = decodeA(inst);
             uint8_t base = A + regBase;
             BblValue callee = regs[base];
-            if (callee.type() == BBL::Type::Fn && callee.isClosure()) {
+            if (callee.type() == Type::Fn && callee.isClosure()) {
                 BblClosure* closure = callee.closureVal();
                 callStack.push_back({curChunk, pc, regBase});
                 curChunk = &closure->chunk;
@@ -3362,9 +3365,9 @@ Trace recordTrace(BblState& state, Chunk& chunk, size_t loopPc, BblValue* regs) 
             int off = decodesBx(inst);
             uint8_t A = decodeA(inst);
             BblValue& cond = regs[A + regBase];
-            bool falsy = cond.type() == BBL::Type::Null ||
-                         (cond.type() == BBL::Type::Bool && !cond.boolVal()) ||
-                         (cond.type() == BBL::Type::Int && cond.intVal() == 0);
+            bool falsy = cond.type() == Type::Null ||
+                         (cond.type() == Type::Bool && !cond.boolVal()) ||
+                         (cond.type() == Type::Int && cond.intVal() == 0);
             bool taken = (op == OP_JMPFALSE) ? falsy : !falsy;
             trace.entries.back().branchTaken = taken;
             if (taken) pc = pc - 1 + 1 + off;
@@ -3497,7 +3500,7 @@ static void sinkAllocations(BblState& state, Trace& trace) {
                         uint8_t prevA = decodeA(prev.inst) + prev.regBase;
                         if (prevA == keyReg && prevOp == OP_LOADK) {
                             uint16_t kidx = decodeBx(prev.inst);
-                            if (prev.chunk->constants[kidx].type() == BBL::Type::String)
+                            if (prev.chunk->constants[kidx].type() == Type::String)
                                 fieldName = prev.chunk->constants[kidx].stringVal()->data;
                             break;
                         }
@@ -3680,7 +3683,7 @@ JitCode compileTrace(BblState& state, Trace& trace) {
             int origB = decodeB(inst) + entry.regBase;
             int origC = decodeC(inst);
             if (origC >= static_cast<int>(entry.chunk->constants.size()) ||
-                entry.chunk->constants[origC].type() != BBL::Type::Int) {
+                entry.chunk->constants[origC].type() != Type::Int) {
                 jitFree(jit); return JitCode{};
             }
             int64_t cv = entry.chunk->constants[origC].intVal();
@@ -4089,3 +4092,5 @@ TraceResult executeTrace(JitCode& jit, BblValue* regs, BblState* state) {
     int64_t result = fn(regs, state, nullptr);
     return {result == 0, static_cast<size_t>(result)};
 }
+
+} // namespace bbl

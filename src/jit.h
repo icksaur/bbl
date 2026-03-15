@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cstddef>
 
+namespace bbl {
+
 struct BblState;
 struct BblClosure;
 
@@ -66,3 +68,6 @@ Trace recordTrace(BblState& state, Chunk& chunk, size_t loopPc, BblValue* regs);
 void optimizeTrace(BblState& state, Trace& trace);
 JitCode compileTrace(BblState& state, Trace& trace);
 TraceResult executeTrace(JitCode& jit, BblValue* regs, BblState* state);
+
+
+} // namespace bbl

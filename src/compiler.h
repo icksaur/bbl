@@ -7,6 +7,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace bbl {
+
 struct BblState;
 struct AstNode;
 struct BblClosure;
@@ -33,7 +35,7 @@ struct CompilerState {
     std::vector<LoopInfo> loops;
 
     uint8_t allocReg() {
-        if (nextReg >= 255) throw BBL::Error{"too many registers (limit 255)"};
+        if (nextReg >= 255) throw Error{"too many registers (limit 255)"};
         uint8_t r = nextReg++;
         if (nextReg > maxRegs) maxRegs = nextReg;
         return r;
@@ -50,3 +52,6 @@ struct CompilerState {
 };
 
 Chunk compile(BblState& state, const std::vector<AstNode>& nodes);
+
+
+} // namespace bbl

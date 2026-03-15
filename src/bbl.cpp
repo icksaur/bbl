@@ -21,16 +21,18 @@
 #include "jit.h"
 #include "dap.h"
 
+namespace bbl {
+
 static thread_local BblState* g_currentBblState = nullptr;
 
 // ---------- BblValue ----------
 
 static bool bblValueKeyEqual(const BblValue& a, const BblValue& b) {
     if (a.type() != b.type()) return false;
-    if (a.type() == BBL::Type::String) return a.stringVal() == b.stringVal();
-    if (a.type() == BBL::Type::Int) return a.intVal() == b.intVal();
-    if (a.type() == BBL::Type::Float) return a.floatVal() == b.floatVal();
-    if (a.type() == BBL::Type::Bool) return a.boolVal() == b.boolVal();
+    if (a.type() == Type::String) return a.stringVal() == b.stringVal();
+    if (a.type() == Type::Int) return a.intVal() == b.intVal();
+    if (a.type() == Type::Float) return a.floatVal() == b.floatVal();
+    if (a.type() == Type::Bool) return a.boolVal() == b.boolVal();
     return false;
 }
 
@@ -74,18 +76,18 @@ static void tableGrow(BblTable* tbl) {
     tbl->capacity = static_cast<uint32_t>(newCap);
 }
 
-std::expected<BblValue, BBL::GetError> BblTable::get(const BblValue& key) const {
-    if (key.type() == BBL::Type::Int) {
+std::expected<BblValue, GetError> BblTable::get(const BblValue& key) const {
+    if (key.type() == Type::Int) {
         int64_t k = key.intVal();
         if (k >= 0 && static_cast<uint64_t>(k) < asize) {
             BblValue v = array[k];
             if (v.bits != 0) return v;
-            return std::unexpected(BBL::GetError::NotFound);
+            return std::unexpected(GetError::NotFound);
         }
     }
-    if (count == 0 || capacity == 0) return std::unexpected(BBL::GetError::NotFound);
+    if (count == 0 || capacity == 0) return std::unexpected(GetError::NotFound);
     auto* e = tableFindEntry(buckets, capacity, key);
-    if (!e || !e->isOccupied()) return std::unexpected(BBL::GetError::NotFound);
+    if (!e || !e->isOccupied()) return std::unexpected(GetError::NotFound);
     return e->val;
 }
 
@@ -100,7 +102,7 @@ void BblTable::arrayGrow(uint32_t minSize) {
 }
 
 void BblTable::set(const BblValue& key, const BblValue& val) {
-    if (key.type() == BBL::Type::Int) {
+    if (key.type() == Type::Int) {
         int64_t k = key.intVal();
         if (k >= 0 && k < 1000000) {
             if (static_cast<uint64_t>(k) >= asize) arrayGrow(static_cast<uint32_t>(k) + 1);
@@ -126,12 +128,12 @@ void BblTable::set(const BblValue& key, const BblValue& val) {
         count++;
         delete order; order = nullptr;
     }
-    if (key.type() == BBL::Type::Int && key.intVal() >= nextIntKey)
+    if (key.type() == Type::Int && key.intVal() >= nextIntKey)
         nextIntKey = key.intVal() + 1;
 }
 
 bool BblTable::has(const BblValue& key) const {
-    if (key.type() == BBL::Type::Int) {
+    if (key.type() == Type::Int) {
         int64_t k = key.intVal();
         if (k >= 0 && static_cast<uint64_t>(k) < asize) return array[k].bits != 0;
     }
@@ -141,7 +143,7 @@ bool BblTable::has(const BblValue& key) const {
 }
 
 bool BblTable::del(const BblValue& key) {
-    if (key.type() == BBL::Type::Int) {
+    if (key.type() == Type::Int) {
         int64_t k = key.intVal();
         if (k >= 0 && static_cast<uint64_t>(k) < asize && array[k].bits != 0) {
             array[k].bits = 0;
@@ -238,7 +240,7 @@ Token BblLexer::readString() {
         if (peek() == '\\') {
             advance();
             if (pos >= len) {
-                throw BBL::Error{"unterminated string at line " + std::to_string(startLine)};
+                throw Error{"unterminated string at line " + std::to_string(startLine)};
             }
             char esc = advance();
             switch (esc) {
@@ -249,14 +251,14 @@ Token BblLexer::readString() {
                 case 'r':  result += '\r'; break;
                 case '0':  result += '\0'; break;
                 default:
-                    throw BBL::Error{"unknown escape sequence '\\" + std::string(1, esc) + "' at line " + std::to_string(startLine)};
+                    throw Error{"unknown escape sequence '\\" + std::string(1, esc) + "' at line " + std::to_string(startLine)};
             }
         } else {
             result += advance();
         }
     }
     if (pos >= len) {
-        throw BBL::Error{"unterminated string at line " + std::to_string(startLine)};
+        throw Error{"unterminated string at line " + std::to_string(startLine)};
     }
     advance(); // skip closing "
     Token t;
@@ -300,12 +302,12 @@ Token BblLexer::readNumber() {
         t.type = TokenType::Float;
         auto [ptr, ec] = std::from_chars(src + start, src + pos, t.floatVal);
         if (ec != std::errc{})
-            throw BBL::Error{"invalid float at line " + std::to_string(startLine)};
+            throw Error{"invalid float at line " + std::to_string(startLine)};
     } else {
         t.type = TokenType::Int;
         auto [ptr, ec] = std::from_chars(src + start, src + pos, t.intVal);
         if (ec != std::errc{})
-            throw BBL::Error{"invalid integer at line " + std::to_string(startLine)};
+            throw Error{"invalid integer at line " + std::to_string(startLine)};
     }
     return t;
 }
@@ -318,19 +320,19 @@ Token BblLexer::readBinary() {
         pos++;
     }
     if (pos >= len || peek() != ':') {
-        throw BBL::Error{"invalid binary literal at line " + std::to_string(startLine)};
+        throw Error{"invalid binary literal at line " + std::to_string(startLine)};
     }
     size_t size;
     try {
         size = std::stoull(std::string(src + sizeStart, src + pos));
     } catch (const std::exception&) {
-        throw BBL::Error{"invalid binary literal size at line " + std::to_string(startLine)};
+        throw Error{"invalid binary literal size at line " + std::to_string(startLine)};
     }
     if (size > 100'000'000)
-        throw BBL::Error{"binary literal too large (limit 100MB) at line " + std::to_string(startLine)};
+        throw Error{"binary literal too large (limit 100MB) at line " + std::to_string(startLine)};
     pos++; // skip :
     if (static_cast<size_t>(len - pos) < size) {
-        throw BBL::Error{"binary literal: insufficient bytes at line " + std::to_string(startLine)};
+        throw Error{"binary literal: insufficient bytes at line " + std::to_string(startLine)};
     }
     Token t;
     t.type = TokenType::Binary;
@@ -350,18 +352,18 @@ Token BblLexer::readCompressedBinary() {
     int sizeStart = pos;
     while (pos < len && peek() >= '0' && peek() <= '9') pos++;
     if (pos >= len || peek() != ':')
-        throw BBL::Error{"invalid compressed binary literal at line " + std::to_string(startLine)};
+        throw Error{"invalid compressed binary literal at line " + std::to_string(startLine)};
     size_t size;
     try {
         size = std::stoull(std::string(src + sizeStart, src + pos));
     } catch (const std::exception&) {
-        throw BBL::Error{"invalid compressed binary literal size at line " + std::to_string(startLine)};
+        throw Error{"invalid compressed binary literal size at line " + std::to_string(startLine)};
     }
     if (size > 100'000'000)
-        throw BBL::Error{"compressed binary literal too large (limit 100MB) at line " + std::to_string(startLine)};
+        throw Error{"compressed binary literal too large (limit 100MB) at line " + std::to_string(startLine)};
     pos++; // skip :
     if (static_cast<size_t>(len - pos) < size)
-        throw BBL::Error{"compressed binary literal: insufficient bytes at line " + std::to_string(startLine)};
+        throw Error{"compressed binary literal: insufficient bytes at line " + std::to_string(startLine)};
     Token t;
     t.type = TokenType::Binary;
     t.binarySource = src + pos;
@@ -485,7 +487,7 @@ Token BblLexer::nextToken() {
         return t;
     }
 
-    throw BBL::Error{"unexpected character '" + std::string(1, c) + "' at line " + std::to_string(line)};
+    throw Error{"unexpected character '" + std::string(1, c) + "' at line " + std::to_string(line)};
 }
 
 // ---------- Parser ----------
@@ -493,7 +495,7 @@ Token BblLexer::nextToken() {
 static AstNode parseExpr(BblLexer& lexer, Token& tok, int depth = 0);
 
 static AstNode parsePrimary(BblLexer& lexer, Token& tok, int depth) {
-    if (depth > 256) throw BBL::Error{"parse error: nesting too deep (limit 256) at line " + std::to_string(tok.line)};
+    if (depth > 256) throw Error{"parse error: nesting too deep (limit 256) at line " + std::to_string(tok.line)};
     AstNode node;
     node.line = tok.line;
 
@@ -533,14 +535,14 @@ static AstNode parsePrimary(BblLexer& lexer, Token& tok, int depth) {
             tok = lexer.nextToken();
             while (tok.type != TokenType::RParen) {
                 if (tok.type == TokenType::Eof) {
-                    throw BBL::Error{"parse error: expected ')' to close '(' at line " + std::to_string(openLine) + ", got EOF at line " + std::to_string(lexer.currentLine())};
+                    throw Error{"parse error: expected ')' to close '(' at line " + std::to_string(openLine) + ", got EOF at line " + std::to_string(lexer.currentLine())};
                 }
                 node.children.push_back(parseExpr(lexer, tok, depth + 1));
             }
             break;
         }
         default:
-            throw BBL::Error{"parse error: unexpected token at line " + std::to_string(tok.line)};
+            throw Error{"parse error: unexpected token at line " + std::to_string(tok.line)};
     }
     return node;
 }
@@ -562,14 +564,14 @@ static AstNode parseExpr(BblLexer& lexer, Token& tok, int depth) {
                 dot.stringVal = "";           // sentinel: integer-dot
                 dot.intVal = field.intVal;
             } else {
-                throw BBL::Error{"parse error: expected field name or integer after '.' at line " + std::to_string(field.line)};
+                throw Error{"parse error: expected field name or integer after '.' at line " + std::to_string(field.line)};
             }
             dot.children.push_back(std::move(lhs));
             lhs = std::move(dot);
         } else if (next.type == TokenType::Colon) {
             Token field = lexer.nextToken();
             if (field.type != TokenType::Symbol) {
-                throw BBL::Error{"parse error: expected method name after ':' at line " + std::to_string(field.line)};
+                throw Error{"parse error: expected method name after ':' at line " + std::to_string(field.line)};
             }
             AstNode colon;
             colon.type = NodeType::ColonAccess;
@@ -594,7 +596,7 @@ std::vector<AstNode> parse(BblLexer& lexer) {
     Token tok = lexer.nextToken();
     while (tok.type != TokenType::Eof) {
         if (tok.type == TokenType::RParen) {
-            throw BBL::Error{"parse error: unexpected ')' at line " + std::to_string(tok.line)};
+            throw Error{"parse error: unexpected ')' at line " + std::to_string(tok.line)};
         }
         nodes.push_back(parseExpr(lexer, tok));
         // After parseExpr, tok holds the next unprocessed token
@@ -640,7 +642,7 @@ BblState::BblState() {
     defn("__with_cleanup", [](BblState* bbl) -> int {
         if (bbl->callArgs.empty()) return 0;
         BblValue& val = bbl->callArgs[0];
-        if (val.type() == BBL::Type::UserData && val.userdataVal()->desc &&
+        if (val.type() == Type::UserData && val.userdataVal()->desc &&
             val.userdataVal()->desc->destructor && val.userdataVal()->data) {
             val.userdataVal()->desc->destructor(val.userdataVal()->data);
             val.userdataVal()->data = nullptr;
@@ -649,14 +651,14 @@ BblState::BblState() {
     });
 
     defn("__with_rethrow", [](BblState* bbl) -> int {
-        if (!bbl->callArgs.empty() && bbl->callArgs[0].type() == BBL::Type::String)
-            throw BBL::Error{bbl->callArgs[0].stringVal()->data};
-        throw BBL::Error{"unknown error in with block"};
+        if (!bbl->callArgs.empty() && bbl->callArgs[0].type() == Type::String)
+            throw Error{bbl->callArgs[0].stringVal()->data};
+        throw Error{"unknown error in with block"};
     });
 
     defn("__with_typecheck", [](BblState* bbl) -> int {
-        if (bbl->callArgs.empty() || bbl->callArgs[0].type() != BBL::Type::UserData)
-            throw BBL::Error{"with: initializer must produce userdata"};
+        if (bbl->callArgs.empty() || bbl->callArgs[0].type() != Type::UserData)
+            throw Error{"with: initializer must produce userdata"};
         return 0;
     });
 }
@@ -724,10 +726,11 @@ BblString* BblState::allocString(std::string s) {
 
 #include <lz4frame.h>
 
+
 void BblBinary::materialize() {
     if (!lazySource) return;
     if (compressed) {
-        data = BBL::lz4Decompress(reinterpret_cast<const uint8_t*>(lazySource), lazySize);
+        data = lz4Decompress(reinterpret_cast<const uint8_t*>(lazySource), lazySize);
     } else {
         data.assign(reinterpret_cast<const uint8_t*>(lazySource),
                     reinterpret_cast<const uint8_t*>(lazySource) + lazySize);
@@ -745,7 +748,7 @@ size_t BblBinary::length() const {
     size_t ret = LZ4F_getFrameInfo(ctx, &info, lazySource, &consumed);
     LZ4F_freeDecompressionContext(ctx);
     if (LZ4F_isError(ret) || !info.contentSize)
-        throw BBL::Error{"compressed binary: invalid LZ4 frame"};
+        throw Error{"compressed binary: invalid LZ4 frame"};
     return static_cast<size_t>(info.contentSize);
 }
 
@@ -783,7 +786,7 @@ BblStruct* BblState::allocStruct(StructDesc* desc) {
     return s;
 }
 
-BblVec* BblState::allocVector(const std::string& elemType, BBL::Type elemTypeTag, size_t elemSize) {
+BblVec* BblState::allocVector(const std::string& elemType, Type elemTypeTag, size_t elemSize) {
     auto* v = new BblVec();
     v->elemType = elemType;
     v->elemTypeTag = elemTypeTag;
@@ -803,7 +806,7 @@ BblTable* BblState::allocTable() {
 BblUserData* BblState::allocUserData(const std::string& typeName, void* data) {
     auto it = userDataDescs().find(typeName);
     if (it == userDataDescs().end()) {
-        throw BBL::Error{"unknown userdata type: " + typeName};
+        throw Error{"unknown userdata type: " + typeName};
     }
     auto* u = new BblUserData();
     u->desc = &it->second;
@@ -820,12 +823,12 @@ static void gcMark(BblValue& val);
 
 static void gcMark(BblValue& val) {
     switch (val.type()) {
-        case BBL::Type::Binary:
+        case Type::Binary:
             if (val.binaryVal() && !val.binaryVal()->marked) {
                 val.binaryVal()->marked = true;
             }
             break;
-        case BBL::Type::Fn:
+        case Type::Fn:
             if (val.isClosure() && val.closureVal() && !val.closureVal()->marked) {
                 val.closureVal()->marked = true;
                 for (auto& cap : val.closureVal()->captures) {
@@ -842,17 +845,17 @@ static void gcMark(BblValue& val) {
                 }
             }
             break;
-        case BBL::Type::Struct:
+        case Type::Struct:
             if (val.structVal() && !val.structVal()->marked) {
                 val.structVal()->marked = true;
             }
             break;
-        case BBL::Type::Vector:
+        case Type::Vector:
             if (val.vectorVal() && !val.vectorVal()->marked) {
                 val.vectorVal()->marked = true;
             }
             break;
-        case BBL::Type::Table:
+        case Type::Table:
             if (val.tableVal() && !val.tableVal()->marked) {
                 val.tableVal()->marked = true;
                 for (uint32_t i = 0; i < val.tableVal()->asize; i++) {
@@ -872,12 +875,12 @@ static void gcMark(BblValue& val) {
                 }
             }
             break;
-        case BBL::Type::UserData:
+        case Type::UserData:
             if (val.userdataVal() && !val.userdataVal()->marked) {
                 val.userdataVal()->marked = true;
             }
             break;
-        case BBL::Type::String:
+        case Type::String:
             if (val.stringVal() && !val.stringVal()->marked) {
                 val.stringVal()->marked = true;
             }
@@ -891,13 +894,13 @@ static void gcMarkGen0(BblValue& val);
 
 static void gcMarkGen0(BblValue& val) {
     switch (val.type()) {
-        case BBL::Type::Binary:
+        case Type::Binary:
             if (val.binaryVal() && !val.binaryVal()->marked) {
                 if (val.binaryVal()->old) return;
                 val.binaryVal()->marked = true;
             }
             break;
-        case BBL::Type::Fn:
+        case Type::Fn:
             if (val.isClosure() && val.closureVal() && !val.closureVal()->marked) {
                 if (val.closureVal()->old) return;
                 val.closureVal()->marked = true;
@@ -914,15 +917,15 @@ static void gcMarkGen0(BblValue& val) {
                     gcMarkGen0(cap);
             }
             break;
-        case BBL::Type::Struct:
+        case Type::Struct:
             if (val.structVal() && !val.structVal()->marked && !val.structVal()->old)
                 val.structVal()->marked = true;
             break;
-        case BBL::Type::Vector:
+        case Type::Vector:
             if (val.vectorVal() && !val.vectorVal()->marked && !val.vectorVal()->old)
                 val.vectorVal()->marked = true;
             break;
-        case BBL::Type::Table:
+        case Type::Table:
             if (val.tableVal() && !val.tableVal()->marked) {
                 if (val.tableVal()->old) return;
                 val.tableVal()->marked = true;
@@ -943,11 +946,11 @@ static void gcMarkGen0(BblValue& val) {
                 }
             }
             break;
-        case BBL::Type::UserData:
+        case Type::UserData:
             if (val.userdataVal() && !val.userdataVal()->marked && !val.userdataVal()->old)
                 val.userdataVal()->marked = true;
             break;
-        case BBL::Type::String:
+        case Type::String:
             if (val.stringVal() && !val.stringVal()->marked && !val.stringVal()->old)
                 val.stringVal()->marked = true;
             break;
@@ -1123,19 +1126,19 @@ void BblState::gc() {
 
 // ---------- Eval ----------
 
-std::string typeName(BBL::Type t) {
+std::string typeName(Type t) {
     switch (t) {
-        case BBL::Type::Null:     return "null";
-        case BBL::Type::Bool:     return "bool";
-        case BBL::Type::Int:      return "int";
-        case BBL::Type::Float:    return "float";
-        case BBL::Type::String:   return "string";
-        case BBL::Type::Binary:   return "binary";
-        case BBL::Type::Fn:       return "fn";
-        case BBL::Type::Vector:   return "vector";
-        case BBL::Type::Table:    return "table";
-        case BBL::Type::Struct:   return "struct";
-        case BBL::Type::UserData: return "userdata";
+        case Type::Null:     return "null";
+        case Type::Bool:     return "bool";
+        case Type::Int:      return "int";
+        case Type::Float:    return "float";
+        case Type::String:   return "string";
+        case Type::Binary:   return "binary";
+        case Type::Fn:       return "fn";
+        case Type::Vector:   return "vector";
+        case Type::Table:    return "table";
+        case Type::Struct:   return "struct";
+        case Type::UserData: return "userdata";
     }
     return "unknown";
 }
@@ -1217,7 +1220,7 @@ BblValue BblState::execExpr(const std::string& source) {
 
 BblValue BblState::call(BblValue callable, std::span<const BblValue> args) {
     g_currentBblState = this;
-    if (args.size() > 255) throw BBL::Error{"call: too many arguments (limit 255)"};
+    if (args.size() > 255) throw Error{"call: too many arguments (limit 255)"};
     std::vector<BblValue> regs(args.size() + 256);
     regs[0] = callable;
     for (size_t i = 0; i < args.size(); i++)
@@ -1248,7 +1251,7 @@ std::filesystem::path BblState::resolveSandboxPath(const std::string& path, cons
     fs::path fspath(path);
     if (!allowOpenFilesystem) {
         if (fspath.is_absolute()) {
-            throw BBL::Error{std::string(context) + ": absolute paths not allowed: " + path};
+            throw Error{std::string(context) + ": absolute paths not allowed: " + path};
         }
         // Resolve relative to scriptDir, then canonicalize to catch traversal
         fs::path base = scriptDir.empty() ? fs::current_path() : fs::path(scriptDir);
@@ -1258,7 +1261,7 @@ std::filesystem::path BblState::resolveSandboxPath(const std::string& path, cons
         // The canonical path must start with the canonical base
         auto rel = canonical.lexically_relative(canonBase);
         if (rel.empty() || *rel.begin() == "..") {
-            throw BBL::Error{std::string(context) + ": path escapes sandbox: " + path};
+            throw Error{std::string(context) + ": path escapes sandbox: " + path};
         }
         return canonical;
     }
@@ -1277,7 +1280,7 @@ std::filesystem::path BblState::resolveSandboxPath(const std::string& path, cons
 void BblState::execfile(const std::string& path) {
     if (++execDepth > MAX_EXEC_DEPTH) {
         execDepth--;
-        throw BBL::Error{"execfile: recursion depth exceeded (max " + std::to_string(MAX_EXEC_DEPTH) + ")"};
+        throw Error{"execfile: recursion depth exceeded (max " + std::to_string(MAX_EXEC_DEPTH) + ")"};
     }
     struct DepthGuard { size_t& d; ~DepthGuard() { d--; } } guard{execDepth};
     namespace fs = std::filesystem;
@@ -1300,7 +1303,7 @@ void BblState::execfile(const std::string& path) {
         }
     }
     std::ifstream file(resolved, std::ios::binary);
-    if (!file.is_open()) throw BBL::Error{"file read failed: " + resolved.string()};
+    if (!file.is_open()) throw Error{"file read failed: " + resolved.string()};
     std::ostringstream ss;
     ss << file.rdbuf();
     std::string savedFile = currentFile;
@@ -1315,7 +1318,7 @@ void BblState::execfile(const std::string& path) {
 BblValue BblState::execfileExpr(const std::string& path) {
     if (++execDepth > MAX_EXEC_DEPTH) {
         execDepth--;
-        throw BBL::Error{"execfile: recursion depth exceeded"};
+        throw Error{"execfile: recursion depth exceeded"};
     }
     struct DepthGuard { size_t& d; ~DepthGuard() { d--; } } guard{execDepth};
     namespace fs = std::filesystem;
@@ -1338,7 +1341,7 @@ BblValue BblState::execfileExpr(const std::string& path) {
         }
     }
     std::ifstream file(resolved, std::ios::binary);
-    if (!file.is_open()) throw BBL::Error{"file read failed: " + resolved.string()};
+    if (!file.is_open()) throw Error{"file read failed: " + resolved.string()};
     std::ostringstream ss;
     ss << file.rdbuf();
     std::string savedFile = currentFile;
@@ -1358,63 +1361,63 @@ bool BblState::has(const std::string& name) const {
     return vm->globals.count(id) > 0;
 }
 
-std::expected<BBL::Type, BBL::GetError> BblState::getType(const std::string& name) const {
+std::expected<Type, GetError> BblState::getType(const std::string& name) const {
     uint32_t id = resolveSymbol(name);
     auto it = vm->globals.find(id);
     if (it == vm->globals.end()) {
-        return std::unexpected(BBL::GetError::NotFound);
+        return std::unexpected(GetError::NotFound);
     }
     return it->second.type();
 }
 
-std::expected<BblValue, BBL::GetError> BblState::get(const std::string& name) const {
+std::expected<BblValue, GetError> BblState::get(const std::string& name) const {
     uint32_t id = resolveSymbol(name);
     auto it = vm->globals.find(id);
     if (it == vm->globals.end()) {
-        return std::unexpected(BBL::GetError::NotFound);
+        return std::unexpected(GetError::NotFound);
     }
     return it->second;
 }
 
-std::expected<int64_t, BBL::GetError> BblState::getInt(const std::string& name) const {
+std::expected<int64_t, GetError> BblState::getInt(const std::string& name) const {
     auto v = get(name);
     if (!v) return std::unexpected(v.error());
-    if (v->type() != BBL::Type::Int) return std::unexpected(BBL::GetError::TypeMismatch);
+    if (v->type() != Type::Int) return std::unexpected(GetError::TypeMismatch);
     return v->intVal();
 }
 
-std::expected<double, BBL::GetError> BblState::getFloat(const std::string& name) const {
+std::expected<double, GetError> BblState::getFloat(const std::string& name) const {
     auto v = get(name);
     if (!v) return std::unexpected(v.error());
-    if (v->type() != BBL::Type::Float) return std::unexpected(BBL::GetError::TypeMismatch);
+    if (v->type() != Type::Float) return std::unexpected(GetError::TypeMismatch);
     return v->floatVal();
 }
 
-std::expected<bool, BBL::GetError> BblState::getBool(const std::string& name) const {
+std::expected<bool, GetError> BblState::getBool(const std::string& name) const {
     auto v = get(name);
     if (!v) return std::unexpected(v.error());
-    if (v->type() != BBL::Type::Bool) return std::unexpected(BBL::GetError::TypeMismatch);
+    if (v->type() != Type::Bool) return std::unexpected(GetError::TypeMismatch);
     return v->boolVal();
 }
 
-std::expected<const char*, BBL::GetError> BblState::getString(const std::string& name) const {
+std::expected<const char*, GetError> BblState::getString(const std::string& name) const {
     auto v = get(name);
     if (!v) return std::unexpected(v.error());
-    if (v->type() != BBL::Type::String) return std::unexpected(BBL::GetError::TypeMismatch);
+    if (v->type() != Type::String) return std::unexpected(GetError::TypeMismatch);
     return v->stringVal()->data.c_str();
 }
 
-std::expected<BblTable*, BBL::GetError> BblState::getTable(const std::string& name) const {
+std::expected<BblTable*, GetError> BblState::getTable(const std::string& name) const {
     auto v = get(name);
     if (!v) return std::unexpected(v.error());
-    if (v->type() != BBL::Type::Table) return std::unexpected(BBL::GetError::TypeMismatch);
+    if (v->type() != Type::Table) return std::unexpected(GetError::TypeMismatch);
     return v->tableVal();
 }
 
-std::expected<BblBinary*, BBL::GetError> BblState::getBinary(const std::string& name) const {
+std::expected<BblBinary*, GetError> BblState::getBinary(const std::string& name) const {
     auto v = get(name);
     if (!v) return std::unexpected(v.error());
-    if (v->type() != BBL::Type::Binary) return std::unexpected(BBL::GetError::TypeMismatch);
+    if (v->type() != Type::Binary) return std::unexpected(GetError::TypeMismatch);
     v->binaryVal()->materialize();
     return v->binaryVal();
 }
@@ -1463,59 +1466,59 @@ bool BblState::hasArg(int i) const {
     return i >= 0 && i < static_cast<int>(callArgs.size());
 }
 
-BBL::Type BblState::getArgType(int i) const {
+Type BblState::getArgType(int i) const {
     if (!hasArg(i)) {
-        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds (count " + std::to_string(argCount()) + ")"};
+        throw Error{"argument index " + std::to_string(i) + " out of bounds (count " + std::to_string(argCount()) + ")"};
     }
     return callArgs[i].type();
 }
 
 int64_t BblState::getIntArg(int i) const {
     if (!hasArg(i)) {
-        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds"};
+        throw Error{"argument index " + std::to_string(i) + " out of bounds"};
     }
-    if (callArgs[i].type() != BBL::Type::Int) {
-        throw BBL::Error{"type mismatch: expected int arg, got " + typeName(callArgs[i].type())};
+    if (callArgs[i].type() != Type::Int) {
+        throw Error{"type mismatch: expected int arg, got " + typeName(callArgs[i].type())};
     }
     return callArgs[i].intVal();
 }
 
 double BblState::getFloatArg(int i) const {
     if (!hasArg(i)) {
-        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds"};
+        throw Error{"argument index " + std::to_string(i) + " out of bounds"};
     }
-    if (callArgs[i].type() != BBL::Type::Float) {
-        throw BBL::Error{"type mismatch: expected float arg, got " + typeName(callArgs[i].type())};
+    if (callArgs[i].type() != Type::Float) {
+        throw Error{"type mismatch: expected float arg, got " + typeName(callArgs[i].type())};
     }
     return callArgs[i].floatVal();
 }
 
 bool BblState::getBoolArg(int i) const {
     if (!hasArg(i)) {
-        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds"};
+        throw Error{"argument index " + std::to_string(i) + " out of bounds"};
     }
-    if (callArgs[i].type() != BBL::Type::Bool) {
-        throw BBL::Error{"type mismatch: expected bool arg, got " + typeName(callArgs[i].type())};
+    if (callArgs[i].type() != Type::Bool) {
+        throw Error{"type mismatch: expected bool arg, got " + typeName(callArgs[i].type())};
     }
     return callArgs[i].boolVal();
 }
 
 const char* BblState::getStringArg(int i) const {
     if (!hasArg(i)) {
-        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds"};
+        throw Error{"argument index " + std::to_string(i) + " out of bounds"};
     }
-    if (callArgs[i].type() != BBL::Type::String) {
-        throw BBL::Error{"type mismatch: expected string arg, got " + typeName(callArgs[i].type())};
+    if (callArgs[i].type() != Type::String) {
+        throw Error{"type mismatch: expected string arg, got " + typeName(callArgs[i].type())};
     }
     return callArgs[i].stringVal()->data.c_str();
 }
 
 BblBinary* BblState::getBinaryArg(int i) const {
     if (!hasArg(i)) {
-        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds"};
+        throw Error{"argument index " + std::to_string(i) + " out of bounds"};
     }
-    if (callArgs[i].type() != BBL::Type::Binary) {
-        throw BBL::Error{"type mismatch: expected binary arg, got " + typeName(callArgs[i].type())};
+    if (callArgs[i].type() != Type::Binary) {
+        throw Error{"type mismatch: expected binary arg, got " + typeName(callArgs[i].type())};
     }
     auto* bin = callArgs[i].binaryVal();
     bin->materialize();
@@ -1524,7 +1527,7 @@ BblBinary* BblState::getBinaryArg(int i) const {
 
 BblValue BblState::getArg(int i) const {
     if (!hasArg(i)) {
-        throw BBL::Error{"argument index " + std::to_string(i) + " out of bounds"};
+        throw Error{"argument index " + std::to_string(i) + " out of bounds"};
     }
     return callArgs[i];
 }
@@ -1576,30 +1579,30 @@ void BblState::pushBinary(const uint8_t* ptr, size_t size) {
 
 // ---------- StructBuilder ----------
 
-BBL::StructBuilder::StructBuilder(const std::string& name, size_t totalSize)
+StructBuilder::StructBuilder(const std::string& name, size_t totalSize)
     : name_(name), totalSize_(totalSize) {}
 
-void BBL::StructBuilder::addField(const std::string& fname, size_t offset, size_t fsize, CType ct, const std::string& stName) {
+void StructBuilder::addField(const std::string& fname, size_t offset, size_t fsize, CType ct, const std::string& stName) {
     if (offset + fsize > totalSize_) {
-        throw BBL::Error{"struct " + name_ + ": field " + fname + " exceeds total size"};
+        throw Error{"struct " + name_ + ": field " + fname + " exceeds total size"};
     }
     for (auto& f : fields_) {
         size_t aStart = f.offset, aEnd = f.offset + f.size;
         size_t bStart = offset, bEnd = offset + fsize;
         if (aStart < bEnd && bStart < aEnd) {
-            throw BBL::Error{"struct " + name_ + ": field " + fname + " overlaps with " + f.name};
+            throw Error{"struct " + name_ + ": field " + fname + " overlaps with " + f.name};
         }
     }
     fields_.push_back(FieldDesc{fname, offset, fsize, ct, stName});
 }
 
-BBL::StructBuilder& BBL::StructBuilder::structField(const std::string& fname, size_t offset, const std::string& typeName) {
+StructBuilder& StructBuilder::structField(const std::string& fname, size_t offset, const std::string& typeName) {
     // size will be resolved at registration time
     addField(fname, offset, 0, CType::Struct, typeName);
     return *this;
 }
 
-void BblState::registerStruct(const BBL::StructBuilder& builder) {
+void BblState::registerStruct(const StructBuilder& builder) {
     auto it = structDescs().find(builder.name());
     if (it != structDescs().end()) {
         return; // silent no-op on re-registration
@@ -1612,7 +1615,7 @@ void BblState::registerStruct(const BBL::StructBuilder& builder) {
         if (fd.ctype == CType::Struct) {
             auto sit = structDescs().find(fd.structType);
             if (sit == structDescs().end()) {
-                throw BBL::Error{"struct " + desc.name + ": field " + fd.name + " references unknown struct " + fd.structType};
+                throw Error{"struct " + desc.name + ": field " + fd.name + " references unknown struct " + fd.structType};
             }
             fd.size = sit->second.totalSize;
         }
@@ -1621,7 +1624,7 @@ void BblState::registerStruct(const BBL::StructBuilder& builder) {
     structDescs()[desc.name] = std::move(desc);
 }
 
-void BblState::registerType(const BBL::TypeBuilder& builder) {
+void BblState::registerType(const TypeBuilder& builder) {
     auto it = userDataDescs().find(builder.name());
     if (it != userDataDescs().end()) {
         return;
@@ -1694,117 +1697,117 @@ BblValue BblState::readField(BblStruct* s, const FieldDesc& fd) {
         case CType::Struct: {
             auto sit = structDescs().find(fd.structType);
             if (sit == structDescs().end()) {
-                throw BBL::Error{"unknown struct type: " + fd.structType};
+                throw Error{"unknown struct type: " + fd.structType};
             }
             BblStruct* inner = allocStruct(&sit->second);
             memcpy(inner->data.data(), p, fd.size);
             return BblValue::makeStruct(inner);
         }
     }
-    throw BBL::Error{"internal: unknown CType"};
+    throw Error{"internal: unknown CType"};
 }
 
 void BblState::writeField(BblStruct* s, const FieldDesc& fd, const BblValue& val) {
     uint8_t* p = s->data.data() + fd.offset;
     switch (fd.ctype) {
         case CType::Int8: {
-            if (val.type() != BBL::Type::Int) {
-                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type())};
+            if (val.type() != Type::Int) {
+                throw Error{"type mismatch: expected int, got " + typeName(val.type())};
             }
             int8_t v = static_cast<int8_t>(val.intVal());
             memcpy(p, &v, 1);
             return;
         }
         case CType::Uint8: {
-            if (val.type() != BBL::Type::Int) {
-                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type())};
+            if (val.type() != Type::Int) {
+                throw Error{"type mismatch: expected int, got " + typeName(val.type())};
             }
             uint8_t v = static_cast<uint8_t>(val.intVal());
             memcpy(p, &v, 1);
             return;
         }
         case CType::Int16: {
-            if (val.type() != BBL::Type::Int) {
-                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type())};
+            if (val.type() != Type::Int) {
+                throw Error{"type mismatch: expected int, got " + typeName(val.type())};
             }
             int16_t v = static_cast<int16_t>(val.intVal());
             memcpy(p, &v, 2);
             return;
         }
         case CType::Uint16: {
-            if (val.type() != BBL::Type::Int) {
-                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type())};
+            if (val.type() != Type::Int) {
+                throw Error{"type mismatch: expected int, got " + typeName(val.type())};
             }
             uint16_t v = static_cast<uint16_t>(val.intVal());
             memcpy(p, &v, 2);
             return;
         }
         case CType::Float32: {
-            if (val.type() == BBL::Type::Float) {
+            if (val.type() == Type::Float) {
                 float v = static_cast<float>(val.floatVal());
                 memcpy(p, &v, sizeof(float));
-            } else if (val.type() == BBL::Type::Int) {
+            } else if (val.type() == Type::Int) {
                 float v = static_cast<float>(val.intVal());
                 memcpy(p, &v, sizeof(float));
             } else {
-                throw BBL::Error{"type mismatch: expected numeric, got " + typeName(val.type())};
+                throw Error{"type mismatch: expected numeric, got " + typeName(val.type())};
             }
             return;
         }
         case CType::Float64: {
-            if (val.type() == BBL::Type::Float) {
+            if (val.type() == Type::Float) {
                 auto tmp = val.floatVal();
                 memcpy(p, &tmp, sizeof(double));
-            } else if (val.type() == BBL::Type::Int) {
+            } else if (val.type() == Type::Int) {
                 double v = static_cast<double>(val.intVal());
                 memcpy(p, &v, sizeof(double));
             } else {
-                throw BBL::Error{"type mismatch: expected numeric, got " + typeName(val.type())};
+                throw Error{"type mismatch: expected numeric, got " + typeName(val.type())};
             }
             return;
         }
         case CType::Int32: {
-            if (val.type() != BBL::Type::Int) {
-                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type())};
+            if (val.type() != Type::Int) {
+                throw Error{"type mismatch: expected int, got " + typeName(val.type())};
             }
             int32_t v = static_cast<int32_t>(val.intVal());
             memcpy(p, &v, sizeof(int32_t));
             return;
         }
         case CType::Uint32: {
-            if (val.type() != BBL::Type::Int) {
-                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type())};
+            if (val.type() != Type::Int) {
+                throw Error{"type mismatch: expected int, got " + typeName(val.type())};
             }
             uint32_t v = static_cast<uint32_t>(val.intVal());
             memcpy(p, &v, sizeof(uint32_t));
             return;
         }
         case CType::Int64: {
-            if (val.type() != BBL::Type::Int) {
-                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type())};
+            if (val.type() != Type::Int) {
+                throw Error{"type mismatch: expected int, got " + typeName(val.type())};
             }
             { auto tmp = val.intVal(); memcpy(p, &tmp, sizeof(int64_t)); }
             return;
         }
         case CType::Uint64: {
-            if (val.type() != BBL::Type::Int) {
-                throw BBL::Error{"type mismatch: expected int, got " + typeName(val.type())};
+            if (val.type() != Type::Int) {
+                throw Error{"type mismatch: expected int, got " + typeName(val.type())};
             }
             uint64_t v = static_cast<uint64_t>(val.intVal());
             memcpy(p, &v, sizeof(uint64_t));
             return;
         }
         case CType::Bool: {
-            if (val.type() != BBL::Type::Bool) {
-                throw BBL::Error{"type mismatch: expected bool, got " + typeName(val.type())};
+            if (val.type() != Type::Bool) {
+                throw Error{"type mismatch: expected bool, got " + typeName(val.type())};
             }
             uint8_t v = val.boolVal() ? 1 : 0;
             *p = v;
             return;
         }
         case CType::Struct: {
-            if (val.type() != BBL::Type::Struct || val.structVal()->desc->name != fd.structType) {
-                throw BBL::Error{"type mismatch: expected struct " + fd.structType};
+            if (val.type() != Type::Struct || val.structVal()->desc->name != fd.structType) {
+                throw Error{"type mismatch: expected struct " + fd.structType};
             }
             memcpy(p, val.structVal()->data.data(), fd.size);
             return;
@@ -1814,7 +1817,7 @@ void BblState::writeField(BblStruct* s, const FieldDesc& fd, const BblValue& val
 
 BblValue BblState::constructStruct(StructDesc* desc, const std::vector<BblValue>& args, int callLine) {
     if (args.size() != desc->fields.size()) {
-        throw BBL::Error{"struct " + desc->name + ": expected " + std::to_string(desc->fields.size())
+        throw Error{"struct " + desc->name + ": expected " + std::to_string(desc->fields.size())
                          + " argument(s), got " + std::to_string(args.size())};
     }
     BblStruct* s = allocStruct(desc);
@@ -1828,7 +1831,7 @@ BblValue BblState::constructStruct(StructDesc* desc, const std::vector<BblValue>
 
 static size_t toIndex(int64_t val, size_t length, const char* context) {
     if (val < 0 || static_cast<size_t>(val) >= length) {
-        throw BBL::Error{std::string(context) + ": index " + std::to_string(val)
+        throw Error{std::string(context) + ": index " + std::to_string(val)
                          + " out of bounds (length " + std::to_string(length) + ")"};
     }
     return static_cast<size_t>(val);
@@ -1836,68 +1839,68 @@ static size_t toIndex(int64_t val, size_t length, const char* context) {
 
 BblValue BblState::readVecElem(BblVec* vec, size_t i) {
     if (i >= vec->length()) {
-        throw BBL::Error{"vector index " + std::to_string(i) + " out of bounds (length " + std::to_string(vec->length()) + ")"};
+        throw Error{"vector index " + std::to_string(i) + " out of bounds (length " + std::to_string(vec->length()) + ")"};
     }
     const uint8_t* p = vec->at(i);
     switch (vec->elemTypeTag) {
-        case BBL::Type::Int: {
+        case Type::Int: {
             int64_t v;
             memcpy(&v, p, sizeof(int64_t));
             return BblValue::makeInt(v);
         }
-        case BBL::Type::Float: {
+        case Type::Float: {
             double v;
             memcpy(&v, p, sizeof(double));
             return BblValue::makeFloat(v);
         }
-        case BBL::Type::Bool: {
+        case Type::Bool: {
             return BblValue::makeBool(*p != 0);
         }
-        case BBL::Type::Struct: {
+        case Type::Struct: {
             auto sit = structDescs().find(vec->elemType);
             if (sit == structDescs().end()) {
-                throw BBL::Error{"unknown struct type: " + vec->elemType};
+                throw Error{"unknown struct type: " + vec->elemType};
             }
             BblStruct* s = allocStruct(&sit->second);
             memcpy(s->data.data(), p, vec->elemSize);
             return BblValue::makeStruct(s);
         }
         default:
-            throw BBL::Error{"internal: unsupported vector element type"};
+            throw Error{"internal: unsupported vector element type"};
     }
 }
 
 void BblState::writeVecElem(BblVec* vec, size_t i, const BblValue& val) {
     if (i >= vec->length()) {
-        throw BBL::Error{"vector index " + std::to_string(i) + " out of bounds"};
+        throw Error{"vector index " + std::to_string(i) + " out of bounds"};
     }
     uint8_t* p = vec->data.data() + i * vec->elemSize;
     switch (vec->elemTypeTag) {
-        case BBL::Type::Int:
-            if (val.type() != BBL::Type::Int)
-                throw BBL::Error{"vector type mismatch: expected int, got " + typeName(val.type())};
+        case Type::Int:
+            if (val.type() != Type::Int)
+                throw Error{"vector type mismatch: expected int, got " + typeName(val.type())};
             { auto tmp = val.intVal(); memcpy(p, &tmp, sizeof(int64_t)); }
             return;
-        case BBL::Type::Float: {
+        case Type::Float: {
             double v;
-            if (val.type() == BBL::Type::Float) v = val.floatVal();
-            else if (val.type() == BBL::Type::Int) v = static_cast<double>(val.intVal());
-            else throw BBL::Error{"vector type mismatch: expected float, got " + typeName(val.type())};
+            if (val.type() == Type::Float) v = val.floatVal();
+            else if (val.type() == Type::Int) v = static_cast<double>(val.intVal());
+            else throw Error{"vector type mismatch: expected float, got " + typeName(val.type())};
             memcpy(p, &v, sizeof(double));
             return;
         }
-        case BBL::Type::Bool:
-            if (val.type() != BBL::Type::Bool)
-                throw BBL::Error{"vector type mismatch: expected bool, got " + typeName(val.type())};
+        case Type::Bool:
+            if (val.type() != Type::Bool)
+                throw Error{"vector type mismatch: expected bool, got " + typeName(val.type())};
             *p = val.boolVal() ? 1 : 0;
             return;
-        case BBL::Type::Struct:
-            if (val.type() != BBL::Type::Struct || val.structVal()->desc->name != vec->elemType)
-                throw BBL::Error{"vector type mismatch: expected struct " + vec->elemType};
+        case Type::Struct:
+            if (val.type() != Type::Struct || val.structVal()->desc->name != vec->elemType)
+                throw Error{"vector type mismatch: expected struct " + vec->elemType};
             memcpy(p, val.structVal()->data.data(), vec->elemSize);
             return;
         default:
-            throw BBL::Error{"internal: unsupported vector element type"};
+            throw Error{"internal: unsupported vector element type"};
     }
 }
 
@@ -1906,46 +1909,46 @@ void BblState::packValue(BblVec* vec, const BblValue& val) {
     vec->data.resize(oldSize + vec->elemSize, 0);
     uint8_t* p = vec->data.data() + oldSize;
     switch (vec->elemTypeTag) {
-        case BBL::Type::Int: {
-            if (val.type() != BBL::Type::Int) {
+        case Type::Int: {
+            if (val.type() != Type::Int) {
                 vec->data.resize(oldSize);
-                throw BBL::Error{"vector type mismatch: expected int, got " + typeName(val.type())};
+                throw Error{"vector type mismatch: expected int, got " + typeName(val.type())};
             }
             { auto tmp = val.intVal(); memcpy(p, &tmp, sizeof(int64_t)); }
             return;
         }
-        case BBL::Type::Float: {
+        case Type::Float: {
             double v;
-            if (val.type() == BBL::Type::Float) {
+            if (val.type() == Type::Float) {
                 v = val.floatVal();
-            } else if (val.type() == BBL::Type::Int) {
+            } else if (val.type() == Type::Int) {
                 v = static_cast<double>(val.intVal());
             } else {
                 vec->data.resize(oldSize);
-                throw BBL::Error{"vector type mismatch: expected float, got " + typeName(val.type())};
+                throw Error{"vector type mismatch: expected float, got " + typeName(val.type())};
             }
             memcpy(p, &v, sizeof(double));
             return;
         }
-        case BBL::Type::Bool: {
-            if (val.type() != BBL::Type::Bool) {
+        case Type::Bool: {
+            if (val.type() != Type::Bool) {
                 vec->data.resize(oldSize);
-                throw BBL::Error{"vector type mismatch: expected bool, got " + typeName(val.type())};
+                throw Error{"vector type mismatch: expected bool, got " + typeName(val.type())};
             }
             *p = val.boolVal() ? 1 : 0;
             return;
         }
-        case BBL::Type::Struct: {
-            if (val.type() != BBL::Type::Struct || val.structVal()->desc->name != vec->elemType) {
+        case Type::Struct: {
+            if (val.type() != Type::Struct || val.structVal()->desc->name != vec->elemType) {
                 vec->data.resize(oldSize);
-                throw BBL::Error{"vector type mismatch: expected struct " + vec->elemType};
+                throw Error{"vector type mismatch: expected struct " + vec->elemType};
             }
             memcpy(p, val.structVal()->data.data(), vec->elemSize);
             return;
         }
         default:
             vec->data.resize(oldSize);
-            throw BBL::Error{"internal: unsupported vector element type"};
+            throw Error{"internal: unsupported vector element type"};
     }
 }
 
@@ -1977,30 +1980,30 @@ void BblState::printBacktrace(const std::string& what) {
 static std::string valueToString(const BblValue& val) {
     char buf[64];
     switch (val.type()) {
-        case BBL::Type::String:
+        case Type::String:
             return val.stringVal()->data;
-        case BBL::Type::Int:
+        case Type::Int:
             snprintf(buf, sizeof(buf), "%" PRId64, val.intVal());
             return buf;
-        case BBL::Type::Float:
+        case Type::Float:
             snprintf(buf, sizeof(buf), "%g", val.floatVal());
             return buf;
-        case BBL::Type::Bool:
+        case Type::Bool:
             return val.boolVal() ? "true" : "false";
-        case BBL::Type::Null:
+        case Type::Null:
             return "null";
-        case BBL::Type::Binary:
+        case Type::Binary:
             snprintf(buf, sizeof(buf), "<binary %zu bytes>", val.binaryVal()->length());
             return buf;
-        case BBL::Type::Fn:
+        case Type::Fn:
             return val.isCFn() ? "<cfn>" : "<fn>";
-        case BBL::Type::Table:
+        case Type::Table:
             return "<table length=" + std::to_string(val.tableVal()->length()) + ">";
-        case BBL::Type::Vector:
+        case Type::Vector:
             return "<vector " + val.vectorVal()->elemType + " length=" + std::to_string(val.vectorVal()->length()) + ">";
-        case BBL::Type::Struct:
+        case Type::Struct:
             return "<struct " + val.structVal()->desc->name + ">";
-        case BBL::Type::UserData:
+        case Type::UserData:
             return "<userdata " + val.userdataVal()->desc->name + ">";
         default:
             return "<unknown>";
@@ -2021,80 +2024,80 @@ static int bblPrint(BblState* bbl) {
 }
 
 static int bblStr(BblState* bbl) {
-    if (bbl->argCount() != 1) throw BBL::Error{"str requires 1 argument"};
+    if (bbl->argCount() != 1) throw Error{"str requires 1 argument"};
     std::string s = valueToString(bbl->getArg(0));
     bbl->pushString(s.c_str());
     return 1;
 }
 
 static int bblTypeof(BblState* bbl) {
-    if (bbl->argCount() != 1) throw BBL::Error{"typeof requires 1 argument"};
+    if (bbl->argCount() != 1) throw Error{"typeof requires 1 argument"};
     bbl->pushString(typeName(bbl->getArg(0).type()).c_str());
     return 1;
 }
 
 static int bblInt(BblState* bbl) {
-    if (bbl->argCount() != 1) throw BBL::Error{"int requires 1 argument"};
+    if (bbl->argCount() != 1) throw Error{"int requires 1 argument"};
     BblValue arg = bbl->getArg(0);
     switch (arg.type()) {
-        case BBL::Type::Int:
+        case Type::Int:
             bbl->pushInt(arg.intVal());
             return 1;
-        case BBL::Type::Float:
+        case Type::Float:
             bbl->pushInt(static_cast<int64_t>(arg.floatVal()));
             return 1;
-        case BBL::Type::String: {
+        case Type::String: {
             const char* str = arg.stringVal()->data.c_str();
             char* end = nullptr;
             errno = 0;
             int64_t val = strtoll(str, &end, 10);
             if (end == str || *end != '\0') {
-                throw BBL::Error{"int: cannot parse \"" + arg.stringVal()->data + "\""};
+                throw Error{"int: cannot parse \"" + arg.stringVal()->data + "\""};
             }
             if (errno == ERANGE) {
-                throw BBL::Error{"int: overflow parsing \"" + arg.stringVal()->data + "\""};
+                throw Error{"int: overflow parsing \"" + arg.stringVal()->data + "\""};
             }
             bbl->pushInt(val);
             return 1;
         }
         default:
-            throw BBL::Error{"int: cannot convert " + typeName(arg.type()) + " to int"};
+            throw Error{"int: cannot convert " + typeName(arg.type()) + " to int"};
     }
 }
 
 static int bblFloat(BblState* bbl) {
-    if (bbl->argCount() != 1) throw BBL::Error{"float requires 1 argument"};
+    if (bbl->argCount() != 1) throw Error{"float requires 1 argument"};
     BblValue arg = bbl->getArg(0);
     switch (arg.type()) {
-        case BBL::Type::Float:
+        case Type::Float:
             bbl->pushFloat(arg.floatVal());
             return 1;
-        case BBL::Type::Int:
+        case Type::Int:
             bbl->pushFloat(static_cast<double>(arg.intVal()));
             return 1;
-        case BBL::Type::String: {
+        case Type::String: {
             const char* str = arg.stringVal()->data.c_str();
             char* end = nullptr;
             errno = 0;
             double val = strtod(str, &end);
             if (end == str || *end != '\0') {
-                throw BBL::Error{"float: cannot parse \"" + arg.stringVal()->data + "\""};
+                throw Error{"float: cannot parse \"" + arg.stringVal()->data + "\""};
             }
             if (errno == ERANGE) {
-                throw BBL::Error{"float: overflow parsing \"" + arg.stringVal()->data + "\""};
+                throw Error{"float: overflow parsing \"" + arg.stringVal()->data + "\""};
             }
             bbl->pushFloat(val);
             return 1;
         }
         default:
-            throw BBL::Error{"float: cannot convert " + typeName(arg.type()) + " to float"};
+            throw Error{"float: cannot convert " + typeName(arg.type()) + " to float"};
     }
 }
 
 static int bblFmt(BblState* bbl) {
-    if (bbl->argCount() < 1) throw BBL::Error{"fmt requires at least 1 argument (format string)"};
+    if (bbl->argCount() < 1) throw Error{"fmt requires at least 1 argument (format string)"};
     BblValue fmtArg = bbl->getArg(0);
-    if (fmtArg.type() != BBL::Type::String) throw BBL::Error{"fmt: first argument must be a string"};
+    if (fmtArg.type() != Type::String) throw Error{"fmt: first argument must be a string"};
     const std::string& fmt = fmtArg.stringVal()->data;
 
     std::string result;
@@ -2110,20 +2113,20 @@ static int bblFmt(BblState* bbl) {
                 i++;
             } else if (i + 1 < fmt.size() && fmt[i + 1] == '}') {
                 if (argIdx >= argCount) {
-                    throw BBL::Error{"fmt: not enough arguments for format string"};
+                    throw Error{"fmt: not enough arguments for format string"};
                 }
                 result += valueToString(bbl->getArg(argIdx));
                 argIdx++;
                 i++;
             } else {
-                throw BBL::Error{"fmt: lone '{' in format string"};
+                throw Error{"fmt: lone '{' in format string"};
             }
         } else if (c == '}') {
             if (i + 1 < fmt.size() && fmt[i + 1] == '}') {
                 result += '}';
                 i++;
             } else {
-                throw BBL::Error{"fmt: lone '}' in format string"};
+                throw Error{"fmt: lone '}' in format string"};
             }
         } else {
             result += c;
@@ -2131,14 +2134,14 @@ static int bblFmt(BblState* bbl) {
     }
 
     if (argIdx != argCount) {
-        throw BBL::Error{"fmt: too many arguments for format string"};
+        throw Error{"fmt: too many arguments for format string"};
     }
 
     bbl->pushString(result.c_str());
     return 1;
 }
 
-void BBL::addPrint(BblState& bbl) {
+void addPrint(BblState& bbl) {
     bbl.defn("print", bblPrint);
     bbl.defn("str", bblStr);
     bbl.defn("type-of", bblTypeof);
@@ -2151,14 +2154,14 @@ void BBL::addPrint(BblState& bbl) {
 
 static int bblFilebytes(BblState* bbl) {
     if (bbl->argCount() < 1) {
-        throw BBL::Error{"filebytes requires a path argument"};
+        throw Error{"filebytes requires a path argument"};
     }
     const char* path = bbl->getStringArg(0);
     namespace fs = std::filesystem;
     fs::path resolved = bbl->resolveSandboxPath(path, "filebytes");
     std::ifstream file(resolved, std::ios::binary);
     if (!file.is_open()) {
-        throw BBL::Error{"filebytes: file not found: " + resolved.string()};
+        throw Error{"filebytes: file not found: " + resolved.string()};
     }
     std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
                                std::istreambuf_iterator<char>());
@@ -2170,7 +2173,7 @@ static int bblFilebytes(BblState* bbl) {
 
 static int bblFopen(BblState* bbl) {
     if (bbl->argCount() < 1) {
-        throw BBL::Error{"fopen requires a path argument"};
+        throw Error{"fopen requires a path argument"};
     }
     const char* path = bbl->getStringArg(0);
     const char* mode = "r";
@@ -2180,7 +2183,7 @@ static int bblFopen(BblState* bbl) {
     auto resolved = bbl->resolveSandboxPath(path, "fopen");
     FILE* fp = fopen(resolved.c_str(), mode);
     if (!fp) {
-        throw BBL::Error{"fopen: cannot open file: " + std::string(path)};
+        throw Error{"fopen: cannot open file: " + std::string(path)};
     }
     bbl->pushUserData("File", fp);
     return 0;
@@ -2188,11 +2191,11 @@ static int bblFopen(BblState* bbl) {
 
 static int bblFileRead(BblState* bbl) {
     BblValue self = bbl->getArg(0);
-    if (self.type() != BBL::Type::UserData || self.userdataVal()->desc->name != "File") {
-        throw BBL::Error{"File.read: expected File object"};
+    if (self.type() != Type::UserData || self.userdataVal()->desc->name != "File") {
+        throw Error{"File.read: expected File object"};
     }
     FILE* fp = static_cast<FILE*>(self.userdataVal()->data);
-    if (!fp) throw BBL::Error{"File.read: file is closed"};
+    if (!fp) throw Error{"File.read: file is closed"};
     std::string contents;
     char buf[4096];
     while (size_t n = fread(buf, 1, sizeof(buf), fp)) {
@@ -2204,9 +2207,9 @@ static int bblFileRead(BblState* bbl) {
 
 static int bblFileReadBytes(BblState* bbl) {
     BblValue self = bbl->getArg(0);
-    if (self.type() != BBL::Type::UserData) throw BBL::Error{"File.read-bytes: expected File object"};
+    if (self.type() != Type::UserData) throw Error{"File.read-bytes: expected File object"};
     FILE* fp = static_cast<FILE*>(self.userdataVal()->data);
-    if (!fp) throw BBL::Error{"File.read-bytes: file is closed"};
+    if (!fp) throw Error{"File.read-bytes: file is closed"};
     int64_t n = bbl->getIntArg(1);
     std::vector<uint8_t> data(static_cast<size_t>(n));
     size_t got = fread(data.data(), 1, static_cast<size_t>(n), fp);
@@ -2217,32 +2220,32 @@ static int bblFileReadBytes(BblState* bbl) {
 
 static int bblFileWrite(BblState* bbl) {
     BblValue self = bbl->getArg(0);
-    if (self.type() != BBL::Type::UserData) throw BBL::Error{"File.write: expected File object"};
+    if (self.type() != Type::UserData) throw Error{"File.write: expected File object"};
     FILE* fp = static_cast<FILE*>(self.userdataVal()->data);
-    if (!fp) throw BBL::Error{"File.write: file is closed"};
+    if (!fp) throw Error{"File.write: file is closed"};
     const char* str = bbl->getStringArg(1);
     size_t len = strlen(str);
     size_t written = fwrite(str, 1, len, fp);
-    if (written != len) throw BBL::Error{"File.write: write failed"};
+    if (written != len) throw Error{"File.write: write failed"};
     return 0;
 }
 
 static int bblFileWriteBytes(BblState* bbl) {
     BblValue self = bbl->getArg(0);
-    if (self.type() != BBL::Type::UserData) throw BBL::Error{"File.write-bytes: expected File object"};
+    if (self.type() != Type::UserData) throw Error{"File.write-bytes: expected File object"};
     FILE* fp = static_cast<FILE*>(self.userdataVal()->data);
-    if (!fp) throw BBL::Error{"File.write-bytes: file is closed"};
+    if (!fp) throw Error{"File.write-bytes: file is closed"};
     BblBinary* b = bbl->getBinaryArg(1);
     size_t written = fwrite(b->data.data(), 1, b->length(), fp);
-    if (written != b->length()) throw BBL::Error{"File.write-bytes: write failed"};
+    if (written != b->length()) throw Error{"File.write-bytes: write failed"};
     return 0;
 }
 
 static int bblFileReadLine(BblState* bbl) {
     BblValue self = bbl->getArg(0);
-    if (self.type() != BBL::Type::UserData) throw BBL::Error{"File.read-line: expected File object"};
+    if (self.type() != Type::UserData) throw Error{"File.read-line: expected File object"};
     FILE* fp = static_cast<FILE*>(self.userdataVal()->data);
-    if (!fp) throw BBL::Error{"File.read-line: file is closed"};
+    if (!fp) throw Error{"File.read-line: file is closed"};
     std::string result;
     char buf[4096];
     if (!fgets(buf, sizeof(buf), fp)) {
@@ -2262,7 +2265,7 @@ static int bblFileReadLine(BblState* bbl) {
 
 static int bblFileClose(BblState* bbl) {
     BblValue self = bbl->getArg(0);
-    if (self.type() != BBL::Type::UserData) throw BBL::Error{"File.close: expected File object"};
+    if (self.type() != Type::UserData) throw Error{"File.close: expected File object"};
     FILE* fp = static_cast<FILE*>(self.userdataVal()->data);
     if (fp && fp != stdin && fp != stdout && fp != stderr) {
         fclose(fp);
@@ -2273,7 +2276,7 @@ static int bblFileClose(BblState* bbl) {
 
 static int bblFileFlush(BblState* bbl) {
     BblValue self = bbl->getArg(0);
-    if (self.type() != BBL::Type::UserData) throw BBL::Error{"File.flush: expected File object"};
+    if (self.type() != Type::UserData) throw Error{"File.flush: expected File object"};
     FILE* fp = static_cast<FILE*>(self.userdataVal()->data);
     if (fp) fflush(fp);
     return 0;
@@ -2284,9 +2287,9 @@ static void fileDestructor(void* ptr) {
     if (fp && fp != stdin && fp != stdout && fp != stderr) fclose(fp);
 }
 
-void BBL::addFileIo(BblState& bbl) {
+void addFileIo(BblState& bbl) {
     if (bbl.has("filebytes")) return;
-    BBL::TypeBuilder fb("File");
+    TypeBuilder fb("File");
     fb.method("read", bblFileRead)
       .method("read-bytes", bblFileReadBytes)
       .method("read-line", bblFileReadLine)
@@ -2306,10 +2309,10 @@ void BBL::addFileIo(BblState& bbl) {
 // ---------- addMath ----------
 
 static double getNumericArg(BblState* bbl, int i) {
-    BBL::Type t = bbl->getArgType(i);
-    if (t == BBL::Type::Float) return bbl->getFloatArg(i);
-    if (t == BBL::Type::Int) return static_cast<double>(bbl->getIntArg(i));
-    throw BBL::Error{"math: expected numeric argument, got " + typeName(t)};
+    Type t = bbl->getArgType(i);
+    if (t == Type::Float) return bbl->getFloatArg(i);
+    if (t == Type::Int) return static_cast<double>(bbl->getIntArg(i));
+    throw Error{"math: expected numeric argument, got " + typeName(t)};
 }
 
 #define MATH_UNARY(NAME, FN) \
@@ -2346,7 +2349,7 @@ MATH_BINARY(fmax, std::fmax)
 
 static int bblMath_sqrt(BblState* bbl) {
     double x = getNumericArg(bbl, 0);
-    if (x < 0) throw BBL::Error{"sqrt: negative argument"};
+    if (x < 0) throw Error{"sqrt: negative argument"};
     bbl->pushFloat(std::sqrt(x));
     return 0;
 }
@@ -2357,7 +2360,7 @@ static int bblMath_abs(BblState* bbl) {
     return 0;
 }
 
-void BBL::addMath(BblState& bbl) {
+void addMath(BblState& bbl) {
     if (bbl.has("sin")) return;
     bbl.defn("sin", bblMath_sin);
     bbl.defn("cos", bblMath_cos);
@@ -2546,7 +2549,7 @@ static int bblOs_glob(BblState* bbl) {
 static int bblOs_spawn(BblState* bbl) {
     const char* cmd = bbl->getStringArg(0);
     FILE* pipe = popen(cmd, "r");
-    if (!pipe) throw BBL::Error{"spawn failed: " + std::string(cmd)};
+    if (!pipe) throw Error{"spawn failed: " + std::string(cmd)};
     auto* proc = new BblProcess{pipe, false};
     bbl->pushUserData("Process", static_cast<void*>(proc));
     return 0;
@@ -2602,12 +2605,12 @@ static int bblOs_spawnDetached(BblState* bbl) {
     snprintf(cmdBuf, sizeof(cmdBuf), "cmd.exe /c %s", cmd);
     if (!CreateProcessA(nullptr, cmdBuf, nullptr, nullptr, FALSE,
                         DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &si, &pi))
-        throw BBL::Error{"spawn-detached: CreateProcess failed"};
+        throw Error{"spawn-detached: CreateProcess failed"};
     bbl->pushInt(static_cast<int64_t>(pi.dwProcessId));
     CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
 #else
     pid_t pid = fork();
-    if (pid < 0) throw BBL::Error{"spawn-detached: fork failed"};
+    if (pid < 0) throw Error{"spawn-detached: fork failed"};
     if (pid == 0) {
         pid_t pid2 = fork();
         if (pid2 < 0) _exit(127);
@@ -2625,10 +2628,10 @@ static int bblOs_spawnDetached(BblState* bbl) {
     return 0;
 }
 
-void BBL::addOs(BblState& bbl) {
+void addOs(BblState& bbl) {
     if (bbl.has("getenv")) return;
 
-    BBL::TypeBuilder pb("Process");
+    TypeBuilder pb("Process");
     pb.method("read", bblProcess_read)
       .method("read-line", bblProcess_readLine)
       .method("wait", bblProcess_wait)
@@ -2687,34 +2690,34 @@ void BBL::addOs(BblState& bbl) {
     });
 }
 
-std::vector<uint8_t> BBL::lz4Compress(const uint8_t* data, size_t size) {
+std::vector<uint8_t> lz4Compress(const uint8_t* data, size_t size) {
     LZ4F_preferences_t prefs = LZ4F_INIT_PREFERENCES;
     prefs.frameInfo.contentSize = size;
     size_t bound = LZ4F_compressFrameBound(size, &prefs);
     std::vector<uint8_t> out(bound);
     size_t written = LZ4F_compressFrame(out.data(), bound, data, size, &prefs);
     if (LZ4F_isError(written))
-        throw BBL::Error{"LZ4 compress failed: " + std::string(LZ4F_getErrorName(written))};
+        throw Error{"LZ4 compress failed: " + std::string(LZ4F_getErrorName(written))};
     out.resize(written);
     return out;
 }
 
-std::vector<uint8_t> BBL::lz4Decompress(const uint8_t* data, size_t size) {
+std::vector<uint8_t> lz4Decompress(const uint8_t* data, size_t size) {
     LZ4F_dctx* ctx = nullptr;
     size_t ret = LZ4F_createDecompressionContext(&ctx, LZ4F_VERSION);
     if (LZ4F_isError(ret))
-        throw BBL::Error{"LZ4 decompress: init failed"};
+        throw Error{"LZ4 decompress: init failed"};
     LZ4F_frameInfo_t info = {};
     size_t consumed = size;
     ret = LZ4F_getFrameInfo(ctx, &info, data, &consumed);
     if (LZ4F_isError(ret)) {
         LZ4F_freeDecompressionContext(ctx);
-        throw BBL::Error{"LZ4 decompress: invalid frame"};
+        throw Error{"LZ4 decompress: invalid frame"};
     }
     size_t outSize = info.contentSize ? static_cast<size_t>(info.contentSize) : size * 4;
     if (outSize > 256 * 1024 * 1024) {
         LZ4F_freeDecompressionContext(ctx);
-        throw BBL::Error{"LZ4 decompress: output too large"};
+        throw Error{"LZ4 decompress: output too large"};
     }
     std::vector<uint8_t> out(outSize);
     size_t dstSize = outSize;
@@ -2722,7 +2725,7 @@ std::vector<uint8_t> BBL::lz4Decompress(const uint8_t* data, size_t size) {
     ret = LZ4F_decompress(ctx, out.data(), &dstSize, data + consumed, &srcSize, nullptr);
     if (LZ4F_isError(ret)) {
         LZ4F_freeDecompressionContext(ctx);
-        throw BBL::Error{"LZ4 decompress failed: " + std::string(LZ4F_getErrorName(ret))};
+        throw Error{"LZ4 decompress failed: " + std::string(LZ4F_getErrorName(ret))};
     }
     out.resize(dstSize);
     LZ4F_freeDecompressionContext(ctx);
@@ -2740,7 +2743,7 @@ static void socketDestructor(void* p) {
 }
 
 static void checkSocketOpen(BblSocket* s) {
-    if (s->closed) throw BBL::Error{"socket is closed"};
+    if (s->closed) throw Error{"socket is closed"};
 }
 
 static int socketRead(BblState* bbl) {
@@ -2752,7 +2755,7 @@ static int socketRead(BblState* bbl) {
         auto n = recv(s->fd, buf, sizeof(buf), 0);
         if (n <= 0) break;
         result.append(buf, static_cast<size_t>(n));
-        if (result.size() > 16 * 1024 * 1024) throw BBL::Error{"socket read: exceeded 16MB"};
+        if (result.size() > 16 * 1024 * 1024) throw Error{"socket read: exceeded 16MB"};
     }
     bbl->pushString(result.c_str());
     return 1;
@@ -2777,12 +2780,12 @@ static int socketReadBytes(BblState* bbl) {
     auto* s = static_cast<BblSocket*>(bbl->callArgs[0].userdataVal()->data);
     checkSocketOpen(s);
     size_t want = static_cast<size_t>(bbl->getIntArg(1));
-    if (want > 16 * 1024 * 1024) throw BBL::Error{"socket read-bytes: max 16MB"};
+    if (want > 16 * 1024 * 1024) throw Error{"socket read-bytes: max 16MB"};
     std::vector<uint8_t> data(want);
     size_t got = 0;
     while (got < want) {
         auto n = recv(s->fd, reinterpret_cast<char*>(data.data() + got), static_cast<int>(want - got), 0);
-        if (n <= 0) throw BBL::Error{"socket read-bytes: connection closed"};
+        if (n <= 0) throw Error{"socket read-bytes: connection closed"};
         got += static_cast<size_t>(n);
     }
     bbl->pushBinary(data.data(), data.size());
@@ -2797,7 +2800,7 @@ static int socketWrite(BblState* bbl) {
     size_t sent = 0;
     while (sent < len) {
         auto n = send(s->fd, str + sent, static_cast<int>(len - sent), MSG_NOSIGNAL);
-        if (n <= 0) throw BBL::Error{"socket write failed"};
+        if (n <= 0) throw Error{"socket write failed"};
         sent += static_cast<size_t>(n);
     }
     bbl->pushInt(static_cast<int64_t>(sent));
@@ -2813,7 +2816,7 @@ static int socketWriteBytes(BblState* bbl) {
     while (sent < len) {
         auto n = send(s->fd, reinterpret_cast<const char*>(bin->data.data() + sent),
                       static_cast<int>(len - sent), MSG_NOSIGNAL);
-        if (n <= 0) throw BBL::Error{"socket write-bytes failed"};
+        if (n <= 0) throw Error{"socket write-bytes failed"};
         sent += static_cast<size_t>(n);
     }
     bbl->pushInt(static_cast<int64_t>(sent));
@@ -2830,7 +2833,7 @@ static int serverAccept(BblState* bbl) {
     auto* s = static_cast<BblSocket*>(bbl->callArgs[0].userdataVal()->data);
     checkSocketOpen(s);
     socket_t client = accept(s->fd, nullptr, nullptr);
-    if (client == SOCKET_INVALID) throw BBL::Error{"accept failed"};
+    if (client == SOCKET_INVALID) throw Error{"accept failed"};
     auto* cs = new BblSocket{client, false};
     bbl->pushUserData("Socket", static_cast<void*>(cs));
     return 1;
@@ -2846,10 +2849,10 @@ static int udpBind(BblState* bbl) {
     hints.ai_flags = AI_PASSIVE;
     std::string portStr = std::to_string(port);
     if (getaddrinfo(addr, portStr.c_str(), &hints, &res) != 0)
-        throw BBL::Error{"udp bind: address resolution failed"};
+        throw Error{"udp bind: address resolution failed"};
     int r = ::bind(s->fd, res->ai_addr, static_cast<int>(res->ai_addrlen));
     freeaddrinfo(res);
-    if (r < 0) throw BBL::Error{"udp bind failed"};
+    if (r < 0) throw Error{"udp bind failed"};
     return 0;
 }
 
@@ -2859,7 +2862,7 @@ static int udpSendTo(BblState* bbl) {
     const char* addr = bbl->getStringArg(1);
     int port = static_cast<int>(bbl->getIntArg(2));
     const char* data; size_t len;
-    if (bbl->getArgType(3) == BBL::Type::String) {
+    if (bbl->getArgType(3) == Type::String) {
         data = bbl->getStringArg(3); len = strlen(data);
     } else {
         auto* bin = bbl->getBinaryArg(3);
@@ -2869,10 +2872,10 @@ static int udpSendTo(BblState* bbl) {
     hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM;
     std::string portStr = std::to_string(port);
     if (getaddrinfo(addr, portStr.c_str(), &hints, &res) != 0)
-        throw BBL::Error{"udp send-to: address resolution failed"};
+        throw Error{"udp send-to: address resolution failed"};
     auto n = sendto(s->fd, data, static_cast<int>(len), 0, res->ai_addr, static_cast<int>(res->ai_addrlen));
     freeaddrinfo(res);
-    if (n < 0) throw BBL::Error{"udp send-to failed"};
+    if (n < 0) throw Error{"udp send-to failed"};
     return 0;
 }
 
@@ -2886,7 +2889,7 @@ static int udpRecvFrom(BblState* bbl) {
     socklen_t fromLen = sizeof(from);
     auto n = recvfrom(s->fd, buf.data(), static_cast<int>(maxBytes), 0,
                       reinterpret_cast<struct sockaddr*>(&from), &fromLen);
-    if (n < 0) throw BBL::Error{"udp recv-from failed"};
+    if (n < 0) throw Error{"udp recv-from failed"};
     BblTable* tbl = bbl->allocTable();
     tbl->set(BblValue::makeString(bbl->intern("data")),
              BblValue::makeString(bbl->intern(std::string(buf.data(), static_cast<size_t>(n)))));
@@ -2898,11 +2901,11 @@ static int udpRecvFrom(BblState* bbl) {
     return 1;
 }
 
-void BBL::addNet(BblState& bbl) {
+void addNet(BblState& bbl) {
     if (bbl.has("tcp-connect")) return;
     socketInit();
 
-    BBL::TypeBuilder sb("Socket");
+    TypeBuilder sb("Socket");
     sb.method("read", socketRead)
       .method("read-line", socketReadLine)
       .method("read-bytes", socketReadBytes)
@@ -2914,7 +2917,7 @@ void BBL::addNet(BblState& bbl) {
           size_t got = 0;
           while (got < want) {
               auto n = recv(s->fd, data.data() + got, static_cast<int>(want - got), 0);
-              if (n <= 0) throw BBL::Error{"socket read-string: connection closed"};
+              if (n <= 0) throw Error{"socket read-string: connection closed"};
               got += static_cast<size_t>(n);
           }
           bbl->pushString(data.c_str());
@@ -2926,13 +2929,13 @@ void BBL::addNet(BblState& bbl) {
       .destructor(socketDestructor);
     bbl.registerType(sb);
 
-    BBL::TypeBuilder svb("Server");
+    TypeBuilder svb("Server");
     svb.method("accept", serverAccept)
        .method("close", socketCloseMethod)
        .destructor(socketDestructor);
     bbl.registerType(svb);
 
-    BBL::TypeBuilder ub("UdpSocket");
+    TypeBuilder ub("UdpSocket");
     ub.method("bind", udpBind)
       .method("send-to", udpSendTo)
       .method("recv-from", udpRecvFrom)
@@ -2947,12 +2950,12 @@ void BBL::addNet(BblState& bbl) {
         hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
         std::string portStr = std::to_string(port);
         int err = getaddrinfo(host, portStr.c_str(), &hints, &res);
-        if (err != 0) throw BBL::Error{"tcp-connect: " + std::string(gai_strerror(err))};
+        if (err != 0) throw Error{"tcp-connect: " + std::string(gai_strerror(err))};
         socket_t fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-        if (fd == SOCKET_INVALID) { freeaddrinfo(res); throw BBL::Error{"tcp-connect: socket failed"}; }
+        if (fd == SOCKET_INVALID) { freeaddrinfo(res); throw Error{"tcp-connect: socket failed"}; }
         if (connect(fd, res->ai_addr, static_cast<int>(res->ai_addrlen)) < 0) {
             socketClose(fd); freeaddrinfo(res);
-            throw BBL::Error{"tcp-connect: connection refused"};
+            throw Error{"tcp-connect: connection refused"};
         }
         freeaddrinfo(res);
         b->pushUserData("Socket", static_cast<void*>(new BblSocket{fd, false}));
@@ -2967,24 +2970,24 @@ void BBL::addNet(BblState& bbl) {
         hints.ai_flags = AI_PASSIVE;
         std::string portStr = std::to_string(port);
         if (getaddrinfo(host, portStr.c_str(), &hints, &res) != 0)
-            throw BBL::Error{"tcp-listen: address resolution failed"};
+            throw Error{"tcp-listen: address resolution failed"};
         socket_t fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-        if (fd == SOCKET_INVALID) { freeaddrinfo(res); throw BBL::Error{"tcp-listen: socket failed"}; }
+        if (fd == SOCKET_INVALID) { freeaddrinfo(res); throw Error{"tcp-listen: socket failed"}; }
         int opt = 1;
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt), sizeof(opt));
         if (::bind(fd, res->ai_addr, static_cast<int>(res->ai_addrlen)) < 0) {
             socketClose(fd); freeaddrinfo(res);
-            throw BBL::Error{"tcp-listen: bind failed"};
+            throw Error{"tcp-listen: bind failed"};
         }
         freeaddrinfo(res);
-        if (listen(fd, 16) < 0) { socketClose(fd); throw BBL::Error{"tcp-listen: listen failed"}; }
+        if (listen(fd, 16) < 0) { socketClose(fd); throw Error{"tcp-listen: listen failed"}; }
         b->pushUserData("Server", static_cast<void*>(new BblSocket{fd, false}));
         return 1;
     });
 
     bbl.defn("udp-open", [](BblState* b) -> int {
         socket_t fd = socket(AF_INET, SOCK_DGRAM, 0);
-        if (fd == SOCKET_INVALID) throw BBL::Error{"udp-open: socket failed"};
+        if (fd == SOCKET_INVALID) throw Error{"udp-open: socket failed"};
         b->pushUserData("UdpSocket", static_cast<void*>(new BblSocket{fd, false}));
         return 1;
     });
@@ -3010,16 +3013,16 @@ struct BblChannel {
     std::condition_variable* selectCv = nullptr;
 };
 
-void BBL::addCore(BblState& bbl) {
+void addCore(BblState& bbl) {
     bbl.defn("compress", [](BblState* b) -> int {
         BblBinary* bin = b->getBinaryArg(0);
-        auto out = BBL::lz4Compress(bin->data.data(), bin->data.size());
+        auto out = lz4Compress(bin->data.data(), bin->data.size());
         b->pushBinary(out.data(), out.size());
         return 1;
     });
     bbl.defn("decompress", [](BblState* b) -> int {
         BblBinary* bin = b->getBinaryArg(0);
-        auto out = BBL::lz4Decompress(bin->data.data(), bin->data.size());
+        auto out = lz4Decompress(bin->data.data(), bin->data.size());
         b->pushBinary(out.data(), out.size());
         return 1;
     });
@@ -3041,12 +3044,12 @@ void BBL::addCore(BblState& bbl) {
     bbl.defn("random-int", [](BblState* b) -> int {
         if (b->argCount() == 1) {
             int64_t max = b->getIntArg(0);
-            if (max <= 0) throw BBL::Error{"random-int: max must be positive"};
+            if (max <= 0) throw Error{"random-int: max must be positive"};
             std::uniform_int_distribution<int64_t> dist(0, max - 1);
             b->pushInt(dist(b->rng));
         } else {
             int64_t lo = b->getIntArg(0), hi = b->getIntArg(1);
-            if (lo > hi) throw BBL::Error{"random-int: min > max"};
+            if (lo > hi) throw Error{"random-int: min > max"};
             std::uniform_int_distribution<int64_t> dist(lo, hi);
             b->pushInt(dist(b->rng));
         }
@@ -3060,16 +3063,16 @@ void BBL::addCore(BblState& bbl) {
     // --- Error / Assert ---
     bbl.defn("error", [](BblState* b) -> int {
         std::string msg = b->argCount() > 0 ? b->getStringArg(0) : "error";
-        throw BBL::Error{msg};
+        throw Error{msg};
     });
     bbl.defn("assert", [](BblState* b) -> int {
         BblValue cond = b->getArg(0);
-        bool falsy = (cond.type() == BBL::Type::Null) ||
-                     (cond.type() == BBL::Type::Bool && !cond.boolVal()) ||
-                     (cond.type() == BBL::Type::Int && cond.intVal() == 0);
+        bool falsy = (cond.type() == Type::Null) ||
+                     (cond.type() == Type::Bool && !cond.boolVal()) ||
+                     (cond.type() == Type::Int && cond.intVal() == 0);
         if (falsy) {
             std::string msg = b->argCount() > 1 ? b->getStringArg(1) : "assertion failed";
-            throw BBL::Error{msg};
+            throw Error{msg};
         }
         return 0;
     });
@@ -3077,12 +3080,12 @@ void BBL::addCore(BblState& bbl) {
     // --- Sort ---
     bbl.defn("sort", [](BblState* b) -> int {
         BblValue arg = b->getArg(0);
-        bool hasComp = b->argCount() > 1 && b->getArg(1).type() == BBL::Type::Fn;
+        bool hasComp = b->argCount() > 1 && b->getArg(1).type() == Type::Fn;
         auto defaultLess = [](const BblValue& a, const BblValue& bv) -> bool {
             if (a.type() == bv.type()) {
-                if (a.type() == BBL::Type::Int) return a.intVal() < bv.intVal();
-                if (a.type() == BBL::Type::Float) return a.floatVal() < bv.floatVal();
-                if (a.type() == BBL::Type::String) return a.stringVal()->data < bv.stringVal()->data;
+                if (a.type() == Type::Int) return a.intVal() < bv.intVal();
+                if (a.type() == Type::Float) return a.floatVal() < bv.floatVal();
+                if (a.type() == Type::String) return a.stringVal()->data < bv.stringVal()->data;
             }
             return static_cast<int>(a.type()) < static_cast<int>(bv.type());
         };
@@ -3092,11 +3095,11 @@ void BBL::addCore(BblState& bbl) {
             return [fn, cl, b](const BblValue& a, const BblValue& bv) -> bool {
                 BblValue regs[4] = { BblValue::makeClosure(cl), a, bv, BblValue::makeNull() };
                 BblValue r = fn(regs, b, &cl->chunk);
-                return r.type() == BBL::Type::Bool ? r.boolVal() :
-                       r.type() == BBL::Type::Int ? r.intVal() != 0 : false;
+                return r.type() == Type::Bool ? r.boolVal() :
+                       r.type() == Type::Int ? r.intVal() != 0 : false;
             };
         };
-        if (arg.type() == BBL::Type::Vector) {
+        if (arg.type() == Type::Vector) {
             BblVec* vec = arg.vectorVal();
             size_t n = vec->length();
             std::vector<BblValue> elems(n);
@@ -3104,16 +3107,16 @@ void BBL::addCore(BblState& bbl) {
             if (hasComp) std::stable_sort(elems.begin(), elems.end(), makeCompare(b->getArg(1).closureVal()));
             else std::stable_sort(elems.begin(), elems.end(), defaultLess);
             for (size_t i = 0; i < n; i++) b->writeVecElem(vec, i, elems[i]);
-        } else if (arg.type() == BBL::Type::Table) {
+        } else if (arg.type() == Type::Table) {
             BblTable* tbl = arg.tableVal();
             int64_t n = tbl->nextIntKey;
-            if (static_cast<uint32_t>(n) != tbl->count) throw BBL::Error{"sort: table must have sequential integer keys"};
+            if (static_cast<uint32_t>(n) != tbl->count) throw Error{"sort: table must have sequential integer keys"};
             std::vector<BblValue> elems(n);
             for (int64_t i = 0; i < n; i++) elems[i] = tbl->get(BblValue::makeInt(i)).value_or(BblValue::makeNull());
             if (hasComp) std::stable_sort(elems.begin(), elems.end(), makeCompare(b->getArg(1).closureVal()));
             else std::stable_sort(elems.begin(), elems.end(), defaultLess);
             for (int64_t i = 0; i < n; i++) tbl->set(BblValue::makeInt(i), elems[i]);
-        } else throw BBL::Error{"sort: argument must be vector or table"};
+        } else throw Error{"sort: argument must be vector or table"};
         return 0;
     });
 
@@ -3121,11 +3124,11 @@ void BBL::addCore(BblState& bbl) {
     bbl.defn("json-parse", [](BblState* b) -> int {
         const char* str = b->getStringArg(0);
         size_t len = strlen(str);
-        if (len > 64 * 1024 * 1024) throw BBL::Error{"json-parse: input exceeds 64MB"};
+        if (len > 64 * 1024 * 1024) throw Error{"json-parse: input exceeds 64MB"};
         yyjson_doc* doc = yyjson_read(str, len, 0);
-        if (!doc) throw BBL::Error{"json-parse: invalid JSON"};
+        if (!doc) throw Error{"json-parse: invalid JSON"};
         std::function<BblValue(yyjson_val*, int)> conv = [&](yyjson_val* v, int d) -> BblValue {
-            if (d > 128) throw BBL::Error{"json-parse: nesting too deep"};
+            if (d > 128) throw Error{"json-parse: nesting too deep"};
             if (yyjson_is_int(v)) return BblValue::makeInt(yyjson_get_sint(v));
             if (yyjson_is_real(v)) return BblValue::makeFloat(yyjson_get_real(v));
             if (yyjson_is_str(v)) return BblValue::makeString(b->intern(yyjson_get_str(v)));
@@ -3154,18 +3157,18 @@ void BBL::addCore(BblState& bbl) {
     bbl.defn("json-encode", [](BblState* b) -> int {
         yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
         std::function<yyjson_mut_val*(BblValue, int)> conv = [&](BblValue val, int d) -> yyjson_mut_val* {
-            if (d > 128) throw BBL::Error{"json-encode: nesting too deep"};
+            if (d > 128) throw Error{"json-encode: nesting too deep"};
             switch (val.type()) {
-            case BBL::Type::Int: return yyjson_mut_sint(doc, val.intVal());
-            case BBL::Type::Float: {
+            case Type::Int: return yyjson_mut_sint(doc, val.intVal());
+            case Type::Float: {
                 double f = val.floatVal();
-                if (f != f || f == 1.0/0.0 || f == -1.0/0.0) throw BBL::Error{"json-encode: NaN/Infinity"};
+                if (f != f || f == 1.0/0.0 || f == -1.0/0.0) throw Error{"json-encode: NaN/Infinity"};
                 return yyjson_mut_real(doc, f);
             }
-            case BBL::Type::String: return yyjson_mut_strcpy(doc, val.stringVal()->data.c_str());
-            case BBL::Type::Bool: return yyjson_mut_bool(doc, val.boolVal());
-            case BBL::Type::Null: return yyjson_mut_null(doc);
-            case BBL::Type::Table: {
+            case Type::String: return yyjson_mut_strcpy(doc, val.stringVal()->data.c_str());
+            case Type::Bool: return yyjson_mut_bool(doc, val.boolVal());
+            case Type::Null: return yyjson_mut_null(doc);
+            case Type::Table: {
                 BblTable* tbl = val.tableVal();
                 if (tbl->nextIntKey > 0 && static_cast<uint32_t>(tbl->nextIntKey) == tbl->count) {
                     yyjson_mut_val* arr = yyjson_mut_arr(doc);
@@ -3177,14 +3180,14 @@ void BBL::addCore(BblState& bbl) {
                 tbl->ensureOrder();
                 if (tbl->order) for (auto& k : *tbl->order) {
                     auto v = tbl->get(k).value_or(BblValue::makeNull());
-                    std::string ks = k.type() == BBL::Type::String ? k.stringVal()->data : std::to_string(k.intVal());
+                    std::string ks = k.type() == Type::String ? k.stringVal()->data : std::to_string(k.intVal());
                     yyjson_mut_val* jk = yyjson_mut_strcpy(doc, ks.c_str());
                     yyjson_mut_val* jv = conv(v, d+1);
                     yyjson_mut_obj_add(obj, jk, jv);
                 }
                 return obj;
             }
-            case BBL::Type::Struct: {
+            case Type::Struct: {
                 yyjson_mut_val* obj = yyjson_mut_obj(doc);
                 for (auto& fd : val.structVal()->desc->fields) {
                     yyjson_mut_val* jk = yyjson_mut_strcpy(doc, fd.name.c_str());
@@ -3193,18 +3196,18 @@ void BBL::addCore(BblState& bbl) {
                 }
                 return obj;
             }
-            case BBL::Type::Vector: {
+            case Type::Vector: {
                 yyjson_mut_val* arr = yyjson_mut_arr(doc);
                 BblVec* vec = val.vectorVal();
                 for (size_t i = 0; i < vec->length(); i++) yyjson_mut_arr_add_val(arr, conv(b->readVecElem(vec, i), d+1));
                 return arr;
             }
-            default: throw BBL::Error{"json-encode: unsupported type"};
+            default: throw Error{"json-encode: unsupported type"};
             }
         };
         yyjson_mut_doc_set_root(doc, conv(b->getArg(0), 0));
         size_t len = 0; char* json = yyjson_mut_write(doc, 0, &len);
-        if (!json) { yyjson_mut_doc_free(doc); throw BBL::Error{"json-encode: serialization failed"}; }
+        if (!json) { yyjson_mut_doc_free(doc); throw Error{"json-encode: serialization failed"}; }
         b->pushString(json); free(json); yyjson_mut_doc_free(doc);
         return 1;
     });
@@ -3213,36 +3216,36 @@ void BBL::addCore(BblState& bbl) {
 static void addSandbox(BblState& bbl) {
     bbl.defn("sandbox", [](BblState* b) -> int {
         const char* code = b->getStringArg(0);
-        BblTable* opts = (b->argCount() > 1 && b->getArg(1).type() == BBL::Type::Table)
+        BblTable* opts = (b->argCount() > 1 && b->getArg(1).type() == Type::Table)
             ? b->getArg(1).tableVal() : nullptr;
 
         BblState child;
-        BBL::addMath(child);
-        BBL::addCore(child);
+        addMath(child);
+        addCore(child);
 
         if (opts) {
             auto stepsVal = opts->get(BblValue::makeString(b->intern("steps")));
-            if (stepsVal && stepsVal->type() == BBL::Type::Int)
+            if (stepsVal && stepsVal->type() == Type::Int)
                 child.maxSteps = static_cast<size_t>(stepsVal->intVal());
 
             auto allowVal = opts->get(BblValue::makeString(b->intern("allow")));
-            if (allowVal && allowVal->type() == BBL::Type::Table) {
+            if (allowVal && allowVal->type() == Type::Table) {
                 BblTable* allow = allowVal->tableVal();
                 auto has = [&](const char* name) {
                     auto v = allow->get(BblValue::makeString(b->intern(name)));
-                    return v && v->type() == BBL::Type::Bool && v->boolVal();
+                    return v && v->type() == Type::Bool && v->boolVal();
                 };
-                if (has("print")) BBL::addPrint(child);
-                if (has("file"))  BBL::addFileIo(child);
-                if (has("os"))    BBL::addOs(child);
-                if (has("net"))   BBL::addNet(child);
-                if (has("state")) BBL::addChildStates(child);
+                if (has("print")) addPrint(child);
+                if (has("file"))  addFileIo(child);
+                if (has("os"))    addOs(child);
+                if (has("net"))   addNet(child);
+                if (has("state")) addChildStates(child);
                 if (has("all")) {
-                    BBL::addPrint(child);
-                    BBL::addFileIo(child);
-                    BBL::addOs(child);
-                    BBL::addNet(child);
-                    BBL::addChildStates(child);
+                    addPrint(child);
+                    addFileIo(child);
+                    addOs(child);
+                    addNet(child);
+                    addChildStates(child);
                 }
             }
         }
@@ -3250,13 +3253,13 @@ static void addSandbox(BblState& bbl) {
         try {
             BblValue result = child.execExpr(code);
             switch (result.type()) {
-            case BBL::Type::Int:
-            case BBL::Type::Float:
-            case BBL::Type::Bool:
-            case BBL::Type::Null:
+            case Type::Int:
+            case Type::Float:
+            case Type::Bool:
+            case Type::Null:
                 b->returnValue = result;
                 break;
-            case BBL::Type::String:
+            case Type::String:
                 b->returnValue = BblValue::makeString(b->intern(result.stringVal()->data));
                 break;
             default:
@@ -3273,11 +3276,11 @@ static void addSandbox(BblState& bbl) {
     bbl.defn("atomic-buffer", [](BblState* b) -> int {
         const char* elemType = b->getStringArg(0);
         int64_t size = b->getIntArg(1);
-        BBL::Type tag = BBL::Type::Null;
+        Type tag = Type::Null;
         size_t elemSize = 0;
-        if (strcmp(elemType, "float32") == 0 || strcmp(elemType, "float") == 0) { tag = BBL::Type::Float; elemSize = sizeof(double); }
-        else if (strcmp(elemType, "int") == 0) { tag = BBL::Type::Int; elemSize = sizeof(int64_t); }
-        else throw BBL::Error{"atomic-buffer: unsupported element type '" + std::string(elemType) + "'"};
+        if (strcmp(elemType, "float32") == 0 || strcmp(elemType, "float") == 0) { tag = Type::Float; elemSize = sizeof(double); }
+        else if (strcmp(elemType, "int") == 0) { tag = Type::Int; elemSize = sizeof(int64_t); }
+        else throw Error{"atomic-buffer: unsupported element type '" + std::string(elemType) + "'"};
 
         auto* buf = new AtomicDoubleBuffer();
         buf->vecs[0] = b->allocVector(elemType, tag, elemSize);
@@ -3288,7 +3291,7 @@ static void addSandbox(BblState& bbl) {
         return 1;
     });
 
-    BBL::TypeBuilder ab("AtomicBuffer");
+    TypeBuilder ab("AtomicBuffer");
     ab.method("write", [](BblState* b) -> int {
         auto* buf = static_cast<AtomicDoubleBuffer*>(b->callArgs[0].userdataVal()->data);
         int writeIdx = 1 - buf->readIdx.load(std::memory_order_acquire);
@@ -3320,7 +3323,7 @@ static void addSandbox(BblState& bbl) {
     bbl.defn("lock-free-ring", [](BblState* b) -> int {
         int64_t cap = b->getIntArg(0);
         if (cap <= 0 || (cap & (cap - 1)) != 0)
-            throw BBL::Error{"lock-free-ring: capacity must be a power of 2"};
+            throw Error{"lock-free-ring: capacity must be a power of 2"};
         auto* ring = new LockFreeRing();
         ring->buf.resize(static_cast<size_t>(cap));
         ring->mask = static_cast<size_t>(cap) - 1;
@@ -3328,7 +3331,7 @@ static void addSandbox(BblState& bbl) {
         return 1;
     });
 
-    BBL::TypeBuilder rb("LockFreeRing");
+    TypeBuilder rb("LockFreeRing");
     rb.method("push", [](BblState* b) -> int {
         auto* ring = static_cast<LockFreeRing*>(b->callArgs[0].userdataVal()->data);
         size_t h = ring->head.load(std::memory_order_relaxed);
@@ -3370,10 +3373,10 @@ static void addSandbox(BblState& bbl) {
         return 1;
     });
 
-    BBL::TypeBuilder cb("Channel");
+    TypeBuilder cb("Channel");
     cb.method("send", [](BblState* b) -> int {
         auto* ch = static_cast<BblChannel*>(b->callArgs[0].userdataVal()->data);
-        if (ch->closed) throw BBL::Error{"send on closed channel"};
+        if (ch->closed) throw Error{"send on closed channel"};
         std::condition_variable* notify = nullptr;
         {
             std::lock_guard lock(ch->mtx);
@@ -3427,14 +3430,14 @@ static int bblChildPost(BblState* bbl);
 static int bblChildRecv(BblState* bbl);
 static int bblChildRecvVec(BblState* bbl);
 
-void BBL::addStdLib(BblState& bbl) {
-    BBL::addPrint(bbl);
-    BBL::addMath(bbl);
-    BBL::addCore(bbl);
-    BBL::addFileIo(bbl);
-    BBL::addOs(bbl);
-    BBL::addNet(bbl);
-    BBL::addChildStates(bbl, false);
+void addStdLib(BblState& bbl) {
+    addPrint(bbl);
+    addMath(bbl);
+    addCore(bbl);
+    addFileIo(bbl);
+    addOs(bbl);
+    addNet(bbl);
+    addChildStates(bbl, false);
     addSandbox(bbl);
 
     bbl.defn("import", [](BblState* b) -> int {
@@ -3459,10 +3462,10 @@ void BBL::addStdLib(BblState& bbl) {
             source = vit->second;
         } else {
             if (!fs::exists(resolved))
-                throw BBL::Error{"import: file not found: " + key};
+                throw Error{"import: file not found: " + key};
             std::ifstream file(resolved, std::ios::binary);
             if (!file.is_open())
-                throw BBL::Error{"import: cannot open: " + key};
+                throw Error{"import: cannot open: " + key};
             std::ostringstream ss;
             ss << file.rdbuf();
             source = ss.str();
@@ -3497,25 +3500,25 @@ void BBL::addStdLib(BblState& bbl) {
 
     bbl.defn("register-modules", [](BblState* b) -> int {
         BblValue arg = b->getArg(0);
-        if (arg.type() != BBL::Type::Table)
-            throw BBL::Error{"register-modules: expected table"};
+        if (arg.type() != Type::Table)
+            throw Error{"register-modules: expected table"};
         auto* tbl = arg.tableVal();
         tbl->ensureOrder();
         if (!tbl->order) return 0;
         for (auto& key : *tbl->order) {
-            if (key.type() != BBL::Type::String) continue;
+            if (key.type() != Type::String) continue;
             const std::string& name = key.stringVal()->data;
             auto val = tbl->get(key);
             if (!val) continue;
-            if (val->type() == BBL::Type::String) {
+            if (val->type() == Type::String) {
                 b->virtualModules[name] = val->stringVal()->data;
-            } else if (val->type() == BBL::Type::Binary) {
+            } else if (val->type() == Type::Binary) {
                 auto* bin = val->binaryVal();
                 bin->materialize();
                 b->virtualModules[name] = std::string(
                     reinterpret_cast<const char*>(bin->data.data()), bin->data.size());
             } else {
-                throw BBL::Error{"register-modules: values must be string or binary"};
+                throw Error{"register-modules: values must be string or binary"};
             }
         }
         return 0;
@@ -3534,7 +3537,7 @@ void BBL::addStdLib(BblState& bbl) {
             if (it != b->moduleCache.end())
                 b->currentEnv = it->second;
             else
-                throw BBL::Error{"nrepl-exec: module not loaded: " + std::string(file)};
+                throw Error{"nrepl-exec: module not loaded: " + std::string(file)};
         }
 
         std::string output;
@@ -3550,7 +3553,7 @@ void BBL::addStdLib(BblState& bbl) {
             if (!output.empty())
                 tbl->set(BblValue::makeString(b->intern("output")),
                          BblValue::makeString(b->allocString(std::move(output))));
-        } catch (const BBL::Error& e) {
+        } catch (const Error& e) {
             b->currentEnv = savedEnv;
             b->printCapture = savedCapture;
             tbl->set(BblValue::makeString(b->intern("error")),
@@ -3562,18 +3565,18 @@ void BBL::addStdLib(BblState& bbl) {
 
     bbl.defn("nrepl-poll", [](BblState* b) -> int {
         auto& handleVal = b->callArgs[0];
-        if (handleVal.type() != BBL::Type::UserData) { b->pushNull(); return 1; }
+        if (handleVal.type() != Type::UserData) { b->pushNull(); return 1; }
         auto* handle = static_cast<BblStateHandle*>(handleVal.userdataVal()->data);
         if (!handle) { b->pushNull(); return 1; }
         auto msg = handle->toParent.tryPop();
         if (!msg) { b->pushNull(); return 1; }
         BblValue reqTable = deserializeMessage(b, *msg);
-        if (reqTable.type() != BBL::Type::Table) { b->pushNull(); return 1; }
+        if (reqTable.type() != Type::Table) { b->pushNull(); return 1; }
         auto codeVal = reqTable.tableVal()->get(BblValue::makeString(b->intern("code")));
         if (!codeVal) { b->pushNull(); return 1; }
         const char* code = codeVal->stringVal()->data.c_str();
         auto fileVal = reqTable.tableVal()->get(BblValue::makeString(b->intern("file")));
-        const char* file = (fileVal && fileVal->type() == BBL::Type::String && !fileVal->stringVal()->data.empty())
+        const char* file = (fileVal && fileVal->type() == Type::String && !fileVal->stringVal()->data.empty())
                            ? fileVal->stringVal()->data.c_str() : nullptr;
 
         BblTable* savedEnv = b->currentEnv;
@@ -3598,7 +3601,7 @@ void BBL::addStdLib(BblState& bbl) {
             if (!output.empty())
                 resultTbl->set(BblValue::makeString(b->intern("output")),
                                BblValue::makeString(b->allocString(std::move(output))));
-        } catch (const BBL::Error& e) {
+        } catch (const Error& e) {
             b->currentEnv = savedEnv;
             b->printCapture = savedCapture;
             resultTbl->set(BblValue::makeString(b->intern("error")),
@@ -3615,8 +3618,8 @@ void BBL::addStdLib(BblState& bbl) {
                 auto v = resultTbl->get(k).value_or(BblValue::makeNull());
                 MessageValue mv;
                 mv.type = v.type();
-                if (v.type() == BBL::Type::String) mv.stringVal = v.stringVal()->data;
-                else if (v.type() == BBL::Type::Int) mv.intVal = v.intVal();
+                if (v.type() == Type::String) mv.stringVal = v.stringVal()->data;
+                else if (v.type() == Type::Int) mv.intVal = v.intVal();
                 resp.entries.emplace_back(k.stringVal()->data, std::move(mv));
             }
         }
@@ -3658,7 +3661,7 @@ void BBL::addStdLib(BblState& bbl) {
         child->internTable.clear();
         child->m = b->m;
         child->allowOpenFilesystem = true;
-        BBL::addStdLib(*child);
+        addStdLib(*child);
         child->defn("post", bblChildPost);
         child->defn("recv", bblChildRecv);
         child->defn("recv-vec", bblChildRecvVec);
@@ -3675,7 +3678,7 @@ void BBL::addStdLib(BblState& bbl) {
             try {
                 child->exec(nreplServerCode);
             } catch (const BblTerminated&) {
-            } catch (const BBL::Error& e) {
+            } catch (const Error& e) {
                 handle->childError = e.what;
             } catch (...) {
                 handle->childError = "nrepl server error";
@@ -3687,7 +3690,7 @@ void BBL::addStdLib(BblState& bbl) {
         });
 
         BblMessage cfg;
-        cfg.entries.emplace_back("port", MessageValue{BBL::Type::Int, port});
+        cfg.entries.emplace_back("port", MessageValue{Type::Int, port});
         handle->toChild.push(std::move(cfg));
 
         BblUserData* ud = b->allocUserData("State", handle);
@@ -3701,12 +3704,12 @@ void BBL::addStdLib(BblState& bbl) {
         b->hasReturn = false;
         // Call nrepl-start to get the handle
         auto startFn = b->vm->globals.find(b->resolveSymbol("nrepl-start"));
-        if (startFn == b->vm->globals.end()) throw BBL::Error{"nrepl: nrepl-start not found"};
+        if (startFn == b->vm->globals.end()) throw Error{"nrepl: nrepl-start not found"};
         startFn->second.cfnVal()(b);
         BblValue handleVal = b->returnValue;
 
         auto pollFn = b->vm->globals.find(b->resolveSymbol("nrepl-poll"));
-        if (pollFn == b->vm->globals.end()) throw BBL::Error{"nrepl: nrepl-poll not found"};
+        if (pollFn == b->vm->globals.end()) throw Error{"nrepl: nrepl-poll not found"};
 
         auto* handle = static_cast<BblStateHandle*>(handleVal.userdataVal()->data);
         while (!b->terminated.load(std::memory_order_relaxed)) {
@@ -3869,34 +3872,34 @@ static BblMessage serializeMessage(BblState* bbl, BblTable* table, BblValue* vec
     if (!table->order) table->ensureOrder();
     if (!table->order) return msg;
     for (auto& k : *table->order) {
-        if (k.type() != BBL::Type::String)
-            throw BBL::Error{"message key must be a string"};
+        if (k.type() != Type::String)
+            throw Error{"message key must be a string"};
         auto val = table->get(k).value_or(BblValue::makeNull());
         MessageValue mv;
         mv.type = val.type();
         switch (val.type()) {
-            case BBL::Type::Int:    mv.intVal = val.intVal(); break;
-            case BBL::Type::Float:  mv.floatVal = val.floatVal(); break;
-            case BBL::Type::Bool:   mv.boolVal = val.boolVal(); break;
-            case BBL::Type::Null:   break;
-            case BBL::Type::String: mv.stringVal = val.stringVal()->data; break;
+            case Type::Int:    mv.intVal = val.intVal(); break;
+            case Type::Float:  mv.floatVal = val.floatVal(); break;
+            case Type::Bool:   mv.boolVal = val.boolVal(); break;
+            case Type::Null:   break;
+            case Type::String: mv.stringVal = val.stringVal()->data; break;
             default:
-                throw BBL::Error{"message value must be int, float, bool, null, or string"};
+                throw Error{"message value must be int, float, bool, null, or string"};
         }
         msg.entries.emplace_back(k.stringVal()->data, std::move(mv));
     }
     if (vecArg) {
-        if (vecArg->type() == BBL::Type::Vector) {
+        if (vecArg->type() == Type::Vector) {
             msg.hasPayload = true;
             msg.payloadData = std::move(vecArg->vectorVal()->data);
             msg.payloadElemType = vecArg->vectorVal()->elemType;
             msg.payloadElemTypeTag = vecArg->vectorVal()->elemTypeTag;
             msg.payloadElemSize = vecArg->vectorVal()->elemSize;
-        } else if (vecArg->type() == BBL::Type::Binary) {
+        } else if (vecArg->type() == Type::Binary) {
             msg.hasPayload = true;
             msg.payloadData = std::move(vecArg->binaryVal()->data);
         } else {
-            throw BBL::Error{"post payload must be a vector or binary"};
+            throw Error{"post payload must be a vector or binary"};
         }
     }
     return msg;
@@ -3910,11 +3913,11 @@ static BblValue deserializeMessage(BblState* bbl, BblMessage& msg) {
         BblValue val;
         auto& mv = entry.second;
         switch (mv.type) {
-            case BBL::Type::Int:    val = BblValue::makeInt(mv.intVal); break;
-            case BBL::Type::Float:  val = BblValue::makeFloat(mv.floatVal); break;
-            case BBL::Type::Bool:   val = BblValue::makeBool(mv.boolVal); break;
-            case BBL::Type::Null:   val = BblValue::makeNull(); break;
-            case BBL::Type::String: val = BblValue::makeString(bbl->intern(mv.stringVal)); break;
+            case Type::Int:    val = BblValue::makeInt(mv.intVal); break;
+            case Type::Float:  val = BblValue::makeFloat(mv.floatVal); break;
+            case Type::Bool:   val = BblValue::makeBool(mv.boolVal); break;
+            case Type::Null:   val = BblValue::makeNull(); break;
+            case Type::String: val = BblValue::makeString(bbl->intern(mv.stringVal)); break;
             default: break;
         }
         table->set(BblValue::makeString(key), val);
@@ -3943,7 +3946,7 @@ static int bblStateNew(BblState* bbl) {
     child->internTable.clear();
     child->m = bbl->m;
     child->allowOpenFilesystem = true;
-    BBL::addStdLib(*child);
+    addStdLib(*child);
     // addStdLib already registered State type + state-new/state-destroy.
     // Now add child-mode flat functions (post, recv, recv-vec).
     child->defn("post", bblChildPost);
@@ -3959,7 +3962,7 @@ static int bblStateNew(BblState* bbl) {
             child->execfile(path);
         } catch (const BblTerminated&) {
             // Normal termination
-        } catch (const BBL::Error& e) {
+        } catch (const Error& e) {
             handle->childError = e.what;
         } catch (const std::exception& e) {
             handle->childError = e.what();
@@ -3979,16 +3982,16 @@ static int bblStateNew(BblState* bbl) {
 
 static BblStateHandle* getHandle(BblState* bbl) {
     BblValue self = bbl->getArg(0);
-    if (self.type() != BBL::Type::UserData || !self.userdataVal()->data)
-        throw BBL::Error{"state handle is invalid (destroyed)"};
+    if (self.type() != Type::UserData || !self.userdataVal()->data)
+        throw Error{"state handle is invalid (destroyed)"};
     return static_cast<BblStateHandle*>(self.userdataVal()->data);
 }
 
 static int statePost(BblState* bbl) {
     auto* handle = getHandle(bbl);
     BblValue tblArg = bbl->getArg(1);
-    if (tblArg.type() != BBL::Type::Table)
-        throw BBL::Error{"post: first argument must be a table"};
+    if (tblArg.type() != Type::Table)
+        throw Error{"post: first argument must be a table"};
     BblValue* vecArg = nullptr;
     BblValue vecVal;
     if (bbl->argCount() >= 3) {
@@ -4019,8 +4022,8 @@ static int stateRecv(BblState* bbl) {
     }
     lock.unlock();
     if (bbl->terminated.load()) throw BblTerminated{};
-    if (handle->childError) throw BBL::Error{*handle->childError};
-    throw BBL::Error{"child state has exited"};
+    if (handle->childError) throw Error{*handle->childError};
+    throw Error{"child state has exited"};
 }
 
 static int stateRecvVec(BblState* bbl) {
@@ -4062,8 +4065,8 @@ static int stateGetError(BblState* bbl) {
 
 static int stateDestroy(BblState* bbl) {
     BblValue self = bbl->getArg(0);
-    if (self.type() != BBL::Type::UserData || !self.userdataVal()->data)
-        throw BBL::Error{"state handle is invalid (destroyed)"};
+    if (self.type() != Type::UserData || !self.userdataVal()->data)
+        throw Error{"state handle is invalid (destroyed)"};
     auto* handle = static_cast<BblStateHandle*>(self.userdataVal()->data);
     stateDestructor(handle);
     self.userdataVal()->data = nullptr;
@@ -4074,10 +4077,10 @@ static int stateDestroy(BblState* bbl) {
 
 static int bblChildPost(BblState* bbl) {
     auto* handle = bbl->handle;
-    if (!handle) throw BBL::Error{"post: not inside a child state"};
+    if (!handle) throw Error{"post: not inside a child state"};
     BblValue tblArg = bbl->getArg(0);
-    if (tblArg.type() != BBL::Type::Table)
-        throw BBL::Error{"post: first argument must be a table"};
+    if (tblArg.type() != Type::Table)
+        throw Error{"post: first argument must be a table"};
     BblValue* vecArg = nullptr;
     BblValue vecVal;
     if (bbl->argCount() >= 2) {
@@ -4091,7 +4094,7 @@ static int bblChildPost(BblState* bbl) {
 
 static int bblChildRecv(BblState* bbl) {
     auto* handle = bbl->handle;
-    if (!handle) throw BBL::Error{"recv: not inside a child state"};
+    if (!handle) throw Error{"recv: not inside a child state"};
     BblMessage msg = handle->toChild.pop(bbl->terminated);
     BblValue table = deserializeMessage(bbl, msg);
     bbl->returnValue = table;
@@ -4100,7 +4103,7 @@ static int bblChildRecv(BblState* bbl) {
 }
 
 static int bblChildRecvVec(BblState* bbl) {
-    if (!bbl->handle) throw BBL::Error{"recv-vec: not inside a child state"};
+    if (!bbl->handle) throw Error{"recv-vec: not inside a child state"};
     bbl->returnValue = bbl->lastRecvPayload;
     bbl->hasReturn = true;
     return 0;
@@ -4120,7 +4123,7 @@ static int bblTrySelect(BblState* bbl) {
     int n = bbl->argCount();
     for (int i = 0; i < n; i++) {
         auto arg = bbl->getArg(i);
-        if (arg.type() != BBL::Type::UserData) continue;
+        if (arg.type() != Type::UserData) continue;
         auto* handle = static_cast<BblStateHandle*>(arg.userdataVal()->data);
         if (!handle) continue;
         if (!handle->toParent.empty()) {
@@ -4137,7 +4140,7 @@ static int bblSelect(BblState* bbl) {
     std::vector<BblStateHandle*> handles(n, nullptr);
     for (int i = 0; i < n; i++) {
         auto arg = bbl->getArg(i);
-        if (arg.type() == BBL::Type::UserData)
+        if (arg.type() == Type::UserData)
             handles[i] = static_cast<BblStateHandle*>(arg.userdataVal()->data);
     }
 
@@ -4192,7 +4195,7 @@ static int bblSelectTimeout(BblState* bbl) {
     std::vector<BblStateHandle*> handles(n, nullptr);
     for (int i = 0; i < n; i++) {
         auto arg = bbl->getArg(i + 1);
-        if (arg.type() == BBL::Type::UserData)
+        if (arg.type() == Type::UserData)
             handles[i] = static_cast<BblStateHandle*>(arg.userdataVal()->data);
     }
 
@@ -4241,8 +4244,8 @@ static int bblSelectTimeout(BblState* bbl) {
 
 // --- Registration ---
 
-void BBL::addChildStates(BblState& bbl, bool) {
-    BBL::TypeBuilder sb("State");
+void addChildStates(BblState& bbl, bool) {
+    TypeBuilder sb("State");
     sb.method("post", statePost)
       .method("recv", stateRecv)
       .method("try-recv", stateTryRecv)
@@ -4259,3 +4262,5 @@ void BBL::addChildStates(BblState& bbl, bool) {
     bbl.defn("select", bblSelect);
     bbl.defn("select-timeout", bblSelectTimeout);
 }
+
+} // namespace bbl

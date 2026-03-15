@@ -18,16 +18,30 @@
     #ifndef S_ISREG
         #define S_ISREG(m) (((m) & _S_IFMT) == _S_IFREG)
     #endif
+
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #pragma comment(lib, "ws2_32.lib")
 #else
     #include <sys/mman.h>
     #include <sys/wait.h>
     #include <unistd.h>
     #include <signal.h>
     #include <glob.h>
+
+    #include <sys/socket.h>
+    #include <netdb.h>
+    #include <arpa/inet.h>
 #endif
 
 #include <cstdlib>
 #include <cstdint>
+
+#ifndef MSG_NOSIGNAL
+    #define MSG_NOSIGNAL 0
+#endif
+
+namespace bbl {
 
 inline void* jitAlloc(size_t size) {
 #ifdef _WIN32
@@ -63,19 +77,11 @@ inline const char* devNull() {
 #endif
 }
 
-// --- Socket abstractions ---
-
 #ifdef _WIN32
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-    #pragma comment(lib, "ws2_32.lib")
     using socket_t = SOCKET;
     #define SOCKET_INVALID INVALID_SOCKET
     inline void socketClose(socket_t s) { closesocket(s); }
 #else
-    #include <sys/socket.h>
-    #include <netdb.h>
-    #include <arpa/inet.h>
     using socket_t = int;
     #define SOCKET_INVALID (-1)
     inline void socketClose(socket_t s) { close(s); }
@@ -94,6 +100,4 @@ inline void socketInit() {
 #endif
 }
 
-#ifndef MSG_NOSIGNAL
-    #define MSG_NOSIGNAL 0
-#endif
+} // namespace bbl

@@ -7,6 +7,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace bbl {
+
 struct JitCode;
 
 struct BblClosure : GcObj {
@@ -67,3 +69,6 @@ struct VmState {
         exHandlers.clear();
     }
 };
+
+
+} // namespace bbl
