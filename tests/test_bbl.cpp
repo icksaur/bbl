@@ -5658,7 +5658,8 @@ TEST(test_dap_breakpoint_variables) {
 
     auto sendDap = [&](const std::string& json) {
         std::string msg = "Content-Length: " + std::to_string(json.size()) + "\r\n\r\n" + json;
-        write(sock, msg.c_str(), msg.size());
+        ssize_t r = write(sock, msg.c_str(), msg.size());
+        (void)r;
     };
 
     auto recvDap = [&]() -> std::string {
