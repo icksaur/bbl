@@ -1,6 +1,7 @@
 #include "bbl.h"
 #include "dap.h"
 #include "lsp.h"
+#include <linenoise.h>
 #include <cstdio>
 #include <cstring>
 #include <cinttypes>
@@ -89,50 +90,45 @@ static int countParenBalance(const std::string& line) {
 }
 
 static void repl(BblState& bbl) {
+    std::string historyFile;
+    if (const char* home = getenv("HOME")) {
+        historyFile = std::string(home) + "/.bbl_history";
+        linenoiseHistoryLoad(historyFile.c_str());
+    }
+    linenoiseSetMultiLine(1);
+
     std::string input;
     int depth = 0;
 
-    fputs("> ", stdout);
-    fflush(stdout);
-
-    std::string line;
     while (true) {
-        int c = fgetc(stdin);
-        if (c == EOF) {
-            fputc('\n', stdout);
-            break;
-        }
-        if (c == '\n') {
-            if (!input.empty()) input += '\n';
-            input += line;
-            depth += countParenBalance(line);
-            line.clear();
-            if (depth <= 0 && !input.empty()) {
-                // Evaluate
-                std::string trimmed = input;
-                // Skip whitespace-only input
-                bool allWs = true;
-                for (char ch : trimmed) if (!isspace(ch)) { allWs = false; break; }
-                if (!allWs) {
-                    try {
-                        BblValue result = bbl.execExpr(trimmed);
-                        printValue(result);
-                    } catch (const Error& e) {
-                        bbl.printBacktrace(e.what);
-                    }
+        const char* prompt = depth > 0 ? ". " : "> ";
+        char* raw = linenoise(prompt);
+        if (!raw) break;
+        std::string line(raw);
+        linenoiseFree(raw);
+
+        if (!input.empty()) input += '\n';
+        input += line;
+        depth += countParenBalance(line);
+
+        if (depth <= 0 && !input.empty()) {
+            bool allWs = true;
+            for (char ch : input) if (!isspace(ch)) { allWs = false; break; }
+            if (!allWs) {
+                linenoiseHistoryAdd(input.c_str());
+                try {
+                    BblValue result = bbl.execExpr(input);
+                    printValue(result);
+                } catch (const Error& e) {
+                    bbl.printBacktrace(e.what);
                 }
-                input.clear();
-                depth = 0;
-                fputs("> ", stdout);
-                fflush(stdout);
-            } else {
-                fputs(". ", stdout);
-                fflush(stdout);
             }
-        } else {
-            line += static_cast<char>(c);
+            input.clear();
+            depth = 0;
         }
     }
+
+    if (!historyFile.empty()) linenoiseHistorySave(historyFile.c_str());
 }
 
 
